@@ -1,0 +1,457 @@
+import { supabase } from './supabase';
+import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel } from '@/types';
+
+// ─── SITUATIONS ──────────────────────────────────────────────────────────────
+
+export async function fetchSituations(): Promise<Situation[]> {
+  const { data, error } = await supabase
+    .from('situations')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) { console.error('fetchSituations:', error); return []; }
+  return (data ?? []).map(mapSituation);
+}
+
+export async function upsertSituation(sit: Situation): Promise<void> {
+  const { error } = await supabase.from('situations').upsert(toDbSituation(sit));
+  if (error) console.error('upsertSituation:', error);
+}
+
+export async function updateSituationStatus(
+  fgp: string,
+  status: Situation['status'],
+  comment = '',
+  dateClt?: string
+): Promise<void> {
+  const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
+  if (dateClt) payload.date_clt = dateClt;
+  const { error } = await supabase
+    .from('situations')
+    .update(payload)
+    .eq('fgp', fgp);
+  if (error) console.error('updateSituationStatus:', error);
+}
+
+export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
+  const { error } = await supabase
+    .from('situations')
+    .upsert(rows.map(toDbSituation), { onConflict: 'fgp' });
+  if (error) console.error('insertSituationsBulk:', error);
+}
+
+// ─── EQUIPES ─────────────────────────────────────────────────────────────────
+
+export async function fetchEquipes(): Promise<Equipe[]> {
+  const { data, error } = await supabase
+    .from('teams')
+    .select('*')
+    .order('name');
+  if (error) { console.error('fetchEquipes:', error); return []; }
+  return (data ?? []).map(mapEquipe);
+}
+
+export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | null> {
+  const { data: newTeam, error } = await supabase
+    .from('teams')
+    .insert({
+      name: equipe.name,
+      leader_name: equipe.leader,
+      color: equipe.color,
+      zones: equipe.zones ?? [],
+      elements: equipe.elements ?? [],
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('createEquipe team error:', error);
+    return null;
+  }
+
+  // Create profile for the leader
+  if (equipe.leader) {
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .insert({
+        name: equipe.leader,
+        role: 'chef',
+        team_id: newTeam.id,
+        password_hash: 'chef2026' // default password
+      });
+    if (profileError) {
+      console.error('createEquipe profile error:', profileError);
+    }
+  }
+
+  return mapEquipe(newTeam);
+}
+
+export async function updateEquipe(id: string, patch: Partial<Equipe>): Promise<void> {
+  const payload: Record<string, any> = {};
+  if (patch.name !== undefined) payload.name = patch.name;
+  if (patch.leader !== undefined) payload.leader_name = patch.leader;
+  if (patch.color !== undefined) payload.color = patch.color;
+  if (patch.elements !== undefined) payload.elements = patch.elements;
+  if (patch.ville !== undefined) payload.ville = patch.ville;
+  const { error } = await supabase.from('teams').update(payload).eq('id', id);
+  if (error) console.error('updateEquipe:', error);
+}
+
+export async function deleteEquipe(id: string): Promise<void> {
+  const { error } = await supabase.from('teams').delete().eq('id', id);
+  if (error) console.error('deleteEquipe:', error);
+}
+
+// ─── IMPORT HISTORY ──────────────────────────────────────────────────────────
+
+export async function fetchImportHistory(): Promise<ImportRecord[]> {
+  const { data, error } = await supabase
+    .from('import_history')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) { console.error('fetchImportHistory:', error); return []; }
+  return (data ?? []).map(mapImportRecord);
+}
+
+export async function insertImportRecord(record: Omit<ImportRecord, 'id'>): Promise<void> {
+  const { error } = await supabase.from('import_history').insert({
+    file_name: record.fileName,
+    import_date: record.date,
+    row_count: record.count,
+    imported_by: record.by,
+  });
+  if (error) console.error('insertImportRecord:', error);
+}
+
+// ─── MAPPERS ─────────────────────────────────────────────────────────────────
+
+function mapSituation(row: any): Situation {
+  return {
+    id:        row.id,
+    fgp:       row.fgp,
+    type:      row.type,
+    zone:      row.zone,
+    equipe:    row.equipe,
+    motif:     row.motif ?? '',
+    dateDepo:  row.date_depo ?? '',
+    dateClt:   row.date_clt ?? '',
+    delai:     row.delai ?? 0,
+    status:    row.status,
+    comment:   row.comment ?? '',
+    updatedAt: row.updated_at,
+    isUrgent:  row.is_urgent ?? false,
+    nature:      row.nature ?? 'installation',
+    conformite:  row.conformite ?? undefined,
+  };
+}
+
+function toDbSituation(s: Situation) {
+  return {
+    id:         s.id,
+    fgp:        s.fgp,
+    type:       s.type,
+    zone:       s.zone,
+    equipe:     s.equipe,
+    motif:      s.motif,
+    date_depo:  s.dateDepo,
+    date_clt:   s.dateClt,
+    delai:      s.delai,
+    status:     s.status,
+    comment:    s.comment,
+    is_urgent:  s.isUrgent ?? false,
+    updated_at: s.updatedAt ?? new Date().toISOString(),
+    nature:      s.nature ?? 'installation',
+    conformite:  s.conformite ?? null,
+  };
+}
+
+function mapEquipe(row: any): Equipe {
+  return {
+    id:     row.id,
+    name:   row.name,
+    leader: row.leader_name ?? row.name,
+    zones:  row.zones ?? [],
+    color:  row.color ?? '#1565C0',
+    elements: row.elements ?? [],
+    ville:  row.ville ?? 'Nouakchott',
+  };
+}
+
+function mapEmployee(row: any): Employee {
+  return {
+    id:            row.id,
+    mle:           row.mle ?? '',
+    name:          row.name,
+    poste:         row.poste ?? '',
+    banque:        row.banque ?? '',
+    rib:           row.rib ?? '',
+    montant:       row.montant != null ? Number(row.montant) : undefined,
+    telephone:     row.telephone ?? '',
+    nni:           row.nni ?? '',
+    ville:         row.ville ?? '',
+    equipeNom:     row.equipe_nom ?? '',
+    dateEmbauche:  row.date_embauche ?? '',
+    actif:         row.actif ?? true,
+    createdAt:     row.created_at,
+  };
+}
+
+function mapVehicle(row: any): Vehicle {
+  return {
+    id:              row.id,
+    type:            row.type,
+    immatriculation: row.immatriculation ?? '',
+    statut:          row.statut ?? 'active',
+    statutDepuis:    row.statut_depuis ?? row.created_at,
+    equipeNom:       row.equipe_nom ?? '',
+    chauffeurId:     row.chauffeur_id ?? undefined,
+    notes:           row.notes ?? '',
+    createdAt:       row.created_at,
+  };
+}
+
+function mapMateriel(row: any): Materiel {
+  return {
+    id:        row.id,
+    nom:       row.nom,
+    equipeNom: row.equipe_nom ?? '',
+    quantite:  row.quantite != null ? Number(row.quantite) : 1,
+    etat:      row.etat ?? 'bon',
+    notes:     row.notes ?? '',
+    createdAt: row.created_at,
+  };
+}
+
+function mapLeave(row: any): LeaveRecord {
+  return {
+    id:         row.id,
+    employeeId: row.employee_id,
+    type:       row.type,
+    dateDebut:  row.date_debut,
+    dateFin:    row.date_fin,
+    jours:      row.jours ?? 0,
+    motif:      row.motif ?? '',
+    createdBy:  row.created_by ?? '',
+    createdAt:  row.created_at,
+  };
+}
+
+function mapImportRecord(row: any): ImportRecord {
+  return {
+    id:       row.id,
+    fileName: row.file_name,
+    date:     row.import_date ?? row.created_at,
+    count:    row.row_count,
+    by:       row.imported_by,
+  };
+}
+
+// ─── ZONES (stored in teams table as array) ───────────────────────────────────
+
+export async function addZoneToTeam(teamId: string, zone: string): Promise<void> {
+  // Fetch current zones then append
+  const { data, error: fetchErr } = await supabase
+    .from('teams')
+    .select('zones')
+    .eq('id', teamId)
+    .single();
+  if (fetchErr) { console.error('addZoneToTeam fetch:', fetchErr); return; }
+  const zones: string[] = data?.zones ?? [];
+  if (zones.includes(zone)) return; // already there
+  const { error } = await supabase
+    .from('teams')
+    .update({ zones: [...zones, zone] })
+    .eq('id', teamId);
+  if (error) console.error('addZoneToTeam update:', error);
+}
+
+export async function removeZoneFromTeam(teamId: string, zone: string): Promise<void> {
+  const { data, error: fetchErr } = await supabase
+    .from('teams')
+    .select('zones')
+    .eq('id', teamId)
+    .single();
+  if (fetchErr) { console.error('removeZoneFromTeam fetch:', fetchErr); return; }
+  const zones: string[] = (data?.zones ?? []).filter((z: string) => z !== zone);
+  const { error } = await supabase
+    .from('teams')
+    .update({ zones })
+    .eq('id', teamId);
+  if (error) console.error('removeZoneFromTeam update:', error);
+}
+
+export async function reassignSituationEquipe(fgp: string, equipe: string): Promise<void> {
+  const { error } = await supabase
+    .from('situations')
+    .update({ equipe, updated_at: new Date().toISOString() })
+    .eq('fgp', fgp);
+  if (error) console.error('reassignSituationEquipe:', error);
+}
+
+// ─── VILLE (équipe) ────────────────────────────────────────────────────────────
+
+export async function setTeamVille(teamId: string, ville: string): Promise<void> {
+  const { error } = await supabase.from('teams').update({ ville }).eq('id', teamId);
+  if (error) console.error('setTeamVille:', error);
+}
+
+// ─── EMPLOYÉS ──────────────────────────────────────────────────────────────────
+
+export async function fetchEmployees(): Promise<Employee[]> {
+  const { data, error } = await supabase.from('employees').select('*').order('name');
+  if (error) { console.error('fetchEmployees:', error); return []; }
+  return (data ?? []).map(mapEmployee);
+}
+
+export async function createEmployee(emp: Partial<Employee>): Promise<Employee | null> {
+  const { data, error } = await supabase.from('employees').insert({
+    mle: emp.mle, name: emp.name, poste: emp.poste, banque: emp.banque,
+    rib: emp.rib, montant: emp.montant, telephone: emp.telephone,
+    nni: emp.nni, ville: emp.ville, equipe_nom: emp.equipeNom,
+    date_embauche: emp.dateEmbauche || null, actif: emp.actif ?? true,
+  }).select().single();
+  if (error) { console.error('createEmployee:', error); return null; }
+  return mapEmployee(data);
+}
+
+export async function updateEmployee(id: string, emp: Partial<Employee>): Promise<void> {
+  const { error } = await supabase.from('employees').update({
+    mle: emp.mle, name: emp.name, poste: emp.poste, banque: emp.banque,
+    rib: emp.rib, montant: emp.montant, telephone: emp.telephone,
+    nni: emp.nni, ville: emp.ville, equipe_nom: emp.equipeNom,
+    date_embauche: emp.dateEmbauche || null, actif: emp.actif,
+  }).eq('id', id);
+  if (error) console.error('updateEmployee:', error);
+}
+
+export async function deleteEmployee(id: string): Promise<void> {
+  const { error } = await supabase.from('employees').delete().eq('id', id);
+  if (error) console.error('deleteEmployee:', error);
+}
+
+// ─── CONGÉS ────────────────────────────────────────────────────────────────────
+
+export async function fetchLeaves(): Promise<LeaveRecord[]> {
+  const { data, error } = await supabase.from('employee_leaves').select('*').order('date_debut', { ascending: false });
+  if (error) { console.error('fetchLeaves:', error); return []; }
+  return (data ?? []).map(mapLeave);
+}
+
+export async function createLeave(leave: Partial<LeaveRecord>): Promise<LeaveRecord | null> {
+  const { data, error } = await supabase.from('employee_leaves').insert({
+    employee_id: leave.employeeId, type: leave.type, date_debut: leave.dateDebut,
+    date_fin: leave.dateFin, jours: leave.jours, motif: leave.motif ?? '',
+    created_by: leave.createdBy ?? '',
+  }).select().single();
+  if (error) { console.error('createLeave:', error); return null; }
+  return mapLeave(data);
+}
+
+export async function deleteLeave(id: string): Promise<void> {
+  const { error } = await supabase.from('employee_leaves').delete().eq('id', id);
+  if (error) console.error('deleteLeave:', error);
+}
+
+// ─── VÉHICULES ─────────────────────────────────────────────────────────────────
+
+export async function fetchVehicles(): Promise<Vehicle[]> {
+  const { data, error } = await supabase.from('vehicles').select('*').order('type');
+  if (error) { console.error('fetchVehicles:', error); return []; }
+  return (data ?? []).map(mapVehicle);
+}
+
+export async function createVehicle(v: Partial<Vehicle>): Promise<Vehicle | null> {
+  const { data, error } = await supabase.from('vehicles').insert({
+    type: v.type, immatriculation: v.immatriculation, statut: v.statut ?? 'active',
+    statut_depuis: v.statutDepuis ?? new Date().toISOString(),
+    equipe_nom: v.equipeNom, chauffeur_id: v.chauffeurId || null, notes: v.notes ?? '',
+  }).select().single();
+  if (error) { console.error('createVehicle:', error); return null; }
+  return mapVehicle(data);
+}
+
+export async function updateVehicle(id: string, v: Partial<Vehicle>): Promise<void> {
+  const payload: Record<string, any> = {
+    type: v.type, immatriculation: v.immatriculation, statut: v.statut,
+    equipe_nom: v.equipeNom, chauffeur_id: v.chauffeurId || null, notes: v.notes,
+  };
+  // On ne touche à la date de référence que si le statut vient réellement de changer
+  if (v.statutDepuis) payload.statut_depuis = v.statutDepuis;
+  const { error } = await supabase.from('vehicles').update(payload).eq('id', id);
+  if (error) console.error('updateVehicle:', error);
+}
+
+export async function deleteVehicle(id: string): Promise<void> {
+  const { error } = await supabase.from('vehicles').delete().eq('id', id);
+  if (error) console.error('deleteVehicle:', error);
+}
+
+// ─── MATÉRIEL / OUTILLAGE DES ÉQUIPES ──────────────────────────────────────────
+
+export async function fetchMateriels(): Promise<Materiel[]> {
+  const { data, error } = await supabase.from('materiels').select('*').order('nom');
+  if (error) { console.error('fetchMateriels:', error); return []; }
+  return (data ?? []).map(mapMateriel);
+}
+
+export async function createMateriel(m: Partial<Materiel>): Promise<Materiel | null> {
+  const { data, error } = await supabase.from('materiels').insert({
+    nom: m.nom, equipe_nom: m.equipeNom || null, quantite: m.quantite ?? 1,
+    etat: m.etat ?? 'bon', notes: m.notes ?? '',
+  }).select().single();
+  if (error) { console.error('createMateriel:', error); return null; }
+  return mapMateriel(data);
+}
+
+export async function updateMateriel(id: string, m: Partial<Materiel>): Promise<void> {
+  const { error } = await supabase.from('materiels').update({
+    nom: m.nom, equipe_nom: m.equipeNom || null, quantite: m.quantite,
+    etat: m.etat, notes: m.notes,
+  }).eq('id', id);
+  if (error) console.error('updateMateriel:', error);
+}
+
+export async function deleteMateriel(id: string): Promise<void> {
+  const { error } = await supabase.from('materiels').delete().eq('id', id);
+  if (error) console.error('deleteMateriel:', error);
+}
+
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
+
+export async function loginWithCredentials(name: string, password: string): Promise<User | null> {
+  // Lookup profile by name + password (simple approach, no Supabase Auth)
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name, role, team_id, password_hash')
+    .ilike('name', name.trim())
+    .single();
+  if (error || !data) return null;
+
+  // Simple password check (stored as plain text for now; upgrade to bcrypt via Edge Function later)
+  if (data.password_hash && data.password_hash !== password) return null;
+
+  // Map to app User
+  let teamName: string | null = null;
+  if (data.team_id) {
+    const { data: team } = await supabase
+      .from('teams')
+      .select('name')
+      .eq('id', data.team_id)
+      .single();
+    teamName = team?.name ?? null;
+  }
+
+  const COLORS: Record<string, string> = {
+    admin: '#6A1B9A', superviseur: '#1565C0', chef: '#2E7D32',
+  };
+  return {
+    id:       data.id,
+    name:     data.name,
+    role:     data.role,
+    teamId:   data.team_id ?? null,
+    teamName: teamName,
+    avatar:   data.name[0].toUpperCase(),
+    color:    COLORS[data.role] ?? '#546E7A',
+  };
+}
