@@ -1,6 +1,12 @@
 export type Role = 'admin' | 'superviseur' | 'chef';
 export type SituationStatus = 'pending' | 'in_progress' | 'ok' | 'non_ok' | 'urgent';
 export type SituationType = 'CPL' | 'DRG' | 'TRL' | 'CST' | 'ANS' | 'CLS' | 'CMI' | 'RLR';
+// Nature d'une situation : installation (mise en service) ou dérangement (SAV / panne)
+export type SituationNature = 'installation' | 'derangement';
+// Conformité délai calculée à l'import (comme la colonne "ConformitéDélais" du fichier GSS)
+export type ConformiteDelai = 'TLID' | 'HorsDelais';
+// Ville de rattachement d'une équipe (utilisée pour les rapports par ville)
+export type Ville = 'Nouakchott' | 'Kaédi' | 'Rosso' | 'Nouadhibou';
 
 export interface User {
   id: string;
@@ -19,6 +25,7 @@ export interface Equipe {
   zones: string[];
   color: string;
   elements?: string[];
+  ville?: Ville;
 }
 
 export interface Situation {
@@ -35,6 +42,8 @@ export interface Situation {
   comment: string;
   updatedAt?: string;
   isUrgent?: boolean;
+  nature?: SituationNature;
+  conformite?: ConformiteDelai;
 }
 
 export interface Notification {
@@ -52,4 +61,85 @@ export interface ImportRecord {
   date: string;
   count: number;
   by: string;
+}
+
+// ─── EMPLOYÉS (module admin, indépendant des équipes techniques) ─────────────
+export type LeaveType = 'annuel' | 'maladie' | 'sans_solde' | 'exceptionnel' | 'maternite' | 'autre';
+
+export interface Employee {
+  id: string;
+  mle: string; // matricule
+  name: string;
+  poste?: string; // fonction : technicien, chef d'équipe, superviseur, coordinateur...
+  banque?: string;
+  rib?: string;
+  montant?: number; // salaire net (MRU)
+  telephone?: string;
+  nni?: string; // Numéro National d'Identification
+  ville?: string; // NKTT, NDB, KEADI, ROSSO...
+  equipeNom?: string; // équipe RH d'appartenance (ex: ARAFAT, CENTRE VILLE, TVZ, Déploiement...)
+  dateEmbauche?: string;
+  actif: boolean;
+  createdAt?: string;
+}
+
+export interface LeaveRecord {
+  id: string;
+  employeeId: string;
+  type: LeaveType;
+  dateDebut: string;
+  dateFin: string;
+  jours: number;
+  motif?: string;
+  createdBy?: string;
+  createdAt?: string;
+}
+
+// ─── VÉHICULES (module admin) ─────────────────────────────────────────────────
+export type VehicleStatut = 'active' | 'reserve' | 'maintenance';
+
+export interface Vehicle {
+  id: string;
+  type: string; // modèle : L200, GANGO, EXPRESS, NISSAN...
+  immatriculation: string;
+  statut: VehicleStatut;
+  statutDepuis?: string; // date ISO depuis laquelle le statut actuel est actif (calcul des jours au garage)
+  equipeNom?: string; // équipe RH assignée
+  chauffeurId?: string; // employee id
+  notes?: string;
+  createdAt?: string;
+}
+
+// ─── MATÉRIEL / OUTILLAGE DES ÉQUIPES (module admin) ──────────────────────────
+export type EtatMateriel = 'neuf' | 'bon' | 'a_reparer' | 'hors_service';
+
+export interface Materiel {
+  id: string;
+  nom: string; // ex: Marteau, Pince, Cliveuse fibre optique, Source Laser, Grimpette, Power Meter, Tournevis...
+  equipeNom?: string; // équipe RH assignée (vide = stock central)
+  quantite: number;
+  etat: EtatMateriel;
+  notes?: string;
+  createdAt?: string;
+}
+
+// ─── SCANS RÉSEAU (ONU/OLT — contrôle des équipements fibre, module admin) ────
+export type ScanResult = 'SCANNE' | 'NON SCANE';
+
+export interface ScanRecord {
+  id: string;
+  zone: string;
+  stt?: string;
+  result: ScanResult;
+  scanTime?: string; // date ISO du dernier scan (vide si jamais scanné)
+  portId?: number;
+  onuId?: number;
+  onuName?: string;
+  softwareVersion?: string;
+  snMac?: string;
+  timeAddedToNms?: string; // date d'ajout au NMS
+  rxPower?: number | null; // Rx Optical Power (dBm) — signal reçu
+  ranging?: number | null; // distance (m)
+  remarque?: string; // Suspendu, Résilié...
+  importedAt?: string;
 }

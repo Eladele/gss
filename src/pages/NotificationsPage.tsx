@@ -3,33 +3,47 @@ import { Button, Card, CardHeader, CardTitle, EmptyState } from '@/components/ui
 import type { Notification } from '@/types';
 
 const ICONS: Record<Notification['type'], string> = {
-  nok: '❌', ok: '✅', urgent: '⚠️', import: '📊', assign: '👥',
+  nok: '',
+  ok: '',
+  urgent: '',
+  import: '',
+  assign: '',
 };
 const BG: Record<Notification['type'], string> = {
-  nok: 'bg-red-50', ok: 'bg-green-50', urgent: 'bg-orange-50', import: 'bg-blue-50', assign: 'bg-purple-50',
+  nok: 'bg-red-50',
+  ok: 'bg-green-50',
+  urgent: 'bg-orange-50',
+  import: 'bg-blue-50',
+  assign: 'bg-purple-50',
 };
 
 export default function NotificationsPage() {
-  const notifications = useAppStore(s => s.notifications);
-  const markNotifRead = useAppStore(s => s.markNotifRead);
-  const markAllRead   = useAppStore(s => s.markAllRead);
-  const unread = notifications.filter(n => !n.read).length;
+  const notifications = useAppStore((s) => s.notifications);
+  const markNotifRead = useAppStore((s) => s.markNotifRead);
+  const markAllRead = useAppStore((s) => s.markAllRead);
+  const unread = notifications.filter((n) => !n.read).length;
 
   return (
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-black text-slate-900">Notifications</h1>
-          {unread > 0 && <p className="text-sm text-blue-600 font-medium">{unread} non lue{unread > 1 ? 's' : ''}</p>}
+          {unread > 0 && (
+            <p className="text-sm text-blue-600 font-medium">
+              {unread} non lue{unread > 1 ? 's' : ''}
+            </p>
+          )}
         </div>
         {unread > 0 && (
-          <Button variant="outline" size="sm" onClick={markAllRead}>Tout marquer lu</Button>
+          <Button variant="outline" size="sm" onClick={markAllRead}>
+            Tout marquer lu
+          </Button>
         )}
       </div>
 
       <Card>
         {notifications.length === 0 ? (
-          <EmptyState icon="🔔" text="Aucune notification" />
+          <EmptyState icon="" text="Aucune notification" />
         ) : (
           <div>
             {notifications.map((n, i) => (

@@ -5,24 +5,25 @@ import { ZONE_EQUIPE_MAP } from '@/data';
 import { getEquipeColor } from '@/utils';
 import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, EmptyState } from '@/components/ui';
 import { useToast } from '@/components/ui';
-import type { Situation } from '@/types';
+import type { Situation, SituationNature } from '@/types';
 
 export default function ImportExcelPage() {
-  const importSituations = useAppStore(s => s.importSituations);
-  const importHistory    = useAppStore(s => s.importHistory);
-  const equipes          = useAppStore(s => s.equipes);
-  const { showToast }    = useToast();
+  const importSituations = useAppStore((s) => s.importSituations);
+  const importHistory = useAppStore((s) => s.importHistory);
+  const equipes = useAppStore((s) => s.equipes);
+  const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging]   = useState(false);
-  const [preview, setPreview]     = useState<Situation[]>([]);
-  const [fileName, setFileName]   = useState('');
-  const [loading, setLoading]     = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [preview, setPreview] = useState<Situation[]>([]);
+  const [fileName, setFileName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [nature, setNature] = useState<SituationNature>('installation');
 
   // ── Carte dynamique zone → équipe (Supabase en priorité, fallback statique) ──
   const zoneEquipeMap = useMemo(() => {
     const map: Record<string, string> = { ...ZONE_EQUIPE_MAP }; // fallback statique
-    equipes.forEach(eq => {
-      (eq.zones ?? []).forEach(z => {
+    equipes.forEach((eq) => {
+      (eq.zones ?? []).forEach((z) => {
         if (z) map[z.trim().toUpperCase()] = eq.name;
       });
     });
@@ -45,27 +46,37 @@ export default function ImportExcelPage() {
         const wb = XLSX.read(e.target!.result as string, { type: 'binary', cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        if (data.length < 2) { showToast('Fichier vide ou invalide', 'error'); setLoading(false); return; }
+        if (data.length < 2) {
+          showToast('Fichier vide ou invalide', 'error');
+          setLoading(false);
+          return;
+        }
 
-        const header = data[0].map((h: any) => String(h ?? '').trim().toUpperCase());
-        const col = (keywords: string[]) => header.findIndex((h: string) => keywords.some(k => h.includes(k)));
+        const header = data[0].map((h: any) =>
+          String(h ?? '')
+            .trim()
+            .toUpperCase(),
+        );
+        const col = (keywords: string[]) => header.findIndex((h: string) => keywords.some((k) => h.includes(k)));
 
-        const colDate   = col(['DATE DEP', 'DATE_DEP', 'DATEDEPO']);
-        const colType   = col(['TYPE']);
-        const colFgp    = col(['FGP']);
-        const colZone   = col(['ZONE']);
-        const colMotif  = col(['MOTIF']);
+        // Tolère les fichiers GSS réels (ex: "DETE DEPOT" au lieu de "DATE DEPOT")
+        const colDate = col(['DATE DEP', 'DATE_DEP', 'DATEDEPO', 'DETE DEP', 'DEPOT']);
+        const colType = col(['TYPE']);
+        const colFgp = col(['FGP']);
+        const colZone = col(['ZONE']);
+        const colMotif = col(['MOTIF']);
         const colEquipe = col(['EQUIPE', 'ÉQUIPE']);
-        const colDateClt= col(['DATE CLT', 'DATE_CLT', 'DATECLT']);
-        const colDelai  = col(['DELAI', 'DÉLAI']);
+        const colDateClt = col(['DATE CLT', 'DATE_CLT', 'DATECLT', 'MISE EN SERVICE', 'DATE CLOTURE']);
+        const colDelai = col(['DELAI', 'DÉLAI', 'NBREJOUR']);
+        const colConf = col(['CONFORMITÉ', 'CONFORMITE']);
 
         const rows: Situation[] = [];
         for (let i = 1; i < data.length; i++) {
           const row = data[i];
           if (!row || !row[colFgp] || !row[colType]) continue;
-          const fgp   = String(row[colFgp]).trim();
-          const type  = String(row[colType] ?? '').trim();
-          const zone  = String(row[colZone] ?? '').trim();
+          const fgp = String(row[colFgp]).trim();
+          const type = String(row[colType] ?? '').trim();
+          const zone = String(row[colZone] ?? '').trim();
           const motif = String(row[colMotif] ?? '').trim();
           const equipeFromFile = colEquipe >= 0 ? String(row[colEquipe] ?? '').trim() : '';
 
@@ -78,26 +89,40 @@ export default function ImportExcelPage() {
             return String(val).slice(0, 10);
           };
 
+          const delai = colDelai >= 0 ? parseFloat(row[colDelai]) || 0 : 0;
+          const confRaw = colConf >= 0 ? String(row[colConf] ?? '').trim() : '';
+          const conformite = confRaw ? (/hors/i.test(confRaw) ? 'HorsDelais' : 'TLID') : delai > 2 ? 'HorsDelais' : 'TLID';
+
+          const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
+          // ── Auto-OK : motif vide/"sans motif" + DATE MISE EN SERVICE renseignée
+          // ⇒ ligne déjà clôturée normalement, pas besoin de validation manuelle
+          const motifVide = !motif || /^sans\s*motif$/i.test(motif);
+          const status: Situation['status'] = motifVide && dateClt ? 'ok' : 'pending';
+
           rows.push({
             id: `imp-${i}-${Date.now()}`,
-            fgp, zone, motif, equipe,
+            fgp,
+            zone,
+            motif,
+            equipe,
             type: type as Situation['type'],
+            nature,
+            conformite,
             dateDepo: parseDate(colDate >= 0 ? row[colDate] : null),
-            dateClt:  parseDate(colDateClt >= 0 ? row[colDateClt] : null),
-            delai: colDelai >= 0 ? parseFloat(row[colDelai]) || 0 : 0,
-            status: 'pending',
-            comment: '',
+            dateClt,
+            delai,
+            status,
+            comment: motifVide ? '' : `Motif import: ${motif}`,
           });
         }
 
         setPreview(rows);
-        const assigned   = rows.filter(r => r.equipe).length;
+        const assigned = rows.filter((r) => r.equipe).length;
         const unassigned = rows.length - assigned;
+        const autoOk = rows.filter((r) => r.status === 'ok').length;
         showToast(
-          unassigned === 0
-            ? `${rows.length} lignes lues — toutes affectées à une équipe ✓`
-            : `${rows.length} lignes lues — ${assigned} affectées, ${unassigned} sans équipe (zone inconnue)`,
-          unassigned === 0 ? 'success' : 'warning'
+          `${rows.length} lignes lues — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}`,
+          unassigned === 0 ? 'success' : 'warning',
         );
       } catch (err: any) {
         showToast('Erreur lecture: ' + err.message, 'error');
@@ -109,30 +134,32 @@ export default function ImportExcelPage() {
   };
 
   const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false);
+    e.preventDefault();
+    setDragging(false);
     const file = e.dataTransfer.files[0];
     if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) parseFile(file);
     else showToast('Format invalide. Utiliser .xlsx ou .xls', 'error');
   };
 
   const confirmImport = () => {
-    const assigned   = preview.filter(r => r.equipe).length;
+    const assigned = preview.filter((r) => r.equipe).length;
     const unassigned = preview.length - assigned;
     importSituations(preview, fileName);
-    setPreview([]); setFileName('');
+    setPreview([]);
+    setFileName('');
     showToast(
-      `✅ ${preview.length} situations importées — ${assigned} distribuées automatiquement${
+      ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
         unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
       }`,
-      unassigned > 0 ? 'warning' : 'success'
+      unassigned > 0 ? 'warning' : 'success',
     );
   };
 
   // Stats de la preview
   const previewStats = useMemo(() => {
     const byEquipe: Record<string, number> = {};
-    preview.forEach(r => {
-      const key = r.equipe || '❓ Non affectée';
+    preview.forEach((r) => {
+      const key = r.equipe || ' Non affectée';
       byEquipe[key] = (byEquipe[key] ?? 0) + 1;
     });
     return byEquipe;
@@ -145,19 +172,54 @@ export default function ImportExcelPage() {
         <p className="text-slate-400 text-sm mt-0.5">Format accepté: DATE DEPO · TYPE · FGP · ZONE · MOTIF · EQUIPE</p>
       </div>
 
+      {/* Nature de l'import : installation ou dérangement */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs font-semibold text-slate-500">Nature du fichier :</span>
+        <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+          {(['installation', 'derangement'] as SituationNature[]).map((n) => (
+            <button
+              key={n}
+              onClick={() => setNature(n)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {n === 'installation' ? ' Installation' : ' Dérangement'}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Upload zone */}
       <Card className="p-6">
         <div
           className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all ${dragging ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50'}`}
           onClick={() => fileRef.current?.click()}
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
           onDragLeave={() => setDragging(false)}
           onDrop={handleDrop}
         >
-          <div className="text-5xl mb-3">{loading ? '⏳' : '📊'}</div>
-          <p className="text-slate-600 font-medium">{loading ? 'Lecture en cours...' : <><strong className="text-blue-700">Cliquer ou glisser</strong> votre fichier Excel ici</>}</p>
+          <div className="text-5xl mb-3">{loading ? '' : ''}</div>
+          <p className="text-slate-600 font-medium">
+            {loading ? (
+              'Lecture en cours...'
+            ) : (
+              <>
+                <strong className="text-blue-700">Cliquer ou glisser</strong> votre fichier Excel ici
+              </>
+            )}
+          </p>
           <p className="text-slate-400 text-sm mt-1">Formats: .xlsx, .xls</p>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { if (e.target.files?.[0]) parseFile(e.target.files[0]); }} />
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.[0]) parseFile(e.target.files[0]);
+            }}
+          />
         </div>
 
         {/* Preview */}
@@ -169,20 +231,32 @@ export default function ImportExcelPage() {
                 <span className="text-slate-400 text-sm ml-2">— {fileName}</span>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => { setPreview([]); setFileName(''); }}>Annuler</Button>
-                <Button variant="success" size="sm" onClick={confirmImport}>✅ Confirmer Import</Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPreview([]);
+                    setFileName('');
+                  }}
+                >
+                  Annuler
+                </Button>
+                <Button variant="success" size="sm" onClick={confirmImport}>
+                  {' '}
+                  Confirmer Import
+                </Button>
               </div>
             </div>
 
             {/* ── Résumé de distribution par équipe ── */}
             <div className="mb-3 p-3 bg-blue-50 border border-blue-100 rounded-xl">
-              <p className="text-xs font-bold text-blue-700 mb-2">📊 Distribution automatique par équipe</p>
+              <p className="text-xs font-bold text-blue-700 mb-2"> Distribution automatique par équipe</p>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(previewStats).map(([eq, count]) => (
                   <span
                     key={eq}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${
-                      eq.startsWith('❓') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
+                      eq.startsWith('') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
                     }`}
                   >
                     <span>{eq}</span>
@@ -190,9 +264,9 @@ export default function ImportExcelPage() {
                   </span>
                 ))}
               </div>
-              {previewStats['❓ Non affectée'] && (
+              {previewStats[' Non affectée'] && (
                 <p className="text-xs text-orange-600 mt-2">
-                  ⚠️ {previewStats['❓ Non affectée']} situation(s) sans équipe — zones non reconnues dans Supabase
+                  {previewStats[' Non affectée']} situation(s) sans équipe — zones non reconnues
                 </p>
               )}
             </div>
@@ -200,8 +274,10 @@ export default function ImportExcelPage() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
                   <tr>
-                    {['#','FGP','Type','Zone','Motif','Équipe','Date Dépôt','Délai'].map(h => (
-                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">{h}</th>
+                    {['#', 'FGP', 'Type', 'Zone', 'Motif', 'Équipe', 'Date Dépôt', 'Délai'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">
+                        {h}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -210,16 +286,26 @@ export default function ImportExcelPage() {
                     <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50">
                       <td className="px-3 py-2 text-slate-400 text-xs">{i + 1}</td>
                       <td className="px-3 py-2 font-bold text-slate-800">{row.fgp}</td>
-                      <td className="px-3 py-2"><TypeBadge type={row.type} /></td>
-                      <td className="px-3 py-2"><ZoneChip zone={row.zone} /></td>
+                      <td className="px-3 py-2">
+                        <TypeBadge type={row.type} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <ZoneChip zone={row.zone} />
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-400 max-w-24 truncate">{row.motif || '—'}</td>
-                      <td className="px-3 py-2"><EquipeTag name={row.equipe || '?'} color={getEquipeColor(row.equipe)} /></td>
+                      <td className="px-3 py-2">
+                        <EquipeTag name={row.equipe || '?'} color={getEquipeColor(row.equipe)} />
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-400">{row.dateDepo || '—'}</td>
                       <td className="px-3 py-2 text-xs text-center">{row.delai}j</td>
                     </tr>
                   ))}
                   {preview.length > 100 && (
-                    <tr><td colSpan={8} className="text-center py-3 text-slate-400 text-xs">... et {preview.length - 100} lignes supplémentaires</td></tr>
+                    <tr>
+                      <td colSpan={8} className="text-center py-3 text-slate-400 text-xs">
+                        ... et {preview.length - 100} lignes supplémentaires
+                      </td>
+                    </tr>
                   )}
                 </tbody>
               </table>
@@ -230,9 +316,11 @@ export default function ImportExcelPage() {
 
       {/* History */}
       <Card>
-        <CardHeader><CardTitle>📁 Historique des Imports</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle> Historique des Imports</CardTitle>
+        </CardHeader>
         {importHistory.length === 0 ? (
-          <EmptyState icon="📂" text="Aucun import récent" />
+          <EmptyState icon="" text="Aucun import récent" />
         ) : (
           <table className="w-full text-sm">
             <thead>
@@ -244,12 +332,16 @@ export default function ImportExcelPage() {
               </tr>
             </thead>
             <tbody>
-              {importHistory.map(h => (
+              {importHistory.map((h) => (
                 <tr key={h.id} className="border-b border-slate-50">
-                  <td className="px-4 py-3 font-medium text-slate-700">📊 {h.fileName}</td>
+                  <td className="px-4 py-3 font-medium text-slate-700"> {h.fileName}</td>
                   <td className="px-4 py-3 text-slate-400 text-xs">{h.date}</td>
-                  <td className="px-4 py-3"><strong>{h.count}</strong> lignes</td>
-                  <td className="px-4 py-3"><EquipeTag name={h.by} /></td>
+                  <td className="px-4 py-3">
+                    <strong>{h.count}</strong> lignes
+                  </td>
+                  <td className="px-4 py-3">
+                    <EquipeTag name={h.by} />
+                  </td>
                 </tr>
               ))}
             </tbody>

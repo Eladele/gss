@@ -2,11 +2,13 @@ import { useAppStore } from '@/store/useAppStore';
 import { Button, Card } from '@/components/ui';
 
 export default function ProfilPage() {
-  const user   = useAppStore(s => s.user)!;
-  const logout = useAppStore(s => s.logout);
+  const user = useAppStore((s) => s.user)!;
+  const logout = useAppStore((s) => s.logout);
 
   const roleLabel: Record<string, string> = {
-    superviseur: 'Superviseur', chef: 'Chef d\'Équipe', admin: 'Administrateur',
+    superviseur: 'Superviseur',
+    chef: "Chef d'Équipe",
+    admin: 'Administrateur',
   };
 
   return (
@@ -14,8 +16,10 @@ export default function ProfilPage() {
       <h1 className="text-2xl font-black text-slate-900">Mon Profil</h1>
       <Card className="p-6">
         <div className="text-center mb-6">
-          <div className="w-20 h-20 rounded-full flex items-center justify-center text-white text-3xl font-black mx-auto mb-3 shadow-lg"
-            style={{ background: `linear-gradient(135deg, ${user.color}, #00BCD4)` }}>
+          <div
+            className="w-20 h-20 rounded-full flex items-center justify-center text-white text-3xl font-black mx-auto mb-3 shadow-lg"
+            style={{ background: `linear-gradient(135deg, ${user.color}, #00BCD4)` }}
+          >
             {user.avatar}
           </div>
           <h2 className="text-xl font-bold text-slate-800">{user.name}</h2>
@@ -26,9 +30,9 @@ export default function ProfilPage() {
         <div className="space-y-3 mb-6">
           {[
             { label: 'Notifications Push', checked: true },
-            { label: 'Alertes Urgences',   checked: true },
-            { label: 'Rapport Quotidien',  checked: false },
-          ].map(item => (
+            { label: 'Alertes Urgences', checked: true },
+            { label: 'Rapport Quotidien', checked: false },
+          ].map((item) => (
             <div key={item.label} className="flex items-center justify-between py-2.5 border-b border-slate-100 last:border-0">
               <span className="text-sm text-slate-700">{item.label}</span>
               <label className="relative inline-flex items-center cursor-pointer">
@@ -40,7 +44,7 @@ export default function ProfilPage() {
         </div>
 
         <Button variant="danger" className="w-full justify-center" onClick={logout}>
-          🚪 Se Déconnecter
+          Se Déconnecter
         </Button>
       </Card>
     </div>
