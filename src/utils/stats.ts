@@ -11,8 +11,10 @@ export const DEFAULT_DELAI_THRESHOLD = 2;
 // si elle est traitée (OK / NON OK), sinon dateDepo → maintenant (délai toujours "en cours").
 // Remplace le délai statique importé pour un suivi automatique et à jour.
 export function calcDelai(s: Situation): number {
-  if (!s.dateDepo) return s.delai ?? 0;
-  const start = new Date(s.dateDepo).getTime();
+  if (!s.dateClt) return 0;
+  const startRaw = s.dateDepo || s.dateMessage;
+  if (!startRaw) return s.delai ?? 0;
+  const start = new Date(startRaw).getTime();
   if (Number.isNaN(start)) return s.delai ?? 0;
   const resolved = s.status === 'ok' || s.status === 'non_ok';
   const end = resolved && s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now();

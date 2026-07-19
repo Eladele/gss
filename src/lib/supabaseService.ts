@@ -123,6 +123,8 @@ function mapSituation(row: any): Situation {
     motif: row.motif ?? '',
     dateDepo: row.date_depo ?? '',
     dateClt: row.date_clt ?? '',
+    dateMessage: row.date_message ?? '',
+    serviceDestination: row.service_destination ?? '',
     delai: row.delai ?? 0,
     status: row.status,
     comment: row.comment ?? '',
@@ -143,6 +145,8 @@ function toDbSituation(s: Situation) {
     motif: s.motif,
     date_depo: s.dateDepo,
     date_clt: s.dateClt,
+    date_message: s.dateMessage || null,
+    service_destination: s.serviceDestination || null,
     delai: s.delai,
     status: s.status,
     comment: s.comment,
@@ -201,6 +205,7 @@ function mapVehicle(row: any): Vehicle {
 function mapMateriel(row: any): Materiel {
   return {
     id: row.id,
+    code: row.code ?? '',
     nom: row.nom,
     equipeNom: row.equipe_nom ?? '',
     quantite: row.quantite != null ? Number(row.quantite) : 1,
@@ -456,6 +461,7 @@ export async function createMateriel(m: Partial<Materiel>): Promise<Materiel | n
   const { data, error } = await supabase
     .from('materiels')
     .insert({
+      code: m.code || null,
       nom: m.nom,
       equipe_nom: m.equipeNom || null,
       quantite: m.quantite ?? 1,
@@ -475,6 +481,7 @@ export async function updateMateriel(id: string, m: Partial<Materiel>): Promise<
   const { error } = await supabase
     .from('materiels')
     .update({
+      code: m.code,
       nom: m.nom,
       equipe_nom: m.equipeNom || null,
       quantite: m.quantite,

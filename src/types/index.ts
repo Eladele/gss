@@ -37,6 +37,8 @@ export interface Situation {
   motif: string;
   dateDepo: string;
   dateClt: string;
+  dateMessage?: string; // date du message initial (fichiers "installation" : DETE MESSAGE)
+  serviceDestination?: string; // ex: GSS — colonne "Service Destination" du fichier
   delai: number;
   status: SituationStatus;
   comment: string;
@@ -115,6 +117,7 @@ export type EtatMateriel = 'neuf' | 'bon' | 'a_reparer' | 'hors_service';
 
 export interface Materiel {
   id: string;
+  code?: string; // code interne (inventaire) — permet de partager/affecter précisément à une équipe
   nom: string; // ex: Marteau, Pince, Cliveuse fibre optique, Source Laser, Grimpette, Power Meter, Tournevis...
   equipeNom?: string; // équipe RH assignée (vide = stock central)
   quantite: number;

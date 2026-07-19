@@ -2,7 +2,6 @@ import { useRef, useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { useAppStore } from '@/store/useAppStore';
 import { ZONE_EQUIPE_MAP } from '@/data';
-import { getEquipeColor } from '@/utils';
 import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, EmptyState } from '@/components/ui';
 import { useToast } from '@/components/ui';
 import type { Situation, SituationNature } from '@/types';
@@ -61,6 +60,8 @@ export default function ImportExcelPage() {
 
         // Tolère les fichiers GSS réels (ex: "DETE DEPOT" au lieu de "DATE DEPOT")
         const colDate = col(['DATE DEP', 'DATE_DEP', 'DATEDEPO', 'DETE DEP', 'DEPOT']);
+        const colDateMessage = col(['DATE MESSAGE', 'DETE MESSAGE']);
+        const colServiceDest = col(['SERVICE DESTINATION']);
         const colType = col(['TYPE']);
         const colFgp = col(['FGP']);
         const colZone = col(['ZONE']);
@@ -69,6 +70,11 @@ export default function ImportExcelPage() {
         const colDateClt = col(['DATE CLT', 'DATE_CLT', 'DATECLT', 'MISE EN SERVICE', 'DATE CLOTURE']);
         const colDelai = col(['DELAI', 'DÉLAI', 'NBREJOUR']);
         const colConf = col(['CONFORMITÉ', 'CONFORMITE']);
+        // Fichiers "installation" (type INSTALLATION_JUIN.xlsx) : une colonne DATE MESSAGE
+        // est présente ⇒ elle sert de référence pour le délai, et la colonne DATE DEPOT
+        // du fichier n'est volontairement PAS stockée (elle fait doublon / cause des soucis
+        // de stockage).
+        const useDateMessage = colDateMessage >= 0;
 
         const rows: Situation[] = [];
         for (let i = 1; i < data.length; i++) {
@@ -79,6 +85,7 @@ export default function ImportExcelPage() {
           const zone = String(row[colZone] ?? '').trim();
           const motif = String(row[colMotif] ?? '').trim();
           const equipeFromFile = colEquipe >= 0 ? String(row[colEquipe] ?? '').trim() : '';
+          const serviceDestination = colServiceDest >= 0 ? String(row[colServiceDest] ?? '').trim() : '';
 
           // ── Auto-distribution : résolution zone → équipe via Supabase ──
           const equipe = resolveEquipe(zone, equipeFromFile);
@@ -89,15 +96,23 @@ export default function ImportExcelPage() {
             return String(val).slice(0, 10);
           };
 
-          const delai = colDelai >= 0 ? parseFloat(row[colDelai]) || 0 : 0;
+          const delaiImporte = colDelai >= 0 ? parseFloat(row[colDelai]) || 0 : 0;
           const confRaw = colConf >= 0 ? String(row[colConf] ?? '').trim() : '';
-          const conformite = confRaw ? (/hors/i.test(confRaw) ? 'HorsDelais' : 'TLID') : delai > 2 ? 'HorsDelais' : 'TLID';
 
           const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
-          // ── Auto-OK : motif vide/"sans motif" + DATE MISE EN SERVICE renseignée
-          // ⇒ ligne déjà clôturée normalement, pas besoin de validation manuelle
+          const dateMessage = useDateMessage ? parseDate(row[colDateMessage]) : '';
+          // Colonne DATE DEPOT prend la valeur de DATE MESSAGE si présente pour calculer le délai, sinon la colonne DATE DEPOT
+          const dateDepo = useDateMessage ? dateMessage : parseDate(colDate >= 0 ? row[colDate] : null);
+
+          // ── Statut auto : OK si la date de mise en service est présente et les colonnes clés existent, sinon PENDING pour modification ──
+          const status: Situation['status'] = (dateClt && colDateClt >= 0 && colMotif >= 0) ? 'ok' : 'pending';
           const motifVide = !motif || /^sans\s*motif$/i.test(motif);
-          const status: Situation['status'] = motifVide && dateClt ? 'ok' : 'pending';
+
+          // ── Délai : recalculé à l'affichage via calcDelai (date_message → date de clôture) ;
+          // on garde ici le délai importé comme repli, et on fige `updatedAt` sur la date de
+          // mise en service pour que le calcul automatique retombe sur la bonne valeur historique.
+          const delai = delaiImporte;
+          const conformite = confRaw ? (/hors/i.test(confRaw) ? 'HorsDelais' : 'TLID') : delai > 2 ? 'HorsDelais' : 'TLID';
 
           rows.push({
             id: `imp-${i}-${Date.now()}`,
@@ -108,11 +123,14 @@ export default function ImportExcelPage() {
             type: type as Situation['type'],
             nature,
             conformite,
-            dateDepo: parseDate(colDate >= 0 ? row[colDate] : null),
+            dateDepo,
+            dateMessage,
+            serviceDestination,
             dateClt,
             delai,
             status,
             comment: motifVide ? '' : `Motif import: ${motif}`,
+            updatedAt: status === 'ok' && dateClt ? new Date(dateClt).toISOString() : undefined,
           });
         }
 
@@ -148,8 +166,7 @@ export default function ImportExcelPage() {
     setPreview([]);
     setFileName('');
     showToast(
-      ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
-        unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
+      ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
       }`,
       unassigned > 0 ? 'warning' : 'success',
     );
@@ -169,7 +186,10 @@ export default function ImportExcelPage() {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-black text-slate-900">Import Programme Excel</h1>
-        <p className="text-slate-400 text-sm mt-0.5">Format accepté: DATE DEPO · TYPE · FGP · ZONE · MOTIF · EQUIPE</p>
+        <p className="text-slate-400 text-sm mt-0.5">
+          Formats acceptés : DATE DEPOT·TYPE·FGP·ZONE·MOTIF·EQUIPE — ou fichiers "installation" (DATE MESSAGE·TYPE·FGP·SERVICE
+          DESTINATION·ZONE·DATE MISE EN SERVICE·MOTIF·DÉLAI·CONFORMITÉ)
+        </p>
       </div>
 
       {/* Nature de l'import : installation ou dérangement */}
@@ -255,9 +275,8 @@ export default function ImportExcelPage() {
                 {Object.entries(previewStats).map(([eq, count]) => (
                   <span
                     key={eq}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${
-                      eq.startsWith('') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
-                    }`}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${eq.startsWith('') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
+                      }`}
                   >
                     <span>{eq}</span>
                     <span className="bg-blue-600 text-white px-1.5 py-0.5 rounded-full text-[10px] font-bold">{count}</span>
@@ -274,35 +293,43 @@ export default function ImportExcelPage() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
                   <tr>
-                    {['#', 'FGP', 'Type', 'Zone', 'Motif', 'Équipe', 'Date Dépôt', 'Délai'].map((h) => (
-                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">
-                        {h}
-                      </th>
-                    ))}
+                    {['#', 'Date Message', 'Type', 'FGP', 'Service Dest.', 'Zone', 'Date Mise en Service', 'Motif', 'Délai', 'Statut'].map(
+                      (h) => (
+                        <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">
+                          {h}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {preview.slice(0, 100).map((row, i) => (
                     <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50">
                       <td className="px-3 py-2 text-slate-400 text-xs">{i + 1}</td>
-                      <td className="px-3 py-2 font-bold text-slate-800">{row.fgp}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{row.dateMessage || '—'}</td>
                       <td className="px-3 py-2">
                         <TypeBadge type={row.type} />
                       </td>
+                      <td className="px-3 py-2 font-bold text-slate-800">{row.fgp}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{row.serviceDestination || '—'}</td>
                       <td className="px-3 py-2">
                         <ZoneChip zone={row.zone} />
                       </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{row.dateClt || '—'}</td>
                       <td className="px-3 py-2 text-xs text-slate-400 max-w-24 truncate">{row.motif || '—'}</td>
-                      <td className="px-3 py-2">
-                        <EquipeTag name={row.equipe || '?'} color={getEquipeColor(row.equipe)} />
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-400">{row.dateDepo || '—'}</td>
                       <td className="px-3 py-2 text-xs text-center">{row.delai}j</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${row.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                        >
+                          {row.status === 'ok' ? 'OK' : 'NON OK'}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                   {preview.length > 100 && (
                     <tr>
-                      <td colSpan={8} className="text-center py-3 text-slate-400 text-xs">
+                      <td colSpan={10} className="text-center py-3 text-slate-400 text-xs">
                         ... et {preview.length - 100} lignes supplémentaires
                       </td>
                     </tr>

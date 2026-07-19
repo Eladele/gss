@@ -147,11 +147,10 @@ export default function ChefProgrammePage() {
                 setFilter(f.key);
                 setPage(0);
               }}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                filter === f.key
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${filter === f.key
                   ? 'bg-blue-600 text-white border-blue-600'
                   : 'bg-white text-slate-500 border-slate-200 hover:border-blue-300'
-              }`}
+                }`}
             >
               {f.label}
             </button>
