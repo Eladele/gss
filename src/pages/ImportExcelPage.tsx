@@ -6,6 +6,13 @@ import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, Em
 import { useToast } from '@/components/ui';
 import type { Situation, SituationNature } from '@/types';
 
+type NatureFilter = 'mixed' | SituationNature;
+
+// Types considérés "installation" pour la détection automatique en mode mixte
+function detectNature(type: string): SituationNature {
+  return type === 'DRG' ? 'derangement' : 'installation';
+}
+
 export default function ImportExcelPage() {
   const importSituations = useAppStore((s) => s.importSituations);
   const importHistory = useAppStore((s) => s.importHistory);
@@ -16,7 +23,7 @@ export default function ImportExcelPage() {
   const [preview, setPreview] = useState<Situation[]>([]);
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [nature, setNature] = useState<SituationNature>('installation');
+  const [nature, setNature] = useState<NatureFilter>('mixed');
 
   // ── Carte dynamique zone → équipe (Supabase en priorité, fallback statique) ──
   const zoneEquipeMap = useMemo(() => {
@@ -101,11 +108,11 @@ export default function ImportExcelPage() {
 
           const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
           const dateMessage = useDateMessage ? parseDate(row[colDateMessage]) : '';
-          // Colonne DATE DEPOT prend la valeur de DATE MESSAGE si présente pour calculer le délai, sinon la colonne DATE DEPOT
-          const dateDepo = useDateMessage ? dateMessage : parseDate(colDate >= 0 ? row[colDate] : null);
+          // Colonne DATE DEPOT ignorée quand le fichier a une colonne DATE MESSAGE dédiée
+          const dateDepo = useDateMessage ? '' : parseDate(colDate >= 0 ? row[colDate] : null);
 
-          // ── Statut auto : OK si la date de mise en service est présente et les colonnes clés existent, sinon PENDING pour modification ──
-          const status: Situation['status'] = (dateClt && colDateClt >= 0 && colMotif >= 0) ? 'ok' : 'pending';
+          // ── Statut auto : DATE MISE EN SERVICE renseignée ⇒ OK, sinon NON OK ──
+          const status: Situation['status'] = dateClt ? 'ok' : 'non_ok';
           const motifVide = !motif || /^sans\s*motif$/i.test(motif);
 
           // ── Délai : recalculé à l'affichage via calcDelai (date_message → date de clôture) ;
@@ -121,7 +128,7 @@ export default function ImportExcelPage() {
             motif,
             equipe,
             type: type as Situation['type'],
-            nature,
+            nature: nature === 'mixed' ? detectNature(type) : nature,
             conformite,
             dateDepo,
             dateMessage,
@@ -166,7 +173,8 @@ export default function ImportExcelPage() {
     setPreview([]);
     setFileName('');
     showToast(
-      ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
+      ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
+        unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
       }`,
       unassigned > 0 ? 'warning' : 'success',
     );
@@ -192,20 +200,25 @@ export default function ImportExcelPage() {
         </p>
       </div>
 
-      {/* Nature de l'import : installation ou dérangement */}
+      {/* Nature de l'import : installation, dérangement, ou les deux (détection auto par type) */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs font-semibold text-slate-500">Nature du fichier :</span>
         <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
-          {(['installation', 'derangement'] as SituationNature[]).map((n) => (
+          {(['mixed', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
             <button
               key={n}
               onClick={() => setNature(n)}
               className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
             >
-              {n === 'installation' ? ' Installation' : ' Dérangement'}
+              {n === 'mixed' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
             </button>
           ))}
         </div>
+        {nature === 'mixed' && (
+          <span className="text-[11px] text-slate-400">
+            Nature détectée automatiquement par type : CPL/TRL/CMI/CLS/RLR/CST → Installation, DRG → Dérangement
+          </span>
+        )}
       </div>
 
       {/* Upload zone */}
@@ -275,8 +288,9 @@ export default function ImportExcelPage() {
                 {Object.entries(previewStats).map(([eq, count]) => (
                   <span
                     key={eq}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${eq.startsWith('') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
-                      }`}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                      eq.startsWith('') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
+                    }`}
                   >
                     <span>{eq}</span>
                     <span className="bg-blue-600 text-white px-1.5 py-0.5 rounded-full text-[10px] font-bold">{count}</span>

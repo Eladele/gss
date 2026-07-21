@@ -144,5 +144,6 @@ export interface ScanRecord {
   rxPower?: number | null; // Rx Optical Power (dBm) — signal reçu
   ranging?: number | null; // distance (m)
   remarque?: string; // Suspendu, Résilié...
+  changeType?: 'new' | 'existing'; // par rapport à l'import précédent (calculé et persisté à l'import)
   importedAt?: string;
 }

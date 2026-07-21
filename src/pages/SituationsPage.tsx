@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
-import { calcDelai } from '@/utils/stats';
+import { calcDelai, MERGED_TYPES } from '@/utils/stats';
 import { reassignSituationEquipe } from '@/lib/supabaseService';
 import {
   Card,
@@ -37,10 +37,10 @@ export default function SituationsPage() {
   const [fType, setFType] = useState('');
   const [fEquipe, setFEquipe] = useState('');
   const [fStatus, setFStatus] = useState('');
-  const [fNature, setFNature] = useState('');
   const [fDate, setFDate] = useState('');
   const [urgOpen, setUrgOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
+  const [nokInitialComment, setNokInitialComment] = useState('');
   const [nokOpen, setNokOpen] = useState(false);
 
   // Reassign modal
@@ -60,22 +60,24 @@ export default function SituationsPage() {
     () =>
       situations.filter((s) => {
         if (search && !s.fgp.includes(search) && !s.zone.toLowerCase().includes(search.toLowerCase())) return false;
-        if (fType && s.type !== fType) return false;
+        if (fType === '__installation__' && !MERGED_TYPES.includes(s.type)) return false;
+        else if (fType === '__derangement__' && s.type !== 'DRG') return false;
+        else if (fType && fType !== '__installation__' && fType !== '__derangement__' && s.type !== fType) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fStatus && s.status !== fStatus) return false;
-        if (fNature && (s.nature ?? 'installation') !== fNature) return false;
         if (fDate && s.dateDepo !== fDate) return false;
         return true;
       }),
-    [situations, search, fType, fEquipe, fStatus, fNature, fDate],
+    [situations, search, fType, fEquipe, fStatus, fDate],
   );
 
   const handleMarkOK = async (fgp: string) => {
     await markOK(fgp);
     showToast(`FGP ${fgp} marqué OK `, 'success');
   };
-  const handleMarkNOK = (fgp: string) => {
+  const handleMarkNOK = (fgp: string, existingComment = '') => {
     setNokFgp(fgp);
+    setNokInitialComment(existingComment);
     setNokOpen(true);
   };
   const handleNOKConfirm = async (comment: string) => {
@@ -149,8 +151,12 @@ export default function SituationsPage() {
             </div>
             <Select value={fType} onChange={(e) => setFType(e.target.value)} style={{ width: 'auto' }}>
               <option value="">Tous types</option>
+              <option value="__installation__">Installation (CPL/TRL/CMI/CLS/RLR/CST)</option>
+              <option value="__derangement__">Dérangement (DRG)</option>
               {['CPL', 'DRG', 'TRL', 'CST', 'ANS', 'CLS', 'CMI', 'RLR'].map((t) => (
-                <option key={t}>{t}</option>
+                <option key={t} value={t}>
+                  {t}
+                </option>
               ))}
             </Select>
             <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} style={{ width: 'auto' }}>
@@ -167,11 +173,6 @@ export default function SituationsPage() {
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
               <option value="urgent">Urgent</option>
-            </Select>
-            <Select value={fNature} onChange={(e) => setFNature(e.target.value)} style={{ width: 'auto' }}>
-              <option value="">Installation + Dérangement</option>
-              <option value="installation"> Installation</option>
-              <option value="derangement"> Dérangement</option>
             </Select>
             <input
               type="date"
@@ -216,42 +217,49 @@ export default function SituationsPage() {
                     <td className="px-3 py-3">
                       <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
                     </td>
-                    <td className="px-3 py-3 text-xs text-slate-400 max-w-28 truncate" title={s.motif}>
-                      {s.motif || '—'}
+                    <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
+                      {s.status === 'non_ok' && s.comment ? (
+                        <span className="text-red-600 font-medium">{s.comment}</span>
+                      ) : (
+                        s.motif || '—'
+                      )}
                     </td>
                     <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
                     <td className="px-3 py-3 text-xs text-center">{s.dateDepo ? `${calcDelai(s)}j` : '—'}</td>
                     <td className="px-3 py-3">
                       <StatusBadge status={s.status} />
-                      {s.status === 'non_ok' && s.comment && (
-                        <p className="text-xs text-red-500 mt-0.5 max-w-28 truncate" title={s.comment}>
-                          {s.comment}
-                        </p>
-                      )}
                     </td>
                     <td className="px-3 py-3">
-                      <div className="flex gap-1.5 flex-wrap">
-                        {(s.status === 'pending' || s.status === 'urgent') && (
-                          <>
-                            <button
-                              onClick={() => handleMarkOK(s.fgp)}
-                              className="px-2.5 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95"
-                            >
-                              OK
-                            </button>
-                            <button
-                              onClick={() => handleMarkNOK(s.fgp)}
-                              className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95"
-                            >
-                              NOK
-                            </button>
-                          </>
-                        )}
+                      <div className="flex gap-2 flex-wrap items-center">
+                        <button
+                          onClick={() => handleMarkOK(s.fgp)}
+                          title={s.status === 'ok' ? 'Déjà OK — cliquer pour reconfirmer' : 'Marquer OK'}
+                          className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
+                            s.status === 'ok'
+                              ? 'bg-green-600 text-white ring-2 ring-green-300'
+                              : 'bg-green-100 hover:bg-green-600 hover:text-white text-green-700'
+                          }`}
+                        >
+                          OK
+                        </button>
+                        <button
+                          onClick={() => handleMarkNOK(s.fgp, s.status === 'non_ok' ? s.comment : '')}
+                          title={s.status === 'non_ok' ? 'Modifier le commentaire NON OK' : 'Marquer NON OK'}
+                          className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
+                            s.status === 'non_ok'
+                              ? 'bg-red-600 text-white ring-2 ring-red-300'
+                              : 'bg-red-100 hover:bg-red-600 hover:text-white text-red-700'
+                          }`}
+                        >
+                          NOK
+                        </button>
                         {isAdmin && (
                           <button
                             onClick={() => openReassign(s.fgp, s.equipe)}
-                            className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition-colors active:scale-95"
-                          ></button>
+                            className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95 shadow-sm"
+                          >
+                            Réaffecter équipe
+                          </button>
                         )}
                       </div>
                     </td>
@@ -346,7 +354,13 @@ export default function SituationsPage() {
       </Modal>
 
       {/* NOK sheet */}
-      <NOKSheet open={nokOpen} fgp={nokFgp} onClose={() => setNokOpen(false)} onConfirm={handleNOKConfirm} />
+      <NOKSheet
+        open={nokOpen}
+        fgp={nokFgp}
+        initialComment={nokInitialComment}
+        onClose={() => setNokOpen(false)}
+        onConfirm={handleNOKConfirm}
+      />
     </div>
   );
 }

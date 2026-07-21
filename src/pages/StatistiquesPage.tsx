@@ -8,11 +8,22 @@ import {
   repeatDerangementByClient,
   inPeriod,
   exportStatsToExcel,
+  MERGED_TYPES,
   type PeriodFilter,
 } from '@/utils/stats';
 import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, EmptyState, StatCard } from '@/components/ui';
 import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
 import type { SituationNature } from '@/types';
+
+type NatureFilter = 'all' | SituationNature;
+
+// Classification fiable par TYPE (le champ `nature` importé n'est pas toujours cohérent) :
+// Installation = CPL/TRL/CMI/CLS/RLR/CST · Dérangement = DRG
+function matchesNature(s: { type: string }, nature: NatureFilter): boolean {
+  if (nature === 'all') return true;
+  if (nature === 'derangement') return s.type === 'DRG';
+  return MERGED_TYPES.includes(s.type);
+}
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -49,7 +60,7 @@ export default function StatistiquesPage() {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
 
-  const [nature, setNature] = useState<SituationNature>('installation');
+  const [nature, setNature] = useState<NatureFilter>('installation');
   const [preset, setPreset] = useState<PeriodPreset>('mois');
   const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
   const [customTo, setCustomTo] = useState(todayStr());
@@ -63,7 +74,7 @@ export default function StatistiquesPage() {
   const scoped = useMemo(
     () =>
       situations.filter((s) => {
-        if ((s.nature ?? 'installation') !== nature) return false;
+        if (!matchesNature(s, nature)) return false;
         if (!inPeriod(s.dateDepo, period)) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fVille) {
@@ -107,7 +118,7 @@ export default function StatistiquesPage() {
     }
     const byDay: Record<string, number> = {};
     situations
-      .filter((s) => (s.nature ?? 'installation') === nature)
+      .filter((s) => matchesNature(s, nature))
       .forEach((s) => {
         if (s.dateDepo) byDay[s.dateDepo] = (byDay[s.dateDepo] ?? 0) + 1;
       });
@@ -167,13 +178,13 @@ export default function StatistiquesPage() {
 
       {/* Nature toggle */}
       <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
-        {(['installation', 'derangement'] as SituationNature[]).map((n) => (
+        {(['all', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
           <button
             key={n}
             onClick={() => setNature(n)}
             className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
           >
-            {n === 'installation' ? ' Installation' : ' Dérangement'}
+            {n === 'all' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
           </button>
         ))}
       </div>
@@ -261,7 +272,7 @@ export default function StatistiquesPage() {
             <CardTitle> Tendance — 30 derniers jours</CardTitle>
           </CardHeader>
           <div className="p-5">
-            <TrendArea points={trendPoints} color={nature === 'installation' ? '#1565C0' : '#E65100'} />
+            <TrendArea points={trendPoints} color={nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0'} />
           </div>
         </Card>
       </div>
@@ -281,7 +292,7 @@ export default function StatistiquesPage() {
             <CardTitle> Répartition par jour de semaine</CardTitle>
           </CardHeader>
           <div className="p-5">
-            <WeekdayBars data={weekdayData} color={nature === 'installation' ? '#1565C0' : '#E65100'} />
+            <WeekdayBars data={weekdayData} color={nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0'} />
           </div>
         </Card>
       </div>
@@ -349,7 +360,7 @@ export default function StatistiquesPage() {
       </Card>
 
       {/* Dérangements répétés par client */}
-      {nature === 'derangement' && (
+      {(nature === 'derangement' || nature === 'all') && (
         <Card>
           <CardHeader>
             <CardTitle> Clients avec dérangements répétés (période sélectionnée)</CardTitle>

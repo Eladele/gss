@@ -16,6 +16,7 @@ export default function ChefSituationsPage() {
   const { showToast } = useToast();
 
   const [nokFgp, setNokFgp] = useState('');
+  const [nokInitialComment, setNokInitialComment] = useState('');
   const [nokOpen, setNokOpen] = useState(false);
   const [fStatus, setFStatus] = useState('');
   const [search, setSearch] = useState('');
@@ -148,7 +149,6 @@ export default function ChefSituationsPage() {
         /* ── Vue Cartes ── */
         <div className="space-y-3">
           {sorted.map((s) => {
-            const isDone = s.status === 'ok' || s.status === 'non_ok';
             return (
               <div
                 key={s.id}
@@ -194,25 +194,34 @@ export default function ChefSituationsPage() {
                 )}
 
                 {/* Actions */}
-                {!isDone && (
-                  <div className="px-3 pb-3 pt-2 grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => handleOK(s.fgp)}
-                      className="py-3 bg-green-600 hover:bg-green-700 active:bg-green-800 text-white font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm flex items-center justify-center gap-1.5"
-                    >
-                      OK
-                    </button>
-                    <button
-                      onClick={() => {
-                        setNokFgp(s.fgp);
-                        setNokOpen(true);
-                      }}
-                      className="py-3 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm flex items-center justify-center gap-1.5"
-                    >
-                      NON OK
-                    </button>
-                  </div>
-                )}
+                <div className="px-3 pb-3 pt-2 grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => handleOK(s.fgp)}
+                    title={s.status === 'ok' ? 'Déjà OK — cliquer pour reconfirmer' : 'Marquer OK'}
+                    className={`py-3 font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm flex items-center justify-center gap-1.5 ${
+                      s.status === 'ok'
+                        ? 'bg-green-600 text-white ring-2 ring-green-300'
+                        : 'bg-green-100 hover:bg-green-600 hover:text-white text-green-700'
+                    }`}
+                  >
+                    OK
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNokFgp(s.fgp);
+                      setNokInitialComment(s.status === 'non_ok' ? s.comment : '');
+                      setNokOpen(true);
+                    }}
+                    title={s.status === 'non_ok' ? 'Modifier le commentaire NON OK' : 'Marquer NON OK'}
+                    className={`py-3 font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm flex items-center justify-center gap-1.5 ${
+                      s.status === 'non_ok'
+                        ? 'bg-red-600 text-white ring-2 ring-red-300'
+                        : 'bg-red-100 hover:bg-red-600 hover:text-white text-red-700'
+                    }`}
+                  >
+                    NON OK
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -233,7 +242,6 @@ export default function ChefSituationsPage() {
               </thead>
               <tbody>
                 {sorted.map((s) => {
-                  const isDone = s.status === 'ok' || s.status === 'non_ok';
                   return (
                     <tr
                       key={s.id}
@@ -249,41 +257,50 @@ export default function ChefSituationsPage() {
                       <td className="px-3 py-3">
                         <ZoneChip zone={s.zone} />
                       </td>
-                      <td className="px-3 py-3 text-xs text-slate-400 max-w-28 truncate" title={s.motif}>
-                        {s.motif || '—'}
+                      <td
+                        className="px-3 py-3 text-xs max-w-40 truncate"
+                        title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}
+                      >
+                        {s.status === 'non_ok' && s.comment ? (
+                          <span className="text-red-600 font-medium">{s.comment}</span>
+                        ) : (
+                          <span className="text-slate-400">{s.motif || '—'}</span>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
                       <td className="px-3 py-3 text-xs text-center">{s.dateDepo ? `${calcDelai(s)}j` : '—'}</td>
                       <td className="px-3 py-3">
                         <StatusBadge status={s.status} />
-                        {s.status === 'non_ok' && s.comment && (
-                          <p className="text-xs text-red-500 mt-0.5 max-w-28 truncate italic" title={s.comment}>
-                            {s.comment}
-                          </p>
-                        )}
                       </td>
                       <td className="px-3 py-3">
-                        {!isDone ? (
-                          <div className="flex gap-1.5">
-                            <button
-                              onClick={() => handleOK(s.fgp)}
-                              className="px-2.5 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95"
-                            >
-                              OK
-                            </button>
-                            <button
-                              onClick={() => {
-                                setNokFgp(s.fgp);
-                                setNokOpen(true);
-                              }}
-                              className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95"
-                            >
-                              NOK
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-slate-300">—</span>
-                        )}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleOK(s.fgp)}
+                            title={s.status === 'ok' ? 'Déjà OK — cliquer pour reconfirmer' : 'Marquer OK'}
+                            className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
+                              s.status === 'ok'
+                                ? 'bg-green-600 text-white ring-2 ring-green-300'
+                                : 'bg-green-100 hover:bg-green-600 hover:text-white text-green-700'
+                            }`}
+                          >
+                            OK
+                          </button>
+                          <button
+                            onClick={() => {
+                              setNokFgp(s.fgp);
+                              setNokInitialComment(s.status === 'non_ok' ? s.comment : '');
+                              setNokOpen(true);
+                            }}
+                            title={s.status === 'non_ok' ? 'Modifier le commentaire NON OK' : 'Marquer NON OK'}
+                            className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
+                              s.status === 'non_ok'
+                                ? 'bg-red-600 text-white ring-2 ring-red-300'
+                                : 'bg-red-100 hover:bg-red-600 hover:text-white text-red-700'
+                            }`}
+                          >
+                            NOK
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -295,7 +312,13 @@ export default function ChefSituationsPage() {
       )}
 
       {/* NOK Sheet avec saisie du motif */}
-      <NOKSheet open={nokOpen} fgp={nokFgp} onClose={() => setNokOpen(false)} onConfirm={handleNOKConfirm} />
+      <NOKSheet
+        open={nokOpen}
+        fgp={nokFgp}
+        initialComment={nokInitialComment}
+        onClose={() => setNokOpen(false)}
+        onConfirm={handleNOKConfirm}
+      />
     </div>
   );
 }

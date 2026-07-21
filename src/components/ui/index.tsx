@@ -128,48 +128,51 @@ export function Modal({
 export function NOKSheet({
   open,
   fgp,
+  initialComment = '',
   onClose,
   onConfirm,
 }: {
   open: boolean;
   fgp: string;
+  initialComment?: string;
   onClose: () => void;
   onConfirm: (comment: string) => void;
 }) {
   const [comment, setComment] = useState('');
   useEffect(() => {
-    if (open) setComment('');
-  }, [open]);
+    if (open) setComment(initialComment);
+  }, [open, initialComment]);
   const valid = comment.trim().length >= 3;
   if (!open) return null;
   return (
     <>
       <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} />
-      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl p-5 shadow-2xl animate-slide-up">
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl p-6 shadow-2xl animate-slide-up">
         <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-4" />
-        <p className="font-bold text-red-700 text-base mb-1">NON OK — FGP {fgp}</p>
-        <p className="text-xs text-slate-500 mb-3">Commentaire obligatoire </p>
+        <p className="font-bold text-red-700 text-lg mb-1">{initialComment ? 'Modifier le commentaire — ' : 'NON OK — '}FGP {fgp}</p>
+        <p className="text-xs text-slate-500 mb-3">Commentaire obligatoire (motif de non-résolution)</p>
         <textarea
           className="w-full border border-slate-200 rounded-lg p-3 text-sm resize-none focus:outline-none focus:border-blue-500 bg-slate-50"
-          rows={4}
+          rows={5}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           placeholder="Ex: Pas de signal fibre, client absent, poteau cassé..."
           autoFocus
         />
-        <div className="flex gap-3 mt-3">
-          <Button variant="outline" className="flex-1" onClick={onClose}>
+        <div className="flex gap-3 mt-4">
+          <Button variant="outline" size="lg" className="flex-1" onClick={onClose}>
             Annuler
           </Button>
           <Button
             variant="danger"
+            size="lg"
             className="flex-1"
             disabled={!valid}
             onClick={() => {
               onConfirm(comment.trim());
             }}
           >
-            Confirmer NON OK
+            {initialComment ? 'Enregistrer la modification' : 'Confirmer NON OK'}
           </Button>
         </div>
       </div>

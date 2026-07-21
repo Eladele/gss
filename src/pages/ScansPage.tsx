@@ -4,52 +4,179 @@ import { useAppStore } from '@/store/useAppStore';
 import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useToast } from '@/components/ui';
 import type { ScanRecord } from '@/types';
 
-// Seuil de signal dégradé : -28 dBm et en-dessous (couvre le cas signalé -29 à -33 dBm)
-const SEUIL_DEGRADE = -28;
+// Trois intervalles de signal (Rx Optical Power, dBm) :
+//  Excellent : -10 à -22   ·  Moyen : -22,1 à -25   ·  Dégradé : -25 à -35 (et au-delà)
+type SignalLevel = 'excellent' | 'moyen' | 'degrade' | 'absent';
+
+function signalLevel(rx: number | null | undefined): SignalLevel {
+  if (rx === null || rx === undefined) return 'absent';
+  if (rx >= -22) return 'excellent';
+  if (rx >= -25) return 'moyen';
+  return 'degrade';
+}
+const SIGNAL_RANK: Record<SignalLevel, number> = { excellent: 3, moyen: 2, degrade: 1, absent: 0 };
+const SIGNAL_LABELS: Record<SignalLevel, string> = {
+  excellent: 'Excellent (-10 à -22 dBm)',
+  moyen: 'Moyen (-22,1 à -25 dBm)',
+  degrade: 'Dégradé (-25 à -35 dBm)',
+  absent: 'Sans mesure',
+};
+const SIGNAL_STYLES: Record<SignalLevel, string> = {
+  excellent: 'bg-green-100 text-green-700',
+  moyen: 'bg-amber-100 text-amber-700',
+  degrade: 'bg-red-100 text-red-700',
+  absent: 'bg-slate-100 text-slate-500',
+};
+
+function isResilie(s: { remarque?: string }): boolean {
+  return /r[ée]sili/i.test(s.remarque || '');
+}
+function isSuspendu(s: { remarque?: string }): boolean {
+  return /suspendu/i.test(s.remarque || '');
+}
+
+function scanKey(s: Partial<ScanRecord>): string {
+  // ONU ID est unique dans le système → clé de comparaison prioritaire.
+  // Repli sur SN/MAC puis sur Zone+Port si l'ONU ID est absent.
+  if (s.onuId !== undefined && s.onuId !== null) return `onu:${s.onuId}`;
+  return (s.snMac && s.snMac.trim()) || `${s.zone}|${s.portId ?? ''}`;
+}
+
+interface ImportDiff {
+  nouveaux: number;
+  nouveauxScanne: number;
+  nouveauxNonScanne: number;
+  disparus: number;
+  passesNonScanne: number;
+  passesScanne: number;
+  signalDegrade: number;
+  signalAmeliore: number;
+}
+
+// Calcule le diff ET marque chaque ligne du nouveau fichier comme 'new' / 'existing'
+// (persisté en base ensuite, pour un filtrage fiable même après un refresh).
+function computeDiffAndTag(oldRows: ScanRecord[], newRows: Partial<ScanRecord>[]): ImportDiff {
+  const oldMap = new Map(oldRows.map((r) => [scanKey(r), r]));
+  const diff: ImportDiff = {
+    nouveaux: 0,
+    nouveauxScanne: 0,
+    nouveauxNonScanne: 0,
+    disparus: 0,
+    passesNonScanne: 0,
+    passesScanne: 0,
+    signalDegrade: 0,
+    signalAmeliore: 0,
+  };
+  const newKeys = new Set<string>();
+
+  newRows.forEach((row) => {
+    const key = scanKey(row);
+    newKeys.add(key);
+    const old = oldMap.get(key);
+    if (!old) {
+      diff.nouveaux++;
+      if (row.result === 'SCANNE') diff.nouveauxScanne++;
+      else diff.nouveauxNonScanne++;
+      row.changeType = 'new';
+      return;
+    }
+    row.changeType = 'existing';
+    if (old.result === 'SCANNE' && row.result === 'NON SCANE') diff.passesNonScanne++;
+    if (old.result === 'NON SCANE' && row.result === 'SCANNE') diff.passesScanne++;
+    // Le signal ne peut être comparé que si l'ONU est réellement scanné des deux côtés
+    // (un ONU NON SCANNE n'a pas de nouvelle mesure — son signal n'a pas "changé", il est juste inconnu).
+    if (old.result === 'SCANNE' && row.result === 'SCANNE') {
+      const oldLevel = signalLevel(old.rxPower);
+      const newLevel = signalLevel(row.rxPower ?? null);
+      if (SIGNAL_RANK[newLevel] < SIGNAL_RANK[oldLevel]) diff.signalDegrade++;
+      else if (SIGNAL_RANK[newLevel] > SIGNAL_RANK[oldLevel]) diff.signalAmeliore++;
+    }
+  });
+  oldMap.forEach((_row, key) => {
+    if (!newKeys.has(key)) diff.disparus++;
+  });
+  return diff;
+}
 
 export default function ScansPage() {
   const scans = useAppStore((s) => s.scans);
+  const equipes = useAppStore((s) => s.equipes);
   const loadScans = useAppStore((s) => s.loadScans);
   const importScans = useAppStore((s) => s.importScans);
+  const scanHistory = useAppStore((s) => s.scanHistory);
+  const loadScanHistory = useAppStore((s) => s.loadScanHistory);
+  const recordScanSnapshot = useAppStore((s) => s.recordScanSnapshot);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
+  const [diff, setDiff] = useState<ImportDiff | null>(null);
+  // Après un refresh, `diff` (local) est vide — on retombe sur le dernier diff persisté en base
+  const displayedDiff = diff ?? scanHistory[0]?.diff ?? null;
 
   useEffect(() => {
     if (scans.length === 0) loadScans();
+    if (scanHistory.length === 0) loadScanHistory();
   }, []);
 
   const [fZone, setFZone] = useState('');
+  const [fEquipe, setFEquipe] = useState(''); // regroupe les zones déjà affectées à une équipe
   const [fResult, setFResult] = useState('');
-  const [fSignal, setFSignal] = useState(''); // '', 'degrade', 'ok', 'absent'
+  const [fSignal, setFSignal] = useState<'' | SignalLevel>('');
+  const [fNouveau, setFNouveau] = useState(false); // ONU nouveaux uniquement (vs import précédent)
+  const [fDateFrom, setFDateFrom] = useState('');
+  const [fDateTo, setFDateTo] = useState('');
 
   const zones = useMemo(() => [...new Set(scans.map((s) => s.zone).filter(Boolean))].sort(), [scans]);
+  // Équipes qui ont au moins une zone assignée (pour le regroupement zone → équipe)
+  const equipesAvecZones = useMemo(() => equipes.filter((eq) => (eq.zones ?? []).length > 0), [equipes]);
 
   const stats = useMemo(() => {
+    const total = scans.length;
+    const resilies = scans.filter(isResilie).length;
+    const suspendus = scans.filter(isSuspendu).length;
     const scanne = scans.filter((s) => s.result === 'SCANNE').length;
     const nonScanne = scans.filter((s) => s.result === 'NON SCANE').length;
-    const degrade = scans.filter((s) => s.rxPower !== null && s.rxPower !== undefined && s.rxPower <= SEUIL_DEGRADE).length;
-    const sansSignal = scans.filter((s) => s.rxPower === null || s.rxPower === undefined).length;
-    return { total: scans.length, scanne, nonScanne, degrade, sansSignal };
+    const excellent = scans.filter((s) => signalLevel(s.rxPower) === 'excellent').length;
+    const moyen = scans.filter((s) => signalLevel(s.rxPower) === 'moyen').length;
+    const degrade = scans.filter((s) => signalLevel(s.rxPower) === 'degrade').length;
+    const sansSignal = scans.filter((s) => signalLevel(s.rxPower) === 'absent').length;
+    // % scanné : on exclut les lignes résiliées (non scannées car la ligne n'existe plus, pas un vrai problème)
+    const denom = total - resilies;
+    const pctScanne = denom ? Math.round((scanne / denom) * 1000) / 10 : 0;
+    return { total, resilies, suspendus, scanne, nonScanne, excellent, moyen, degrade, sansSignal, denom, pctScanne };
   }, [scans]);
 
   const filtered = useMemo(
     () =>
       scans
         .filter((s) => {
-          if (fZone && s.zone !== fZone) return false;
+          if (fEquipe) {
+            const eq = equipesAvecZones.find((e) => e.name === fEquipe);
+            if (!eq || !(eq.zones ?? []).includes(s.zone)) return false;
+          } else if (fZone && s.zone !== fZone) {
+            return false;
+          }
           if (fResult && s.result !== fResult) return false;
-          if (fSignal === 'degrade' && !(s.rxPower !== null && s.rxPower !== undefined && s.rxPower <= SEUIL_DEGRADE)) return false;
-          if (fSignal === 'ok' && !(s.rxPower !== null && s.rxPower !== undefined && s.rxPower > SEUIL_DEGRADE)) return false;
-          if (fSignal === 'absent' && !(s.rxPower === null || s.rxPower === undefined)) return false;
+          if (fSignal && signalLevel(s.rxPower) !== fSignal) return false;
+          if (fNouveau && s.changeType !== 'new') return false;
+          // Le rôle premier du filtre date est de retrouver les ONU NON SCANNE sur une période
+          // (ils n'ont pas de date de scan par définition — on ne les exclut donc pas ici).
+          if (s.result !== 'NON SCANE') {
+            if (fDateFrom && (!s.scanTime || s.scanTime.slice(0, 10) < fDateFrom)) return false;
+            if (fDateTo && (!s.scanTime || s.scanTime.slice(0, 10) > fDateTo)) return false;
+          }
           return true;
         })
         .slice(0, 300),
-    [scans, fZone, fResult, fSignal],
+    [scans, fZone, fEquipe, equipesAvecZones, fResult, fSignal, fNouveau, fDateFrom, fDateTo],
   ); // limité à 300 lignes affichées (performance)
+
+  const nouveauxCount = useMemo(() => scans.filter((s) => s.changeType === 'new').length, [scans]);
 
   const parseFile = (file: File) => {
     setLoading(true);
+    setDiff(null);
+    const previousScans = scans; // snapshot avant remplacement, pour calculer la différence
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -109,8 +236,30 @@ export default function ScansPage() {
           });
         }
 
-        importScans(rows, true).then((count) => {
-          showToast(`${count} lignes importées (table remplacée) `, 'success');
+        // Diff + marquage "nouveau"/"existant" par ligne (persisté avec l'import)
+        const computedDiff = computeDiffAndTag(previousScans, rows);
+
+        importScans(rows, true).then(async (count) => {
+          setDiff(computedDiff);
+
+          // Snapshot pour le suivi semaine par semaine (% scanné hors résiliés, signal, + diff)
+          const newExcellent = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'excellent').length;
+          const newMoyen = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'moyen').length;
+          const newDegrade = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'degrade').length;
+          const newScanne = rows.filter((r) => r.result === 'SCANNE').length;
+          const newResilies = rows.filter(isResilie).length;
+          await recordScanSnapshot({
+            total: rows.length,
+            scanne: newScanne,
+            nonScanne: rows.length - newScanne,
+            excellent: newExcellent,
+            moyen: newMoyen,
+            degrade: newDegrade,
+            resilies: newResilies,
+            diff: computedDiff,
+          });
+
+          showToast(`${count} lignes importées (table remplacée)`, 'success');
           setLoading(false);
         });
       } catch (err: any) {
@@ -126,7 +275,9 @@ export default function ScansPage() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-black text-slate-900">Scans Réseau (ONU/OLT)</h1>
-          <p className="text-slate-400 text-sm">Contrôle des équipements fibre : scannés/non scannés, signal dégradé</p>
+          <p className="text-slate-400 text-sm">
+            Contrôle des équipements fibre : % scanné, niveau de signal, évolution semaine par semaine
+          </p>
         </div>
         <div>
           <input
@@ -136,31 +287,137 @@ export default function ScansPage() {
             className="hidden"
             onChange={(e) => e.target.files?.[0] && parseFile(e.target.files[0])}
           />
-          <Button icon="" onClick={() => fileRef.current?.click()} disabled={loading}>
-            {loading ? 'Import en cours...' : 'Importer un fichier de scan (.xlsx)'}
+          <Button onClick={() => fileRef.current?.click()} disabled={loading}>
+            {loading ? 'Import en cours...' : 'Importer le nouveau fichier de scan (.xlsx)'}
           </Button>
         </div>
       </div>
       <p className="text-xs text-slate-400 -mt-3">
-        Chaque import <strong>remplace entièrement</strong> la table (photo la plus récente du réseau) — colonnes attendues : ZONE, STT,
-        RESULT, Scan time, Port ID, ONU ID, ONU Name, Software Version, SN/MAC, Time Added to NMS, Rx Optical Power(dBm), Ranging(m),
-        Remarque.
+        Chaque import <strong>remplace entièrement</strong> la table (photo la plus récente du réseau) et se compare automatiquement au
+        fichier précédent — colonnes attendues : ZONE, STT, RESULT, Scan time, Port ID, ONU ID, ONU Name, Software Version, SN/MAC, Time
+        Added to NMS, Rx Optical Power(dBm), Ranging(m), Remarque.
       </p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-        <StatCard value={stats.total} label="Total lignes" icon="" accent="#1565C0" />
-        <StatCard value={stats.scanne} label="Scannés" icon="" accent="#2E7D32" />
-        <StatCard value={stats.nonScanne} label="Non scannés" icon="" accent="#C62828" />
-        <StatCard value={stats.degrade} label={`Signal ≤ ${SEUIL_DEGRADE}dBm`} icon="" accent="#E9A93B" />
-        <StatCard value={stats.sansSignal} label="Sans mesure" icon="" accent="#546E7A" />
+      {/* ── Comparaison avec le fichier précédent ── */}
+      {displayedDiff && (
+        <Card className="border-blue-200 bg-blue-50/40">
+          <div className="p-4">
+            <p className="text-sm font-bold text-blue-800 mb-1">
+              Comparaison avec le fichier de la semaine précédente
+              {!diff && scanHistory[0] && (
+                <span className="text-xs font-normal text-blue-500 ml-2">
+                  (dernier import : {new Date(scanHistory[0].importedAt).toLocaleString('fr-FR')})
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-blue-700/80 mb-3">
+              Chaque ONU est identifié par son <strong>ONU ID</strong> (identifiant unique dans le système) et comparé au fichier importé la
+              semaine précédente : <strong>Nouveaux ONU</strong> = présents dans ce fichier mais absents de l'ancien, qu'ils soient scannés
+              ou non · <strong>ONU disparus</strong> = présents avant, absents maintenant (retirés/hors périmètre du scan) ·{' '}
+              <strong>Passés NON SCANNE</strong> = étaient scannés avant, ne le sont plus (à surveiller) · <strong>Repassés SCANNE</strong>{' '}
+              = ne l'étaient pas avant, le sont maintenant (amélioration) · <strong>Signal dégradé/amélioré</strong> = le niveau de signal
+              (Excellent/Moyen/Dégradé) a changé, uniquement comparé entre deux ONU réellement scannés des deux côtés (un ONU NON SCANNE n'a
+              pas de nouvelle mesure, son signal n'est pas compté comme "changé").
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              <DiffStat
+                label="Total nouveaux ONU ID"
+                sub={`dont ${displayedDiff.nouveauxScanne ?? 0} scannés · ${displayedDiff.nouveauxScanne ?? 0} non scannés`}
+                value={displayedDiff.nouveaux}
+                color="#1565C0"
+                onClick={() => {
+                  setFNouveau(true);
+                  setFZone('');
+                  setFEquipe('');
+                }}
+              />
+              <DiffStat label="Total ONU ID disparus" value={displayedDiff.disparus} color="#546E7A" />
+              <DiffStat label="Passés NON SCANNE" value={displayedDiff.passesNonScanne} color="#C62828" />
+              <DiffStat label="Repassés SCANNE" value={displayedDiff.passesScanne} color="#2E7D32" />
+              <DiffStat label="Signal dégradé" value={displayedDiff.signalDegrade} color="#E9A93B" />
+              <DiffStat label="Signal amélioré" value={displayedDiff.signalAmeliore} color="#00838F" />
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-4">
+        <StatCard
+          value={`${stats.pctScanne}%`}
+          label={`Scannés (${stats.scanne}/${stats.denom}, hors résiliés)`}
+          icon=""
+          accent="#1565C0"
+        />
+        <StatCard value={stats.excellent} label="Signal excellent" icon="" accent="#2E7D32" />
+        <StatCard value={stats.moyen} label="Signal moyen" icon="" accent="#E9A93B" />
+        <StatCard value={stats.degrade} label="Signal dégradé" icon="" accent="#C62828" />
+        <StatCard value={stats.resilies} label="Total résiliés" icon="" accent="#546E7A" />
+        <StatCard value={stats.suspendus} label="Total suspendus" icon="" accent="#8D6E63" />
       </div>
+
+      {/* ── Historique des imports (évolution semaine par semaine) ── */}
+      {scanHistory.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Évolution des imports (derniers scans)</CardTitle>
+          </CardHeader>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <tr>
+                  <th className="px-3 py-2 text-left">Date d'import</th>
+                  <th className="px-3 py-2 text-center">Total</th>
+                  <th className="px-3 py-2 text-center">% Scanné</th>
+                  <th className="px-3 py-2 text-center">Excellent</th>
+                  <th className="px-3 py-2 text-center">Moyen</th>
+                  <th className="px-3 py-2 text-center">Dégradé</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {scanHistory.map((h) => (
+                  <tr key={h.id}>
+                    <td className="px-3 py-2 text-xs text-slate-500">{new Date(h.importedAt).toLocaleString('fr-FR')}</td>
+                    <td className="px-3 py-2 text-center">{h.total}</td>
+                    <td className="px-3 py-2 text-center font-semibold text-blue-700">{h.pctScanne}%</td>
+                    <td className="px-3 py-2 text-center text-green-700">{h.excellent}</td>
+                    <td className="px-3 py-2 text-center text-amber-700">{h.moyen}</td>
+                    <td className="px-3 py-2 text-center text-red-700">{h.degrade}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2 flex-wrap w-full">
             <CardTitle>Détail des scans</CardTitle>
-            <div className="flex items-center gap-2 ml-auto">
-              <Select value={fZone} onChange={(e) => setFZone(e.target.value)} style={{ width: 'auto' }}>
+            <div className="flex items-center gap-2 ml-auto flex-wrap">
+              <Select
+                value={fEquipe}
+                onChange={(e) => {
+                  setFEquipe(e.target.value);
+                  setFZone('');
+                }}
+                style={{ width: 'auto' }}
+              >
+                <option value="">Toutes équipes</option>
+                {equipesAvecZones.map((eq) => (
+                  <option key={eq.id} value={eq.name}>
+                    {eq.name} ({(eq.zones ?? []).length} zones)
+                  </option>
+                ))}
+              </Select>
+              <Select
+                value={fZone}
+                onChange={(e) => {
+                  setFZone(e.target.value);
+                  setFEquipe('');
+                }}
+                style={{ width: 'auto' }}
+              >
                 <option value="">Toutes zones</option>
                 {zones.map((z) => (
                   <option key={z} value={z}>
@@ -173,12 +430,36 @@ export default function ScansPage() {
                 <option value="SCANNE">Scannés uniquement</option>
                 <option value="NON SCANE">Non scannés uniquement</option>
               </Select>
-              <Select value={fSignal} onChange={(e) => setFSignal(e.target.value)} style={{ width: 'auto' }}>
+              <Select value={fSignal} onChange={(e) => setFSignal(e.target.value as '' | SignalLevel)} style={{ width: 'auto' }}>
                 <option value="">Tous signaux</option>
-                <option value="degrade">Signal dégradé (≤ {SEUIL_DEGRADE}dBm)</option>
-                <option value="ok">Signal correct</option>
+                <option value="excellent">Excellent (-10 à -21 dBm)</option>
+                <option value="moyen">Moyen (-21 à -25 dBm)</option>
+                <option value="degrade">Dégradé (-25 à -35 dBm)</option>
                 <option value="absent">Sans mesure</option>
               </Select>
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 border border-slate-200 rounded-lg px-2.5 py-2 cursor-pointer">
+                <input type="checkbox" checked={fNouveau} onChange={(e) => setFNouveau(e.target.checked)} />
+                Nouveaux ONU ({nouveauxCount})
+              </label>
+              <div
+                className="flex items-center gap-1.5 text-xs"
+                title="Retrouve surtout les ONU NON SCANNE sur cette période (ils n'ont pas de date de scan)"
+              >
+                <span className="text-slate-400">Non scannés entre le</span>
+                <input
+                  type="date"
+                  value={fDateFrom}
+                  onChange={(e) => setFDateFrom(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5"
+                />
+                <span className="text-slate-400">et le</span>
+                <input
+                  type="date"
+                  value={fDateTo}
+                  onChange={(e) => setFDateTo(e.target.value)}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5"
+                />
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -188,7 +469,7 @@ export default function ScansPage() {
             icon=""
             text={
               scans.length === 0
-                ? 'Aucun scan importé — utilisez le bouton "Importer un fichier de scan"'
+                ? 'Aucun scan importé — utilisez le bouton "Importer le nouveau fichier de scan"'
                 : 'Aucun résultat pour ces filtres'
             }
           />
@@ -202,16 +483,22 @@ export default function ScansPage() {
                   <th className="px-3 py-2 text-left">ONU</th>
                   <th className="px-3 py-2 text-left">SN/MAC</th>
                   <th className="px-3 py-2 text-center">Rx (dBm)</th>
+                  <th className="px-3 py-2 text-left">Niveau</th>
                   <th className="px-3 py-2 text-center">Distance (m)</th>
                   <th className="px-3 py-2 text-left">Remarque</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filtered.map((s) => {
-                  const degrade = s.rxPower !== null && s.rxPower !== undefined && s.rxPower <= SEUIL_DEGRADE;
+                  const level = signalLevel(s.rxPower);
                   return (
-                    <tr key={s.id} className={degrade ? 'bg-red-50' : ''}>
-                      <td className="px-3 py-2">{s.zone}</td>
+                    <tr key={s.id} className={level === 'degrade' ? 'bg-red-50' : ''}>
+                      <td className="px-3 py-2">
+                        {s.zone}
+                        {s.changeType === 'new' && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700">nouveau</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.result === 'SCANNE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
@@ -221,8 +508,13 @@ export default function ScansPage() {
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-500">{s.onuName || s.onuId || '—'}</td>
                       <td className="px-3 py-2 text-xs font-mono text-slate-500">{s.snMac || '—'}</td>
-                      <td className={`px-3 py-2 text-center font-semibold ${degrade ? 'text-red-600' : 'text-slate-600'}`}>
+                      <td className={`px-3 py-2 text-center font-semibold ${level === 'degrade' ? 'text-red-600' : 'text-slate-600'}`}>
                         {s.rxPower ?? '—'}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${SIGNAL_STYLES[level]}`}>
+                          {level === 'absent' ? '—' : SIGNAL_LABELS[level].split(' (')[0]}
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-center text-slate-500">{s.ranging ?? '—'}</td>
                       <td className="px-3 py-2 text-xs text-slate-400">{s.remarque || '—'}</td>
@@ -241,5 +533,34 @@ export default function ScansPage() {
         )}
       </Card>
     </div>
+  );
+}
+
+function DiffStat({
+  label,
+  sub,
+  value,
+  color,
+  onClick,
+}: {
+  label: string;
+  sub?: string;
+  value: number;
+  color: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className={`bg-white rounded-lg border border-slate-200 p-3 text-center ${onClick ? 'hover:border-blue-300 cursor-pointer' : 'cursor-default'}`}
+    >
+      <div className="text-xl font-black" style={{ color }}>
+        {value}
+      </div>
+      <div className="text-[11px] text-slate-500 mt-0.5">{label}</div>
+      {sub && <div className="text-[10px] text-slate-400 mt-0.5">{sub}</div>}
+    </button>
   );
 }

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord } from '@/types';
+import type { ScanImportSnapshot } from '@/lib/supabaseService';
 import { SAMPLE_NOTIFICATIONS, ZONE_EQUIPE_MAP } from '@/data';
 import {
   fetchSituations,
@@ -32,6 +33,8 @@ import {
   bulkInsertScans,
   clearScans,
   deleteScan,
+  fetchScanImportHistory,
+  insertScanImportSnapshot,
 } from '@/lib/supabaseService';
 
 interface AppState {
@@ -46,6 +49,7 @@ interface AppState {
   vehicles: Vehicle[];
   materiels: Materiel[];
   scans: ScanRecord[];
+  scanHistory: ScanImportSnapshot[];
   loading: boolean;
   // Auth
   login: (user: User) => void;
@@ -88,6 +92,26 @@ interface AppState {
   loadScans: () => Promise<void>;
   importScans: (rows: Partial<ScanRecord>[], replace?: boolean) => Promise<number>;
   removeScan: (id: string) => Promise<void>;
+  loadScanHistory: () => Promise<void>;
+ recordScanSnapshot: (stats: {
+    total: number;
+    scanne: number;
+    nonScanne: number;
+    excellent: number;
+    moyen: number;
+    degrade: number;
+    resilies?: number;
+    diff?: {
+      nouveaux: number;
+      nouveauxScanne: number;
+      nouveauxNonScanne: number;
+      disparus: number;
+      passesNonScanne: number;
+      passesScanne: number;
+      signalDegrade: number;
+      signalAmeliore: number;
+    } | null;
+  }) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>()(
@@ -104,6 +128,7 @@ export const useAppStore = create<AppState>()(
       vehicles: [],
       materiels: [],
       scans: [],
+      scanHistory: [],
       loading: false,
 
       login: (user) => {
@@ -122,6 +147,7 @@ export const useAppStore = create<AppState>()(
           vehicles: [],
           materiels: [],
           scans: [],
+          scanHistory: [],
         }),
 
       loadAll: async () => {
@@ -370,6 +396,16 @@ export const useAppStore = create<AppState>()(
       removeScan: async (id) => {
         await deleteScan(id);
         set((s) => ({ scans: s.scans.filter((x) => x.id !== id) }));
+      },
+
+      loadScanHistory: async () => {
+        const scanHistory = await fetchScanImportHistory();
+        set({ scanHistory });
+      },
+
+      recordScanSnapshot: async (stats) => {
+        await insertScanImportSnapshot(stats);
+        await get().loadScanHistory();
       },
     }),
     {

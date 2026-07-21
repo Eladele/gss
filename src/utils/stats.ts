@@ -11,7 +11,6 @@ export const DEFAULT_DELAI_THRESHOLD = 2;
 // si elle est traitée (OK / NON OK), sinon dateDepo → maintenant (délai toujours "en cours").
 // Remplace le délai statique importé pour un suivi automatique et à jour.
 export function calcDelai(s: Situation): number {
-  if (!s.dateClt) return 0;
   const startRaw = s.dateDepo || s.dateMessage;
   if (!startRaw) return s.delai ?? 0;
   const start = new Date(startRaw).getTime();
@@ -115,12 +114,19 @@ export interface TypeStat {
   pctConformite: number;
 }
 
+// Ces types sont fonctionnellement équivalents pour les statistiques (toutes des
+// clôtures d'installation) — on les regroupe en une seule ligne. DRG (et les
+// autres types) restent séparés.
+export const MERGED_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST'];
+export const MERGED_TYPE_LABEL = 'CPL/TRL/CMI/CLS/RLR/CST';
+
 export function statsByType(situations: Situation[], nature?: SituationNature): TypeStat[] {
   const byType: Record<string, Situation[]> = {};
   situations
     .filter((s) => !nature || (s.nature ?? 'installation') === nature)
     .forEach((s) => {
-      (byType[s.type] ??= []).push(s);
+      const key = MERGED_TYPES.includes(s.type) ? MERGED_TYPE_LABEL : s.type;
+      (byType[key] ??= []).push(s);
     });
   return Object.entries(byType)
     .map(([type, list]) => {

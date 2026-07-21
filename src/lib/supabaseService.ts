@@ -143,8 +143,8 @@ function toDbSituation(s: Situation) {
     zone: s.zone,
     equipe: s.equipe,
     motif: s.motif,
-    date_depo: s.dateDepo,
-    date_clt: s.dateClt,
+    date_depo: s.dateDepo || null,
+    date_clt: s.dateClt || null,
     date_message: s.dateMessage || null,
     service_destination: s.serviceDestination || null,
     delai: s.delai,
@@ -513,6 +513,7 @@ function mapScan(row: any): ScanRecord {
     rxPower: row.rx_power !== null && row.rx_power !== undefined ? Number(row.rx_power) : null,
     ranging: row.ranging !== null && row.ranging !== undefined ? Number(row.ranging) : null,
     remarque: row.remarque ?? '',
+    changeType: row.change_type === 'new' ? 'new' : row.change_type === 'existing' ? 'existing' : undefined,
     importedAt: row.imported_at,
   };
 }
@@ -558,6 +559,7 @@ export async function bulkInsertScans(rows: Partial<ScanRecord>[]): Promise<numb
       rx_power: r.rxPower ?? null,
       ranging: r.ranging ?? null,
       remarque: r.remarque ?? null,
+      change_type: r.changeType ?? null,
     }));
     const { error, count } = await supabase.from('scan_results').insert(chunk, { count: 'exact' });
     if (error) {
@@ -577,6 +579,107 @@ export async function clearScans(): Promise<void> {
 export async function deleteScan(id: string): Promise<void> {
   const { error } = await supabase.from('scan_results').delete().eq('id', id);
   if (error) console.error('deleteScan:', error);
+}
+
+// ─── HISTORIQUE DES IMPORTS DE SCAN (suivi semaine par semaine) ────────────────
+
+export interface ScanImportSnapshot {
+  id: string;
+  importedAt: string;
+  total: number;
+  scanne: number;
+  nonScanne: number;
+  excellent: number;
+  moyen: number;
+  degrade: number;
+  pctScanne: number;
+  diff?: {
+    nouveaux: number;
+    nouveauxScanne: number;
+    nouveauxNonScanne: number;
+    disparus: number;
+    passesNonScanne: number;
+    passesScanne: number;
+    signalDegrade: number;
+    signalAmeliore: number;
+  } | null;
+}
+
+function mapScanSnapshot(row: any): ScanImportSnapshot {
+  return {
+    id: row.id,
+    importedAt: row.imported_at,
+    total: row.total ?? 0,
+    scanne: row.scanne ?? 0,
+    nonScanne: row.non_scanne ?? 0,
+    excellent: row.excellent ?? 0,
+    moyen: row.moyen ?? 0,
+    degrade: row.degrade ?? 0,
+    pctScanne: row.pct_scanne != null ? Number(row.pct_scanne) : 0,
+    diff:
+      row.diff_nouveaux != null
+        ? {
+            nouveaux: row.diff_nouveaux ?? 0,
+            nouveauxScanne: row.diff_nouveaux_scanne ?? 0,
+            nouveauxNonScanne: row.diff_nouveaux_non_scanne ?? 0,
+            disparus: row.diff_disparus ?? 0,
+            passesNonScanne: row.diff_passes_non_scanne ?? 0,
+            passesScanne: row.diff_passes_scanne ?? 0,
+            signalDegrade: row.diff_signal_degrade ?? 0,
+            signalAmeliore: row.diff_signal_ameliore ?? 0,
+          }
+        : null,
+  };
+}
+
+export async function fetchScanImportHistory(): Promise<ScanImportSnapshot[]> {
+  const { data, error } = await supabase.from('scan_import_history').select('*').order('imported_at', { ascending: false }).limit(20);
+  if (error) {
+    console.error('fetchScanImportHistory:', error);
+    return [];
+  }
+  return (data ?? []).map(mapScanSnapshot);
+}
+
+export async function insertScanImportSnapshot(stats: {
+  total: number;
+  scanne: number;
+  nonScanne: number;
+  excellent: number;
+  moyen: number;
+  degrade: number;
+  resilies?: number;
+  diff?: {
+    nouveaux: number;
+    nouveauxScanne: number;
+    nouveauxNonScanne: number;
+    disparus: number;
+    passesNonScanne: number;
+    passesScanne: number;
+    signalDegrade: number;
+    signalAmeliore: number;
+  } | null;
+}): Promise<void> {
+  const denom = stats.total - (stats.resilies ?? 0);
+  const pctScanne = denom ? Math.round((stats.scanne / denom) * 1000) / 10 : 0;
+  const { error } = await supabase.from('scan_import_history').insert({
+    total: stats.total,
+    scanne: stats.scanne,
+    non_scanne: stats.nonScanne,
+    excellent: stats.excellent,
+    moyen: stats.moyen,
+    degrade: stats.degrade,
+    pct_scanne: pctScanne,
+    diff_nouveaux: stats.diff?.nouveaux ?? null,
+    diff_nouveaux_scanne: stats.diff?.nouveauxScanne ?? null,
+    diff_nouveaux_non_scanne: stats.diff?.nouveauxNonScanne ?? null,
+    diff_disparus: stats.diff?.disparus ?? null,
+    diff_passes_non_scanne: stats.diff?.passesNonScanne ?? null,
+    diff_passes_scanne: stats.diff?.passesScanne ?? null,
+    diff_signal_degrade: stats.diff?.signalDegrade ?? null,
+    diff_signal_ameliore: stats.diff?.signalAmeliore ?? null,
+  });
+  if (error) console.error('insertScanImportSnapshot:', error);
 }
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
