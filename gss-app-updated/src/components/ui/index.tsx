@@ -220,14 +220,35 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 }
 
 // ─── StatCard ─────────────────────────────────────────────────────────────────
-export function StatCard({ value, label, icon, accent }: { value: number | string; label: string; icon: string; accent?: string }) {
+export function StatCard({
+  value,
+  label,
+  icon,
+  accent,
+  onClick,
+  active,
+}: {
+  value: number | string;
+  label: string;
+  icon: string;
+  accent?: string;
+  onClick?: () => void;
+  active?: boolean;
+}) {
   return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 relative overflow-hidden">
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className={`bg-white rounded-xl border shadow-sm p-5 relative overflow-hidden text-left w-full ${
+        onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : 'cursor-default'
+      } ${active ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'}`}
+    >
       <div className="absolute top-0 left-0 right-0 h-1 rounded-t-xl" style={{ background: accent ?? '#1565C0' }} />
       <div className="text-3xl font-black text-slate-900">{value}</div>
       <div className="text-xs text-slate-500 mt-1 font-medium">{label}</div>
       <div className="absolute top-4 right-4 text-2xl opacity-10">{icon}</div>
-    </div>
+    </button>
   );
 }
 

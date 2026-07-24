@@ -9,6 +9,7 @@ import {
   insertSituationsBulk,
   insertImportRecord,
   deleteImportRecord,
+  reassignSituationEquipe,
   fetchEquipes,
   fetchImportHistory,
   createEquipe,
@@ -59,12 +60,12 @@ interface AppState {
   // Data loading
   loadAll: () => Promise<void>;
   // Situations
-  markOK: (fgp: string) => Promise<void>;
-  markNonOK: (fgp: string, comment: string) => Promise<void>;
+  markOK: (id: string) => Promise<void>;
+  markNonOK: (id: string, comment: string) => Promise<void>;
   addUrgence: (zone: string, type: string, comment: string, equipe?: string) => Promise<void>;
   importSituations: (rows: Situation[], fileName: string) => Promise<void>;
   removeImportRecord: (id: string) => Promise<void>;
-  reassign: (fgp: string, equipe: string) => void;
+  reassign: (id: string, equipe: string) => void;
   // Notifications
   addNotification: (title: string, message: string, type: Notification['type']) => void;
   markNotifRead: (id: number) => void;
@@ -167,29 +168,31 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      markOK: async (fgp) => {
+      markOK: async (id) => {
         const today = new Date().toISOString().slice(0, 10);
         // Optimistic update — la "DATE MISE EN SERVICE" est posée automatiquement
         // à la date système dès qu'une situation (installation ou dérangement) passe OK.
+        // Ciblée par id (et non fgp) : un même FGP peut avoir plusieurs situations actives
+        // en parallèle (types/motifs différents), il ne faut affecter QUE celle cliquée.
         set((s) => ({
           situations: s.situations.map((sit) =>
-            sit.fgp === fgp ? { ...sit, status: 'ok', updatedAt: new Date().toISOString(), dateClt: sit.dateClt || today } : sit,
+            sit.id === id ? { ...sit, status: 'ok', updatedAt: new Date().toISOString(), dateClt: sit.dateClt || today } : sit,
           ),
         }));
-        const sit = get().situations.find((s) => s.fgp === fgp);
-        await updateSituationStatus(fgp, 'ok', '', sit?.dateClt || today);
+        const sit = get().situations.find((s) => s.id === id);
+        await updateSituationStatus(id, 'ok', '', sit?.dateClt || today);
       },
 
-      markNonOK: async (fgp, comment) => {
+      markNonOK: async (id, comment) => {
         // Optimistic update
         set((s) => ({
           situations: s.situations.map((sit) =>
-            sit.fgp === fgp ? { ...sit, status: 'non_ok', comment, updatedAt: new Date().toISOString() } : sit,
+            sit.id === id ? { ...sit, status: 'non_ok', comment, updatedAt: new Date().toISOString() } : sit,
           ),
         }));
-        await updateSituationStatus(fgp, 'non_ok', comment);
-        const sit = get().situations.find((s) => s.fgp === fgp);
-        get().addNotification('NON OK détecté', `FGP ${fgp} — ${sit?.zone} — ${comment}`, 'nok');
+        await updateSituationStatus(id, 'non_ok', comment);
+        const sit = get().situations.find((s) => s.id === id);
+        get().addNotification('NON OK détecté', `FGP ${sit?.fgp} — ${sit?.zone} — ${comment}`, 'nok');
       },
 
       addUrgence: async (zone, type, comment, equipeOverride) => {
@@ -222,8 +225,12 @@ export const useAppStore = create<AppState>()(
       },
 
       importSituations: async (rows, fileName) => {
-        const existing = new Set(get().situations.map((s) => s.fgp));
-        const newRows = rows.filter((r) => !existing.has(r.fgp));
+        // Clé FGP+TYPE (pas FGP seul) : un même FGP peut avoir plusieurs situations
+        // distinctes (ex: une DRG déjà en base + une installation CST/CPL qu'on importe
+        // maintenant) — les considérer "déjà existantes" sur le seul FGP les faisait
+        // ignorer silencieusement à l'import.
+        const existing = new Set(get().situations.map((s) => `${s.fgp}|${s.type}`));
+        const newRows = rows.filter((r) => !existing.has(`${r.fgp}|${r.type}`));
         const importRecord = {
           fileName,
           date: new Date().toLocaleString('fr-FR'),
@@ -231,13 +238,18 @@ export const useAppStore = create<AppState>()(
           by: get().user?.name || 'Inconnu',
         };
         try {
-          // Persist to Supabase D'ABORD — si ça échoue, on ne met pas à jour l'UI ni
-          // l'historique, pour ne jamais afficher un faux "succès".
-          if (newRows.length > 0) await insertSituationsBulk(newRows);
-          const savedRecord = await insertImportRecord(importRecord);
-
+          // On crée D'ABORD la ligne d'historique pour récupérer son id réel, puis on
+          // tague chaque situation avec cet import_id — ça permet de supprimer toutes les
+          // situations d'un import simplement en supprimant sa ligne d'historique
+          // (ON DELETE CASCADE côté base).
+         const savedRecord = await insertImportRecord(importRecord);
+          if (!savedRecord) {
+            throw new Error("Impossible de créer la ligne d'historique — import annulé, aucune situation n'a été enregistrée");
+          }
+          const taggedRows = newRows.map((r) => ({ ...r, importId: savedRecord.id }));
+          if (taggedRows.length > 0) await insertSituationsBulk(taggedRows);
           set((s) => ({
-            situations: [...s.situations, ...newRows],
+            situations: [...s.situations, ...taggedRows],
             // On utilise le VRAI id renvoyé par la base (pas un id local temporaire),
             // sinon un "Supprimer" fait dans la foulée (sans refresh) cible le mauvais
             // enregistrement et ne supprime rien côté base.
@@ -254,7 +266,12 @@ export const useAppStore = create<AppState>()(
       removeImportRecord: async (id) => {
         try {
           await deleteImportRecord(id);
-          set((s) => ({ importHistory: s.importHistory.filter((h) => h.id !== id) }));
+          // ON DELETE CASCADE côté base supprime déjà les situations liées — on répercute
+          // ça côté client pour ne pas avoir à recharger la page.
+          set((s) => ({
+            importHistory: s.importHistory.filter((h) => h.id !== id),
+            situations: s.situations.filter((sit) => sit.importId !== id),
+          }));
         } catch (err: any) {
           console.error('removeImportRecord failed:', err);
           get().addNotification('Suppression impossible', err?.message || "La ligne n'a pas pu être supprimée en base", 'nok');
@@ -262,10 +279,12 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      reassign: (fgp, equipe) =>
+      reassign: (id, equipe) => {
         set((s) => ({
-          situations: s.situations.map((sit) => (sit.fgp === fgp ? { ...sit, equipe } : sit)),
-        })),
+          situations: s.situations.map((sit) => (sit.id === id ? { ...sit, equipe } : sit)),
+        }));
+        reassignSituationEquipe(id, equipe);
+      },
 
       addNotification: (title, message, type) =>
         set((s) => ({

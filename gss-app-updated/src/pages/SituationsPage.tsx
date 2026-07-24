@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
 import { calcDelai, MERGED_TYPES } from '@/utils/stats';
-import { reassignSituationEquipe } from '@/lib/supabaseService';
 import {
   Card,
   CardHeader,
@@ -40,12 +39,14 @@ export default function SituationsPage() {
   const [fDate, setFDate] = useState('');
   const [urgOpen, setUrgOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
+  const [nokId, setNokId] = useState('');
   const [nokInitialComment, setNokInitialComment] = useState('');
   const [nokOpen, setNokOpen] = useState(false);
 
   // Reassign modal
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignFgp, setReassignFgp] = useState('');
+  const [reassignId, setReassignId] = useState('');
   const [reassignEquipe, setReassignEquipe] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -65,28 +66,30 @@ export default function SituationsPage() {
         else if (fType && fType !== '__installation__' && fType !== '__derangement__' && s.type !== fType) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fStatus && s.status !== fStatus) return false;
-        if (fDate && s.dateDepo !== fDate) return false;
+        if (fDate && (s.dateDepo || s.dateMessage) !== fDate) return false;
         return true;
       }),
     [situations, search, fType, fEquipe, fStatus, fDate],
   );
 
-  const handleMarkOK = async (fgp: string) => {
-    await markOK(fgp);
+  const handleMarkOK = async (id: string, fgp: string) => {
+    await markOK(id);
     showToast(`FGP ${fgp} marqué OK `, 'success');
   };
-  const handleMarkNOK = (fgp: string, existingComment = '') => {
+  const handleMarkNOK = (id: string, fgp: string, existingComment = '') => {
+    setNokId(id);
     setNokFgp(fgp);
     setNokInitialComment(existingComment);
     setNokOpen(true);
   };
   const handleNOKConfirm = async (comment: string) => {
-    await markNonOK(nokFgp, comment);
+    await markNonOK(nokId, comment);
     setNokOpen(false);
     showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
   };
 
-  const openReassign = (fgp: string, currentEquipe: string) => {
+  const openReassign = (id: string, fgp: string, currentEquipe: string) => {
+    setReassignId(id);
     setReassignFgp(fgp);
     setReassignEquipe(equipes.find((e) => e.name.toLowerCase() === currentEquipe?.toLowerCase())?.id ?? '');
     setReassignOpen(true);
@@ -99,8 +102,8 @@ export default function SituationsPage() {
       return;
     }
     setSaving(true);
-    reassign(reassignFgp, eq.name);
-    await reassignSituationEquipe(reassignFgp, eq.name);
+    // `reassign` (store) persiste déjà en base — pas d'appel direct à reassignSituationEquipe ici.
+    reassign(reassignId, eq.name);
     setSaving(false);
     setReassignOpen(false);
     showToast(`FGP ${reassignFgp} → ${eq.name} `, 'success');
@@ -191,7 +194,21 @@ export default function SituationsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
-                  {['FGP', 'Type', 'Zone', 'Équipe', 'Motif', 'Date Dépôt', 'Délai', 'Statut', 'Actions'].map((h) => (
+                  {[
+                    'FGP',
+                    'Type',
+                    'Date Message',
+                    'Service Dest.',
+                    'Zone',
+                    'Date Dépôt',
+                    'Date Mise en Service',
+                    'Motif',
+                    'Équipe',
+                    'Délai',
+                    'Conformité',
+                    'Statut',
+                    'Actions',
+                  ].map((h) => (
                     <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
                       {h}
                     </th>
@@ -211,12 +228,13 @@ export default function SituationsPage() {
                     <td className="px-3 py-3">
                       <TypeBadge type={s.type} />
                     </td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateMessage || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-400">{s.serviceDestination || '—'}</td>
                     <td className="px-3 py-3">
                       <ZoneChip zone={s.zone} />
                     </td>
-                    <td className="px-3 py-3">
-                      <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
-                    </td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
                     <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
                       {s.status === 'non_ok' && s.comment ? (
                         <span className="text-red-600 font-medium">{s.comment}</span>
@@ -224,38 +242,47 @@ export default function SituationsPage() {
                         s.motif || '—'
                       )}
                     </td>
-                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
-                    <td className="px-3 py-3 text-xs text-center">{s.dateDepo ? `${calcDelai(s)}j` : '—'}</td>
+                    <td className="px-3 py-3">
+                      <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
+                    </td>
+                    <td className="px-3 py-3 text-xs text-center">{s.dateDepo || s.dateMessage ? `${calcDelai(s)}j` : '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">
+                      {s.conformite ? (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.conformite === 'HorsDelais' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                        >
+                          {s.conformite === 'HorsDelais' ? 'HorsDélais' : 'TLID'}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="px-3 py-3">
                       <StatusBadge status={s.status} />
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex gap-2 flex-wrap items-center">
-                        <button
-                          onClick={() => handleMarkOK(s.fgp)}
-                          title={s.status === 'ok' ? 'Déjà OK — cliquer pour reconfirmer' : 'Marquer OK'}
-                          className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
-                            s.status === 'ok'
-                              ? 'bg-green-600 text-white ring-2 ring-green-300'
-                              : 'bg-green-100 hover:bg-green-600 hover:text-white text-green-700'
-                          }`}
-                        >
-                          OK
-                        </button>
-                        <button
-                          onClick={() => handleMarkNOK(s.fgp, s.status === 'non_ok' ? s.comment : '')}
-                          title={s.status === 'non_ok' ? 'Modifier le commentaire NON OK' : 'Marquer NON OK'}
-                          className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
-                            s.status === 'non_ok'
-                              ? 'bg-red-600 text-white ring-2 ring-red-300'
-                              : 'bg-red-100 hover:bg-red-600 hover:text-white text-red-700'
-                          }`}
-                        >
-                          NOK
-                        </button>
+                        {s.status !== 'ok' && (
+                          <button
+                            onClick={() => handleMarkOK(s.id, s.fgp)}
+                            title="Marquer OK"
+                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
+                          >
+                            OK
+                          </button>
+                        )}
+                        {s.status !== 'non_ok' && (
+                          <button
+                            onClick={() => handleMarkNOK(s.id, s.fgp, '')}
+                            title="Marquer NON OK"
+                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-red-100 hover:bg-red-600 hover:text-white text-red-700"
+                          >
+                            NOK
+                          </button>
+                        )}
                         {isAdmin && (
                           <button
-                            onClick={() => openReassign(s.fgp, s.equipe)}
+                            onClick={() => openReassign(s.id, s.fgp, s.equipe)}
                             className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95 shadow-sm"
                           >
                             Réaffecter équipe

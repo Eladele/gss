@@ -66,8 +66,9 @@ export function calcDelai(s: Situation): number {
 }
 
 export function isHorsDelai(s: Situation): boolean {
-  if (s.conformite) return s.conformite === 'HorsDelais';
-  return calcDelai(s) > delaiThresholdFor(s);
+  // Comparé directement à la valeur importée du fichier (NbreJourDélaisInst = s.delai),
+  // pas à un recalcul depuis les dates : DRG hors délai si > 1, Installation si > 2.
+  return s.delai > delaiThresholdFor(s);
 }
 
 export function villeForEquipe(equipeName: string, equipes: Equipe[]): string {
@@ -201,7 +202,7 @@ export interface ClientRepeat {
 export function repeatDerangementByClient(situations: Situation[]): ClientRepeat[] {
   const byFgp: Record<string, Situation[]> = {};
   situations
-    .filter((s) => (s.nature ?? 'installation') === 'derangement')
+    .filter((s) => s.type === 'DRG')
     .forEach((s) => {
       (byFgp[s.fgp] ??= []).push(s);
     });

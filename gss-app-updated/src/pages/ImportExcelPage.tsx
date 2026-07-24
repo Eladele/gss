@@ -154,26 +154,25 @@ export default function ImportExcelPage() {
           });
         }
 
-        // ── Déduplication par FGP — UNIQUEMENT pour les installations (pas DRG) :
-        // si un FGP se répète, on garde toujours la ligne avec le NbreJourDélaisInst
-        // (délai) le plus court. Une ligne sans délai renseigné (dossier encore en
-        // attente) perd systématiquement face à une ligne avec un vrai délai.
-        const bestByFgp = new Map<string, Situation & { _hasDelai?: boolean }>();
-        const drgRows: Situation[] = [];
+        // ── Déduplication par FGP + TYPE + MOTIF + DATE MISE EN SERVICE — pour toutes les
+        // lignes, y compris DRG. Nécessaire car la base rejette l'upsert si deux lignes du
+        // même lot ont exactement la même clé de conflit ("ON CONFLICT DO UPDATE command
+        // cannot affect row a second time") — donc même les vrais doublons DRG doivent être
+        // fusionnés ici. Un même FGP+TYPE peut légitimement avoir plusieurs lignes actives
+        // en même temps chez vous (différents motifs/dates de passage) — on ne fusionne donc
+        // QUE les lignes strictement identiques sur ces 4 champs, tout le reste est conservé.
+        const bestByKey = new Map<string, Situation & { _hasDelai?: boolean }>();
         for (const r of rows) {
-          if (r.type === 'DRG') {
-            drgRows.push(r);
-            continue;
-          }
-          const existing = bestByFgp.get(r.fgp);
+          const key = `${r.fgp}|${r.type}|${r.motif}|${r.dateClt}`;
+          const existing = bestByKey.get(key);
           if (!existing) {
-            bestByFgp.set(r.fgp, r);
+            bestByKey.set(key, r);
             continue;
           }
-          const rWins = r._hasDelai && (!existing._hasDelai || r.delai < existing.delai);
-          if (rWins) bestByFgp.set(r.fgp, r);
+          // Doublon exact : on garde la ligne au message le plus récent
+          if ((r.dateMessage || '') >= (existing.dateMessage || '')) bestByKey.set(key, r);
         }
-        const dedupedRows = [...Array.from(bestByFgp.values()), ...drgRows];
+        const dedupedRows = Array.from(bestByKey.values());
         const duplicatesCount = rows.length - dedupedRows.length;
 
         setPreview(dedupedRows);
@@ -181,7 +180,7 @@ export default function ImportExcelPage() {
         const unassigned = dedupedRows.length - assigned;
         const autoOk = dedupedRows.filter((r) => r.status === 'ok').length;
         showToast(
-          `${dedupedRows.length} FGP uniques (délai le plus court retenu)${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons FGP ignorés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}`,
+          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}`,
           unassigned === 0 ? 'success' : 'warning',
         );
       } catch (err: any) {
@@ -434,7 +433,7 @@ export default function ImportExcelPage() {
                       onClick={() => {
                         if (
                           confirm(
-                            "Supprimer cette ligne de l'historique ?\n\nATTENTION : ça retire seulement cette ligne du journal des imports. Les situations déjà importées dans la base ne sont PAS supprimées automatiquement (aucun lien direct entre l'historique et les situations elles-mêmes).",
+                            "Supprimer cet import ?\n\nATTENTION : ça supprime aussi TOUTES les situations créées par cet import (suppression en cascade), pas seulement la ligne d'historique. Cette action est irréversible.\n\nNote : les imports faits avant la mise en place de ce lien ne sont pas concernés (seule la ligne d'historique sera retirée dans ce cas).",
                           )
                         ) {
                           removeImportRecord(h.id).catch((err: any) => {
