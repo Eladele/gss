@@ -225,12 +225,8 @@ export const useAppStore = create<AppState>()(
       },
 
       importSituations: async (rows, fileName) => {
-        // Clé FGP+TYPE (pas FGP seul) : un même FGP peut avoir plusieurs situations
-        // distinctes (ex: une DRG déjà en base + une installation CST/CPL qu'on importe
-        // maintenant) — les considérer "déjà existantes" sur le seul FGP les faisait
-        // ignorer silencieusement à l'import.
-        const existing = new Set(get().situations.map((s) => `${s.fgp}|${s.type}`));
-        const newRows = rows.filter((r) => !existing.has(`${r.fgp}|${r.type}`));
+        const existing = new Set(get().situations.map((s) => s.fgp));
+        const newRows = rows.filter((r) => !existing.has(r.fgp));
         const importRecord = {
           fileName,
           date: new Date().toLocaleString('fr-FR'),
@@ -238,18 +234,13 @@ export const useAppStore = create<AppState>()(
           by: get().user?.name || 'Inconnu',
         };
         try {
-          // On crée D'ABORD la ligne d'historique pour récupérer son id réel, puis on
-          // tague chaque situation avec cet import_id — ça permet de supprimer toutes les
-          // situations d'un import simplement en supprimant sa ligne d'historique
-          // (ON DELETE CASCADE côté base).
-         const savedRecord = await insertImportRecord(importRecord);
-          if (!savedRecord) {
-            throw new Error("Impossible de créer la ligne d'historique — import annulé, aucune situation n'a été enregistrée");
-          }
-          const taggedRows = newRows.map((r) => ({ ...r, importId: savedRecord.id }));
-          if (taggedRows.length > 0) await insertSituationsBulk(taggedRows);
+          // Persist to Supabase D'ABORD — si ça échoue, on ne met pas à jour l'UI ni
+          // l'historique, pour ne jamais afficher un faux "succès".
+          if (newRows.length > 0) await insertSituationsBulk(newRows);
+          const savedRecord = await insertImportRecord(importRecord);
+
           set((s) => ({
-            situations: [...s.situations, ...taggedRows],
+            situations: [...s.situations, ...newRows],
             // On utilise le VRAI id renvoyé par la base (pas un id local temporaire),
             // sinon un "Supprimer" fait dans la foulée (sans refresh) cible le mauvais
             // enregistrement et ne supprime rien côté base.
@@ -266,12 +257,7 @@ export const useAppStore = create<AppState>()(
       removeImportRecord: async (id) => {
         try {
           await deleteImportRecord(id);
-          // ON DELETE CASCADE côté base supprime déjà les situations liées — on répercute
-          // ça côté client pour ne pas avoir à recharger la page.
-          set((s) => ({
-            importHistory: s.importHistory.filter((h) => h.id !== id),
-            situations: s.situations.filter((sit) => sit.importId !== id),
-          }));
+          set((s) => ({ importHistory: s.importHistory.filter((h) => h.id !== id) }));
         } catch (err: any) {
           console.error('removeImportRecord failed:', err);
           get().addNotification('Suppression impossible', err?.message || "La ligne n'a pas pu être supprimée en base", 'nok');
