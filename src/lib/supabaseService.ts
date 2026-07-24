@@ -4,29 +4,67 @@ import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehi
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
 
 export async function fetchSituations(): Promise<Situation[]> {
-  const { data, error } = await supabase.from('situations').select('*').order('created_at', { ascending: false });
-  if (error) {
-    console.error('fetchSituations:', error);
-    return [];
+  // Supabase limite les SELECT à 1000 lignes par requête par défaut — sans pagination,
+  // au-delà de 1000 situations, le refresh de la page en perdait silencieusement une
+  // partie (ex: 1552 juste après import, mais seulement 1000 après actualisation).
+  const all: Situation[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('situations')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error('fetchSituations:', error);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    all.push(...data.map(mapSituation));
+    if (data.length < PAGE) break;
   }
-  return (data ?? []).map(mapSituation);
+  return all;
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {
-  const { error } = await supabase.from('situations').upsert(toDbSituation(sit));
+  const { id: _omit, ...payload } = toDbSituation(sit);
+  const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_mise_en_service' });
   if (error) console.error('upsertSituation:', error);
 }
 
-export async function updateSituationStatus(fgp: string, status: Situation['status'], comment = '', dateClt?: string): Promise<void> {
+export async function updateSituationStatus(id: string, status: Situation['status'], comment = '', dateClt?: string): Promise<void> {
   const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
-  if (dateClt) payload.date_clt = dateClt;
-  const { error } = await supabase.from('situations').update(payload).eq('fgp', fgp);
+  if (dateClt) payload.date_mise_en_service = dateClt;
+  const { error } = await supabase.from('situations').update(payload).eq('id', id);
   if (error) console.error('updateSituationStatus:', error);
 }
 
 export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
-  const { error } = await supabase.from('situations').upsert(rows.map(toDbSituation), { onConflict: 'fgp' });
-  if (error) console.error('insertSituationsBulk:', error);
+  const CHUNK = 500;
+  let insertedAny = false;
+  let lastError: string | null = null;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    // `id` n'est PAS envoyé ici : les id générés côté app (ex: "imp-546-...") ne sont pas
+    // des UUID valides pour la colonne `id` de la table, ce qui faisait échouer tout le lot
+    // avec "invalid input syntax for type uuid". On laisse Postgres générer le vrai UUID ;
+    // le upsert se base sur `fgp` (onConflict) pour la déduplication, pas sur `id`.
+    const chunk = rows.slice(i, i + CHUNK).map((r) => {
+      const { id: _omit, ...rest } = toDbSituation(r);
+      return rest;
+    });
+    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: 'fgp,type,motif,date_mise_en_service' });
+    if (error) {
+      console.error('insertSituationsBulk chunk:', error);
+      lastError = error.message;
+      continue;
+    }
+    insertedAny = true;
+  }
+  // Si RIEN n'a pu être inséré alors qu'on avait des lignes à importer, c'est un échec réel
+  // (colonne manquante, contrainte violée...) — on le signale au lieu de laisser croire à un succès.
+  if (!insertedAny && rows.length > 0) {
+    throw new Error(lastError ?? "Aucune situation n'a pu être importée (vérifiez le schéma de la table situations)");
+  }
 }
 
 // ─── EQUIPES ─────────────────────────────────────────────────────────────────
@@ -101,14 +139,30 @@ export async function fetchImportHistory(): Promise<ImportRecord[]> {
   return (data ?? []).map(mapImportRecord);
 }
 
-export async function insertImportRecord(record: Omit<ImportRecord, 'id'>): Promise<void> {
-  const { error } = await supabase.from('import_history').insert({
-    file_name: record.fileName,
-    import_date: record.date,
-    row_count: record.count,
-    imported_by: record.by,
-  });
-  if (error) console.error('insertImportRecord:', error);
+export async function insertImportRecord(record: Omit<ImportRecord, 'id'>): Promise<ImportRecord | null> {
+  const { data, error } = await supabase
+    .from('import_history')
+    .insert({
+      file_name: record.fileName,
+      import_date: record.date,
+      row_count: record.count,
+      imported_by: record.by,
+    })
+    .select()
+    .single();
+  if (error) {
+    console.error('insertImportRecord:', error);
+    throw new Error(error.message);
+  }
+  return mapImportRecord(data);
+}
+
+export async function deleteImportRecord(id: string): Promise<void> {
+  const { error } = await supabase.from('import_history').delete().eq('id', id);
+  if (error) {
+    console.error('deleteImportRecord:', error);
+    throw new Error(error.message);
+  }
 }
 
 // ─── MAPPERS ─────────────────────────────────────────────────────────────────
@@ -122,7 +176,7 @@ function mapSituation(row: any): Situation {
     equipe: row.equipe,
     motif: row.motif ?? '',
     dateDepo: row.date_depo ?? '',
-    dateClt: row.date_clt ?? '',
+    dateClt: row.date_mise_en_service ?? '',
     dateMessage: row.date_message ?? '',
     serviceDestination: row.service_destination ?? '',
     delai: row.delai ?? 0,
@@ -132,6 +186,7 @@ function mapSituation(row: any): Situation {
     isUrgent: row.is_urgent ?? false,
     nature: row.nature ?? 'installation',
     conformite: row.conformite ?? undefined,
+    importId: row.import_id ?? undefined,
   };
 }
 
@@ -144,7 +199,7 @@ function toDbSituation(s: Situation) {
     equipe: s.equipe,
     motif: s.motif,
     date_depo: s.dateDepo || null,
-    date_clt: s.dateClt || null,
+    date_mise_en_service: s.dateClt || null,
     date_message: s.dateMessage || null,
     service_destination: s.serviceDestination || null,
     delai: s.delai,
@@ -154,6 +209,7 @@ function toDbSituation(s: Situation) {
     updated_at: s.updatedAt ?? new Date().toISOString(),
     nature: s.nature ?? 'installation',
     conformite: s.conformite ?? null,
+    import_id: s.importId ?? null,
   };
 }
 
@@ -268,8 +324,8 @@ export async function removeZoneFromTeam(teamId: string, zone: string): Promise<
   if (error) console.error('removeZoneFromTeam update:', error);
 }
 
-export async function reassignSituationEquipe(fgp: string, equipe: string): Promise<void> {
-  const { error } = await supabase.from('situations').update({ equipe, updated_at: new Date().toISOString() }).eq('fgp', fgp);
+export async function reassignSituationEquipe(id: string, equipe: string): Promise<void> {
+  const { error } = await supabase.from('situations').update({ equipe, updated_at: new Date().toISOString() }).eq('id', id);
   if (error) console.error('reassignSituationEquipe:', error);
 }
 
@@ -544,6 +600,7 @@ export async function fetchScans(): Promise<ScanRecord[]> {
 export async function bulkInsertScans(rows: Partial<ScanRecord>[]): Promise<number> {
   const CHUNK = 500;
   let inserted = 0;
+  let lastError: string | null = null;
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK).map((r) => ({
       zone: r.zone,
@@ -564,9 +621,15 @@ export async function bulkInsertScans(rows: Partial<ScanRecord>[]): Promise<numb
     const { error, count } = await supabase.from('scan_results').insert(chunk, { count: 'exact' });
     if (error) {
       console.error('bulkInsertScans chunk:', error);
+      lastError = error.message;
       continue;
     }
     inserted += count ?? chunk.length;
+  }
+  // Si RIEN n'a été inséré alors qu'on avait des lignes à importer, c'est un échec réel
+  // (ex: colonne manquante côté base) — on le signale au lieu de laisser croire à un succès.
+  if (inserted === 0 && rows.length > 0) {
+    throw new Error(lastError ?? "Aucune ligne n'a pu être importée (vérifiez le schéma de la table scan_results)");
   }
   return inserted;
 }
@@ -662,7 +725,8 @@ export async function insertScanImportSnapshot(stats: {
 }): Promise<void> {
   const denom = stats.total - (stats.resilies ?? 0);
   const pctScanne = denom ? Math.round((stats.scanne / denom) * 1000) / 10 : 0;
-  const { error } = await supabase.from('scan_import_history').insert({
+
+  const basePayload = {
     total: stats.total,
     scanne: stats.scanne,
     non_scanne: stats.nonScanne,
@@ -670,6 +734,9 @@ export async function insertScanImportSnapshot(stats: {
     moyen: stats.moyen,
     degrade: stats.degrade,
     pct_scanne: pctScanne,
+  };
+  const fullPayload = {
+    ...basePayload,
     diff_nouveaux: stats.diff?.nouveaux ?? null,
     diff_nouveaux_scanne: stats.diff?.nouveauxScanne ?? null,
     diff_nouveaux_non_scanne: stats.diff?.nouveauxNonScanne ?? null,
@@ -678,8 +745,22 @@ export async function insertScanImportSnapshot(stats: {
     diff_passes_scanne: stats.diff?.passesScanne ?? null,
     diff_signal_degrade: stats.diff?.signalDegrade ?? null,
     diff_signal_ameliore: stats.diff?.signalAmeliore ?? null,
-  });
-  if (error) console.error('insertScanImportSnapshot:', error);
+  };
+
+  // 1ère tentative : payload complet (avec les colonnes diff_*)
+  const { error } = await supabase.from('scan_import_history').insert(fullPayload);
+  if (error) {
+    // Colonnes diff_* probablement absentes côté base (migration pas encore exécutée) —
+    // on réessaie avec les colonnes de base uniquement, sans bloquer l'import.
+    console.warn('insertScanImportSnapshot: colonnes diff_* indisponibles, repli sur le payload de base', error.message);
+    const { error: error2 } = await supabase.from('scan_import_history').insert(basePayload);
+    if (error2) console.error('insertScanImportSnapshot (repli):', error2);
+  }
+}
+
+export async function deleteScanImportSnapshot(id: string): Promise<void> {
+  const { error } = await supabase.from('scan_import_history').delete().eq('id', id);
+  if (error) console.error('deleteScanImportSnapshot:', error);
 }
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────

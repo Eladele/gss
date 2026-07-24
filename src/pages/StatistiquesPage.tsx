@@ -9,9 +9,10 @@ import {
   inPeriod,
   exportStatsToExcel,
   MERGED_TYPES,
+  isHorsDelai,
   type PeriodFilter,
 } from '@/utils/stats';
-import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, EmptyState, StatCard } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
 import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
 import type { SituationNature } from '@/types';
 
@@ -33,10 +34,11 @@ function firstOfMonthStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-type PeriodPreset = 'jour' | 'semaine' | 'mois' | 'custom';
+type PeriodPreset = 'tout' | 'jour' | 'semaine' | 'mois' | 'custom';
 
 function presetToRange(preset: PeriodPreset): PeriodFilter {
   const now = new Date();
+  if (preset === 'tout') return {};
   if (preset === 'jour') return { from: todayStr(), to: todayStr() };
   if (preset === 'semaine') {
     const day = (now.getDay() + 6) % 7; // lundi = 0
@@ -61,11 +63,13 @@ export default function StatistiquesPage() {
   const equipes = useAppStore((s) => s.equipes);
 
   const [nature, setNature] = useState<NatureFilter>('installation');
-  const [preset, setPreset] = useState<PeriodPreset>('mois');
+  const [preset, setPreset] = useState<PeriodPreset>('tout');
   const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
   const [customTo, setCustomTo] = useState(todayStr());
   const [fEquipe, setFEquipe] = useState('');
   const [fVille, setFVille] = useState('');
+  const [delaiDetail, setDelaiDetail] = useState<'dans' | 'hors' | null>(null);
+  const [repeatsOpen, setRepeatsOpen] = useState(false);
 
   const period: PeriodFilter = preset === 'custom' ? { from: customFrom, to: customTo } : presetToRange(preset);
 
@@ -75,7 +79,10 @@ export default function StatistiquesPage() {
     () =>
       situations.filter((s) => {
         if (!matchesNature(s, nature)) return false;
-        if (!inPeriod(s.dateDepo, period)) return false;
+        // Fichiers "installation" (DATE MESSAGE) laissent dateDepo vide par design —
+        // on filtre sur la date pertinente disponible (dateDepo, sinon dateMessage),
+        // sinon toutes ces situations étaient exclues de la période choisie.
+        if (!inPeriod(s.dateDepo || s.dateMessage || '', period)) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fVille) {
           const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
@@ -89,22 +96,30 @@ export default function StatistiquesPage() {
   const byEquipe = useMemo(() => statsByEquipe(scoped, equipes), [scoped, equipes]);
   const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
   const byType = useMemo(() => statsByType(scoped), [scoped]);
-  const repeats = useMemo(() => repeatDerangementByClient(situations.filter((s) => inPeriod(s.dateDepo, period))), [situations, period]);
+  const repeats = useMemo(
+    () => repeatDerangementByClient(situations.filter((s) => inPeriod(s.dateDepo || s.dateMessage || '', period))),
+    [situations, period],
+  );
 
   const total = scoped.length;
   const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
   const dansDelai = total - horsDelai;
   const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
   const today = todayStr();
-  const totalAujourdhui = scoped.filter((s) => s.dateDepo === today).length;
+  const totalAujourdhui = scoped.filter((s) => (s.dateDepo || s.dateMessage) === today).length;
   const weekStart = presetToRange('semaine').from!;
-  const totalSemaine = scoped.filter((s) => s.dateDepo >= weekStart).length;
+  const totalSemaine = scoped.filter((s) => (s.dateDepo || s.dateMessage || '') >= weekStart).length;
   const villesActives = new Set(
     scoped.map((s) => {
       const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
       return eq?.ville ?? 'Nouakchott';
     }),
   ).size;
+
+  const delaiDetailRows = useMemo(() => {
+    if (!delaiDetail) return [];
+    return scoped.filter((s) => (delaiDetail === 'hors' ? isHorsDelai(s) : !isHorsDelai(s)));
+  }, [scoped, delaiDetail]);
 
   // Courbe de tendance (30 derniers jours de la période, ou toute la période si + courte)
   const trendPoints = useMemo(() => {
@@ -120,7 +135,8 @@ export default function StatistiquesPage() {
     situations
       .filter((s) => matchesNature(s, nature))
       .forEach((s) => {
-        if (s.dateDepo) byDay[s.dateDepo] = (byDay[s.dateDepo] ?? 0) + 1;
+        const d = s.dateDepo || s.dateMessage;
+        if (d) byDay[d] = (byDay[d] ?? 0) + 1;
       });
     return days.map((d) => ({ label: d.slice(8, 10) + '/' + d.slice(5, 7), value: byDay[d] ?? 0 }));
   }, [situations, nature, period.to]);
@@ -129,7 +145,8 @@ export default function StatistiquesPage() {
   const weekdayData = useMemo(() => {
     const counts = [0, 0, 0, 0, 0, 0, 0];
     scoped.forEach((s) => {
-      if (s.dateDepo) counts[new Date(s.dateDepo).getDay()]++;
+      const d = s.dateDepo || s.dateMessage;
+      if (d) counts[new Date(d).getDay()]++;
     });
     return WEEKDAYS.map((label, i) => ({ label, value: counts[i] }));
   }, [scoped]);
@@ -194,6 +211,7 @@ export default function StatistiquesPage() {
         <CardHeader>
           <div className="flex items-center gap-2 flex-wrap w-full">
             <Select value={preset} onChange={(e) => setPreset(e.target.value as PeriodPreset)} style={{ width: 'auto' }}>
+              <option value="tout">Toute la période</option>
               <option value="jour">Aujourd'hui</option>
               <option value="semaine">Cette semaine</option>
               <option value="mois">Ce mois</option>
@@ -245,10 +263,146 @@ export default function StatistiquesPage() {
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <StatCard value={`${pctConf}%`} label="Conformité" icon="" accent="#2E7D32" />
-        <StatCard value={dansDelai} label="Dans délai" icon="" accent="#1565C0" />
-        <StatCard value={horsDelai} label="Hors délai" icon="" accent="#C62828" />
-        <StatCard value={repeats.length} label="Clients répétés" icon="" accent="#8E24AA" />
+        <StatCard
+          value={dansDelai}
+          label="Dans délai"
+          icon=""
+          accent="#1565C0"
+          active={delaiDetail === 'dans'}
+          onClick={() => setDelaiDetail(delaiDetail === 'dans' ? null : 'dans')}
+        />
+        <StatCard
+          value={horsDelai}
+          label="Hors délai"
+          icon=""
+          accent="#C62828"
+          active={delaiDetail === 'hors'}
+          onClick={() => setDelaiDetail(delaiDetail === 'hors' ? null : 'hors')}
+        />
+        <StatCard
+          value={repeats.length}
+          label="DRG répétés"
+          icon=""
+          accent="#8E24AA"
+          active={repeatsOpen}
+          onClick={() => setRepeatsOpen(!repeatsOpen)}
+        />
       </div>
+
+      {/* Détail — situations dans/hors délai (clic sur les cartes ci-dessus) */}
+      {delaiDetail && (
+        <Card className={delaiDetail === 'hors' ? 'border-red-200 bg-red-50/30' : 'border-blue-200 bg-blue-50/30'}>
+          <CardHeader>
+            <div className="flex items-center justify-between w-full">
+              <CardTitle>
+                {delaiDetail === 'hors' ? 'Situations hors délai' : 'Situations dans les délais'} ({delaiDetailRows.length})
+              </CardTitle>
+              <button onClick={() => setDelaiDetail(null)} className="text-xs font-semibold text-slate-500 hover:text-slate-700">
+                Fermer ✕
+              </button>
+            </div>
+          </CardHeader>
+          {delaiDetailRows.length === 0 ? (
+            <EmptyState icon="" text="Aucune situation" />
+          ) : (
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    {['FGP', 'Type', 'Zone', 'Équipe', 'Motif', 'Statut'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {delaiDetailRows.slice(0, 300).map((s) => (
+                    <tr key={s.id} className="border-b border-slate-50">
+                      <td className="px-3 py-2 font-bold text-slate-800">{s.fgp}</td>
+                      <td className="px-3 py-2">
+                        <TypeBadge type={s.type} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <ZoneChip zone={s.zone} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500 max-w-40 truncate">{s.motif || '—'}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                        >
+                          {s.status === 'ok' ? 'OK' : s.status === 'non_ok' ? 'NON OK' : s.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {delaiDetailRows.length > 300 && (
+                <p className="text-[11px] text-slate-400 p-3">
+                  Affichage limité à 300 lignes sur {delaiDetailRows.length} — affinez les filtres pour cibler.
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* DRG répétés — même emplacement/style que le détail délai ci-dessus */}
+      {repeatsOpen && (
+        <Card className="border-purple-200 bg-purple-50/30">
+          <CardHeader>
+            <div className="flex items-center justify-between w-full">
+              <CardTitle>DRG répétés ({repeats.length}) — triés du plus au moins répété</CardTitle>
+              <button onClick={() => setRepeatsOpen(false)} className="text-xs font-semibold text-slate-500 hover:text-slate-700">
+                Fermer ✕
+              </button>
+            </div>
+          </CardHeader>
+          {repeats.length === 0 ? (
+            <EmptyState icon="" text="Aucun client avec plusieurs dérangements sur la période" />
+          ) : (
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    {['FGP', 'Nb interventions', 'Zone', 'Équipe', 'Motifs'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {repeats.slice(0, 300).map((r) => (
+                    <tr key={r.fgp} className="border-b border-slate-50">
+                      <td className="px-3 py-2 font-bold text-slate-800">{r.fgp}</td>
+                      <td className="px-3 py-2">
+                        <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-bold">{r.count}×</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{r.zone}</td>
+                      <td className="px-3 py-2">
+                        <EquipeTag name={r.equipe || '—'} color={getEquipeColor(r.equipe, equipes)} />
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400 max-w-xs truncate" title={r.motifs.join(' | ')}>
+                        {r.motifs.join(' | ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {repeats.length > 300 && (
+                <p className="text-[11px] text-slate-400 p-3">
+                  Affichage limité à 300 lignes sur {repeats.length} — affinez les filtres pour cibler.
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Équipes les plus actives + courbe de tendance */}
       <div className="grid lg:grid-cols-2 gap-6">
@@ -358,49 +512,6 @@ export default function StatistiquesPage() {
           </table>
         </div>
       </Card>
-
-      {/* Dérangements répétés par client */}
-      {(nature === 'derangement' || nature === 'all') && (
-        <Card>
-          <CardHeader>
-            <CardTitle> Clients avec dérangements répétés (période sélectionnée)</CardTitle>
-          </CardHeader>
-          {repeats.length === 0 ? (
-            <EmptyState icon="" text="Aucun client avec plusieurs dérangements sur la période" />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    {['FGP', 'Nb interventions', 'Zone', 'Équipe', 'Motifs'].map((h) => (
-                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {repeats.map((r) => (
-                    <tr key={r.fgp} className="border-b border-slate-50">
-                      <td className="px-3 py-2 font-bold text-slate-800">{r.fgp}</td>
-                      <td className="px-3 py-2">
-                        <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-bold">{r.count}×</span>
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{r.zone}</td>
-                      <td className="px-3 py-2">
-                        <EquipeTag name={r.equipe || '—'} color={getEquipeColor(r.equipe, equipes)} />
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-400 max-w-xs truncate" title={r.motifs.join(' | ')}>
-                        {r.motifs.join(' | ') || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      )}
     </div>
   );
 }

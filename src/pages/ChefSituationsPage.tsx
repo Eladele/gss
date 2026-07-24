@@ -16,6 +16,7 @@ export default function ChefSituationsPage() {
   const { showToast } = useToast();
 
   const [nokFgp, setNokFgp] = useState('');
+  const [nokId, setNokId] = useState('');
   const [nokInitialComment, setNokInitialComment] = useState('');
   const [nokOpen, setNokOpen] = useState(false);
   const [fStatus, setFStatus] = useState('');
@@ -55,13 +56,13 @@ export default function ChefSituationsPage() {
   const pend = mySits.filter((s) => s.status === 'pending' || s.status === 'urgent').length;
   const pct = total > 0 ? Math.round((ok / total) * 100) : 0;
 
-  const handleOK = async (fgp: string) => {
-    await markOK(fgp);
+  const handleOK = async (id: string, fgp: string) => {
+    await markOK(id);
     showToast(`FGP ${fgp} — OK enregistré `, 'success');
   };
 
   const handleNOKConfirm = async (comment: string) => {
-    await markNonOK(nokFgp, comment);
+    await markNonOK(nokId, comment);
     setNokOpen(false);
     showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
   };
@@ -196,7 +197,7 @@ export default function ChefSituationsPage() {
                 {/* Actions */}
                 <div className="px-3 pb-3 pt-2 grid grid-cols-2 gap-3">
                   <button
-                    onClick={() => handleOK(s.fgp)}
+                    onClick={() => handleOK(s.id, s.fgp)}
                     title={s.status === 'ok' ? 'Déjà OK — cliquer pour reconfirmer' : 'Marquer OK'}
                     className={`py-3 font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm flex items-center justify-center gap-1.5 ${
                       s.status === 'ok'
@@ -209,6 +210,7 @@ export default function ChefSituationsPage() {
                   <button
                     onClick={() => {
                       setNokFgp(s.fgp);
+                      setNokId(s.id);
                       setNokInitialComment(s.status === 'non_ok' ? s.comment : '');
                       setNokOpen(true);
                     }}
@@ -275,7 +277,7 @@ export default function ChefSituationsPage() {
                       <td className="px-3 py-3">
                         <div className="flex gap-2">
                           <button
-                            onClick={() => handleOK(s.fgp)}
+                            onClick={() => handleOK(s.id, s.fgp)}
                             title={s.status === 'ok' ? 'Déjà OK — cliquer pour reconfirmer' : 'Marquer OK'}
                             className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 ${
                               s.status === 'ok'
@@ -288,6 +290,7 @@ export default function ChefSituationsPage() {
                           <button
                             onClick={() => {
                               setNokFgp(s.fgp);
+                      setNokId(s.id);
                               setNokInitialComment(s.status === 'non_ok' ? s.comment : '');
                               setNokOpen(true);
                             }}

@@ -16,6 +16,7 @@ function detectNature(type: string): SituationNature {
 export default function ImportExcelPage() {
   const importSituations = useAppStore((s) => s.importSituations);
   const importHistory = useAppStore((s) => s.importHistory);
+  const removeImportRecord = useAppStore((s) => s.removeImportRecord);
   const equipes = useAppStore((s) => s.equipes);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -83,7 +84,7 @@ export default function ImportExcelPage() {
         // de stockage).
         const useDateMessage = colDateMessage >= 0;
 
-        const rows: Situation[] = [];
+        const rows: (Situation & { _hasDelai?: boolean })[] = [];
         for (let i = 1; i < data.length; i++) {
           const row = data[i];
           if (!row || !row[colFgp] || !row[colType]) continue;
@@ -103,7 +104,9 @@ export default function ImportExcelPage() {
             return String(val).slice(0, 10);
           };
 
-          const delaiImporte = colDelai >= 0 ? parseFloat(row[colDelai]) || 0 : 0;
+          const delaiCellRaw = colDelai >= 0 ? row[colDelai] : null;
+          const hasDelai = delaiCellRaw !== null && delaiCellRaw !== undefined && String(delaiCellRaw).trim() !== '';
+          const delaiImporte = hasDelai ? parseFloat(delaiCellRaw) || 0 : 0;
           const confRaw = colConf >= 0 ? String(row[colConf] ?? '').trim() : '';
 
           const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
@@ -119,7 +122,16 @@ export default function ImportExcelPage() {
           // on garde ici le délai importé comme repli, et on fige `updatedAt` sur la date de
           // mise en service pour que le calcul automatique retombe sur la bonne valeur historique.
           const delai = delaiImporte;
-          const conformite = confRaw ? (/hors/i.test(confRaw) ? 'HorsDelais' : 'TLID') : delai > 2 ? 'HorsDelais' : 'TLID';
+          // ── Conformité : uniquement figée si le fichier la donne explicitement, OU si la
+          // situation est déjà résolue (OK) avec un délai connu. Sinon (NON OK, en attente,
+          // sans info explicite), on NE FIGE RIEN — les statistiques utiliseront le calcul
+          // en direct (calcDelai / isHorsDelai) qui reflète le vrai statut "en cours".
+          let conformite: Situation['conformite'] = undefined;
+          if (confRaw) {
+            conformite = /hors/i.test(confRaw) ? 'HorsDelais' : 'TLID';
+          } else if (status === 'ok' && hasDelai) {
+            conformite = delai > 2 ? 'HorsDelais' : 'TLID';
+          }
 
           rows.push({
             id: `imp-${i}-${Date.now()}`,
@@ -138,15 +150,37 @@ export default function ImportExcelPage() {
             status,
             comment: motifVide ? '' : `Motif import: ${motif}`,
             updatedAt: status === 'ok' && dateClt ? new Date(dateClt).toISOString() : undefined,
+            _hasDelai: hasDelai,
           });
         }
 
-        setPreview(rows);
-        const assigned = rows.filter((r) => r.equipe).length;
-        const unassigned = rows.length - assigned;
-        const autoOk = rows.filter((r) => r.status === 'ok').length;
+        // ── Déduplication par FGP + TYPE + MOTIF + DATE MISE EN SERVICE — pour toutes les
+        // lignes, y compris DRG. Nécessaire car la base rejette l'upsert si deux lignes du
+        // même lot ont exactement la même clé de conflit ("ON CONFLICT DO UPDATE command
+        // cannot affect row a second time") — donc même les vrais doublons DRG doivent être
+        // fusionnés ici. Un même FGP+TYPE peut légitimement avoir plusieurs lignes actives
+        // en même temps chez vous (différents motifs/dates de passage) — on ne fusionne donc
+        // QUE les lignes strictement identiques sur ces 4 champs, tout le reste est conservé.
+        const bestByKey = new Map<string, Situation & { _hasDelai?: boolean }>();
+        for (const r of rows) {
+          const key = `${r.fgp}|${r.type}|${r.motif}|${r.dateClt}`;
+          const existing = bestByKey.get(key);
+          if (!existing) {
+            bestByKey.set(key, r);
+            continue;
+          }
+          // Doublon exact : on garde la ligne au message le plus récent
+          if ((r.dateMessage || '') >= (existing.dateMessage || '')) bestByKey.set(key, r);
+        }
+        const dedupedRows = Array.from(bestByKey.values());
+        const duplicatesCount = rows.length - dedupedRows.length;
+
+        setPreview(dedupedRows);
+        const assigned = dedupedRows.filter((r) => r.equipe).length;
+        const unassigned = dedupedRows.length - assigned;
+        const autoOk = dedupedRows.filter((r) => r.status === 'ok').length;
         showToast(
-          `${rows.length} lignes lues — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}`,
+          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}`,
           unassigned === 0 ? 'success' : 'warning',
         );
       } catch (err: any) {
@@ -166,18 +200,29 @@ export default function ImportExcelPage() {
     else showToast('Format invalide. Utiliser .xlsx ou .xls', 'error');
   };
 
-  const confirmImport = () => {
+  const [importing, setImporting] = useState(false);
+
+  const confirmImport = async () => {
     const assigned = preview.filter((r) => r.equipe).length;
     const unassigned = preview.length - assigned;
-    importSituations(preview, fileName);
-    setPreview([]);
-    setFileName('');
-    showToast(
-      ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
-        unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
-      }`,
-      unassigned > 0 ? 'warning' : 'success',
-    );
+    setImporting(true);
+    try {
+      await importSituations(preview, fileName);
+      setPreview([]);
+      setFileName('');
+      showToast(
+        ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
+          unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
+        }`,
+        unassigned > 0 ? 'warning' : 'success',
+      );
+    } catch (err: any) {
+      // On garde la preview affichée pour permettre de réessayer, au lieu de laisser
+      // croire à un succès alors que rien n'a été enregistré en base.
+      showToast("Échec de l'import : " + (err?.message || 'vérifiez le schéma de la base'), 'error');
+    } finally {
+      setImporting(false);
+    }
   };
 
   // Stats de la preview
@@ -274,9 +319,8 @@ export default function ImportExcelPage() {
                 >
                   Annuler
                 </Button>
-                <Button variant="success" size="sm" onClick={confirmImport}>
-                  {' '}
-                  Confirmer Import
+                <Button variant="success" size="sm" onClick={confirmImport} disabled={importing}>
+                  {importing ? 'Import en cours...' : 'Confirmer Import'}
                 </Button>
               </div>
             </div>
@@ -370,6 +414,7 @@ export default function ImportExcelPage() {
                 <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Date</th>
                 <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Lignes</th>
                 <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Par</th>
+                <th className="text-right px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -382,6 +427,24 @@ export default function ImportExcelPage() {
                   </td>
                   <td className="px-4 py-3">
                     <EquipeTag name={h.by} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => {
+                        if (
+                          confirm(
+                            "Supprimer cet import ?\n\nATTENTION : ça supprime aussi TOUTES les situations créées par cet import (suppression en cascade), pas seulement la ligne d'historique. Cette action est irréversible.\n\nNote : les imports faits avant la mise en place de ce lien ne sont pas concernés (seule la ligne d'historique sera retirée dans ce cas).",
+                          )
+                        ) {
+                          removeImportRecord(h.id).catch((err: any) => {
+                            showToast('Suppression échouée : ' + (err?.message || 'erreur inconnue'), 'error');
+                          });
+                        }
+                      }}
+                      className="text-red-600 hover:underline text-xs font-semibold"
+                    >
+                      Supprimer
+                    </button>
                   </td>
                 </tr>
               ))}

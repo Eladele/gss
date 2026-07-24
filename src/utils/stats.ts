@@ -3,13 +3,58 @@ import type { Situation, Equipe, SituationNature } from '@/types';
 
 export const INSTALL_DERANG_TYPES = ['CLS', 'CPL', 'RLR', 'CMI', 'TRL', 'CST'] as const;
 
-// Seuil de délai (jours) utilisé quand une situation n'a pas de "conformite" explicite
-// (ex: situations créées manuellement / urgences). Aligné sur le fichier GSS (délai cible ≈ 2j).
-export const DEFAULT_DELAI_THRESHOLD = 2;
+// Seuils de délai réels (jours ouvrés), utilisés quand une situation n'a pas de
+// "conformite" explicite (ex: créée manuellement) : DRG = 24h (1j), Installation = 48h (2j).
+export const DELAI_THRESHOLD_DRG = 1;
+export const DELAI_THRESHOLD_INSTALLATION = 2;
+// Conservé pour compatibilité (ancien code qui référence encore ce nom)
+export const DEFAULT_DELAI_THRESHOLD = DELAI_THRESHOLD_INSTALLATION;
 
-// Calcule le délai réel d'une situation : dateDepo → date de mise à jour (updatedAt)
-// si elle est traitée (OK / NON OK), sinon dateDepo → maintenant (délai toujours "en cours").
-// Remplace le délai statique importé pour un suivi automatique et à jour.
+function delaiThresholdFor(s: Situation): number {
+  return s.type === 'DRG' ? DELAI_THRESHOLD_DRG : DELAI_THRESHOLD_INSTALLATION;
+}
+
+// ─── Jours fériés / fêtes (Mauritanie) ─────────────────────────────────────────
+// Liste à tenir à jour chaque année (dates fixes + fêtes musulmanes, mobiles).
+// Format "YYYY-MM-DD". Ajuste/complète ces dates selon le calendrier officiel.
+export const PUBLIC_HOLIDAYS: string[] = [
+  // 2026 — dates fixes
+  '2026-01-01', // Nouvel An
+  '2026-05-01', // Fête du Travail
+  '2026-05-25', // Journée de l'Afrique
+  '2026-11-28', // Fête de l'Indépendance
+  // 2026 — fêtes musulmanes (mobiles, à confirmer/ajuster selon l'observation de la lune)
+  '2026-03-20', // Aid al-Fitr (approx.)
+  '2026-03-21', // Aid al-Fitr (2e jour)
+  '2026-05-27', // Aid al-Adha (approx.)
+  '2026-05-28', // Aid al-Adha (2e jour)
+  '2026-06-16', // Nouvel An musulman (approx.)
+  '2026-08-25', // Mawlid (approx.)
+];
+const HOLIDAY_SET = new Set(PUBLIC_HOLIDAYS);
+
+function isNonOuvre(dateMs: number): boolean {
+  const d = new Date(dateMs);
+  if (d.getDay() === 0) return true; // dimanche
+  const iso = d.toISOString().slice(0, 10);
+  return HOLIDAY_SET.has(iso);
+}
+
+// Compte les jours ouvrés (hors dimanche et jours fériés) entre deux instants.
+function workingDaysBetween(startMs: number, endMs: number): number {
+  if (endMs <= startMs) return 0;
+  let count = 0;
+  let cursor = startMs + 86400000; // on compte à partir du lendemain du départ
+  while (cursor <= endMs) {
+    if (!isNonOuvre(cursor)) count++;
+    cursor += 86400000;
+  }
+  return count;
+}
+
+// Calcule le délai réel d'une situation (en jours ouvrés, hors dimanche/fériés) :
+// dateDepo → date de mise à jour (updatedAt) si elle est traitée (OK / NON OK),
+// sinon dateDepo → maintenant (délai toujours "en cours").
 export function calcDelai(s: Situation): number {
   const startRaw = s.dateDepo || s.dateMessage;
   if (!startRaw) return s.delai ?? 0;
@@ -17,12 +62,13 @@ export function calcDelai(s: Situation): number {
   if (Number.isNaN(start)) return s.delai ?? 0;
   const resolved = s.status === 'ok' || s.status === 'non_ok';
   const end = resolved && s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now();
-  return Math.max(0, Math.round((end - start) / 86400000));
+  return workingDaysBetween(start, end);
 }
 
 export function isHorsDelai(s: Situation): boolean {
-  if (s.conformite) return s.conformite === 'HorsDelais';
-  return calcDelai(s) > DEFAULT_DELAI_THRESHOLD;
+  // Comparé directement à la valeur importée du fichier (NbreJourDélaisInst = s.delai),
+  // pas à un recalcul depuis les dates : DRG hors délai si > 1, Installation si > 2.
+  return s.delai > delaiThresholdFor(s);
 }
 
 export function villeForEquipe(equipeName: string, equipes: Equipe[]): string {
@@ -156,7 +202,7 @@ export interface ClientRepeat {
 export function repeatDerangementByClient(situations: Situation[]): ClientRepeat[] {
   const byFgp: Record<string, Situation[]> = {};
   situations
-    .filter((s) => (s.nature ?? 'installation') === 'derangement')
+    .filter((s) => s.type === 'DRG')
     .forEach((s) => {
       (byFgp[s.fgp] ??= []).push(s);
     });
