@@ -25,15 +25,16 @@ export async function fetchSituations(): Promise<Situation[]> {
   }
   return all;
 }
+
 export async function upsertSituation(sit: Situation): Promise<void> {
   const { id: _omit, ...payload } = toDbSituation(sit);
-  const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_clt' });
+  const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_mise_en_service' });
   if (error) console.error('upsertSituation:', error);
 }
 
 export async function updateSituationStatus(id: string, status: Situation['status'], comment = '', dateClt?: string): Promise<void> {
   const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
-  if (dateClt) payload.date_clt = dateClt;
+  if (dateClt) payload.date_mise_en_service = dateClt;
   const { error } = await supabase.from('situations').update(payload).eq('id', id);
   if (error) console.error('updateSituationStatus:', error);
 }
@@ -51,7 +52,7 @@ export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
       const { id: _omit, ...rest } = toDbSituation(r);
       return rest;
     });
-    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: 'fgp,type,motif,date_clt' });
+    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: 'fgp,type,motif,date_mise_en_service' });
     if (error) {
       console.error('insertSituationsBulk chunk:', error);
       lastError = error.message;
@@ -151,7 +152,7 @@ export async function insertImportRecord(record: Omit<ImportRecord, 'id'>): Prom
     .single();
   if (error) {
     console.error('insertImportRecord:', error);
-    return null;
+    throw new Error(error.message);
   }
   return mapImportRecord(data);
 }
@@ -175,7 +176,7 @@ function mapSituation(row: any): Situation {
     equipe: row.equipe,
     motif: row.motif ?? '',
     dateDepo: row.date_depo ?? '',
-    dateClt: row.date_clt ?? '',
+    dateClt: row.date_mise_en_service ?? '',
     dateMessage: row.date_message ?? '',
     serviceDestination: row.service_destination ?? '',
     delai: row.delai ?? 0,
@@ -185,6 +186,7 @@ function mapSituation(row: any): Situation {
     isUrgent: row.is_urgent ?? false,
     nature: row.nature ?? 'installation',
     conformite: row.conformite ?? undefined,
+    importId: row.import_id ?? undefined,
   };
 }
 
@@ -197,7 +199,7 @@ function toDbSituation(s: Situation) {
     equipe: s.equipe,
     motif: s.motif,
     date_depo: s.dateDepo || null,
-    date_clt: s.dateClt || null,
+    date_mise_en_service: s.dateClt || null,
     date_message: s.dateMessage || null,
     service_destination: s.serviceDestination || null,
     delai: s.delai,
@@ -207,6 +209,7 @@ function toDbSituation(s: Situation) {
     updated_at: s.updatedAt ?? new Date().toISOString(),
     nature: s.nature ?? 'installation',
     conformite: s.conformite ?? null,
+    import_id: s.importId ?? null,
   };
 }
 
