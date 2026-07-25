@@ -4,14 +4,27 @@ import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehi
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
 
 export async function fetchSituations(): Promise<Situation[]> {
-  const { data, error } = await supabase.from('situations').select('*').order('created_at', { ascending: false });
-  if (error) {
-    console.error('fetchSituations:', error);
-    return [];
+  // Supabase limite les SELECT à 1000 lignes par requête par défaut — sans pagination,
+  // au-delà de 1000 situations, le refresh de la page en perdait silencieusement une
+  // partie (ex: 1552 juste après import, mais seulement 1000 après actualisation).
+  const all: Situation[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('situations')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error('fetchSituations:', error);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    all.push(...data.map(mapSituation));
+    if (data.length < PAGE) break;
   }
-  return (data ?? []).map(mapSituation);
+  return all;
 }
-
 export async function upsertSituation(sit: Situation): Promise<void> {
   const { id: _omit, ...payload } = toDbSituation(sit);
   const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_clt' });
