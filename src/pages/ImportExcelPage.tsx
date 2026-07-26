@@ -200,10 +200,10 @@ export default function ImportExcelPage() {
             delai,
             status,
             comment: dateStatusMismatch
-              ? `⚠ incohérence date/statut${motifVide ? '' : ` — Motif import: ${motif}`}`
+              ? `⚠ incohérence date/statut${motifVide ? '' : ` ${motif}`}`
               : motifVide
                 ? ''
-                : `Motif import: ${motif}`,
+                : `${motif}`,
             // On fige `updatedAt` sur la date de mise en service dès qu'elle est fournie,
             // peu importe le statut — pour les DRG NON OK avec une vraie date de clôture
             // dans le fichier, le délai doit s'arrêter à cette date, pas continuer jusqu'à
