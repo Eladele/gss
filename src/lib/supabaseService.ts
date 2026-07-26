@@ -14,6 +14,7 @@ export async function fetchSituations(): Promise<Situation[]> {
       .from('situations')
       .select('*')
       .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
       console.error('fetchSituations:', error);
@@ -596,6 +597,7 @@ export async function fetchScans(): Promise<ScanRecord[]> {
     const { data, error } = await supabase
       .from('scan_results')
       .select('*')
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
       console.error('fetchScans:', error);
@@ -811,4 +813,3 @@ export async function loginWithCredentials(name: string, password: string): Prom
     color: COLORS[data.role] ?? '#546E7A',
   };
 }
-
