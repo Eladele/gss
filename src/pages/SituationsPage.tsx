@@ -174,7 +174,7 @@ export default function SituationsPage() {
             </div>
             <Select value={fType} onChange={(e) => setFType(e.target.value)} style={{ width: 'auto' }}>
               <option value="">Tous types</option>
-              <option value="__installation__">Installation (CPL/TRL/CMI/CLS/RLR/CST)</option>
+              <option value="__installation__">Installation (CPL/TRL/CMI/CLS/RLR/CST/ANS)</option>
               <option value="__derangement__">Dérangement (DRG)</option>
               {['CPL', 'DRG', 'TRL', 'CST', 'ANS', 'CLS', 'CMI', 'RLR'].map((t) => (
                 <option key={t} value={t}>

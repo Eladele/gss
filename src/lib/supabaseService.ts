@@ -213,6 +213,18 @@ function toDbSituation(s: Situation) {
   };
 }
 
+// Les équipes en base ont parfois des codes bruts (NKTT, NDB...) au lieu du vrai nom
+// de ville — on normalise ici pour que les 4 vraies villes soient toujours reconnues.
+function normalizeVille(raw?: string | null): string {
+  const v = (raw ?? '').trim().toLowerCase();
+  if (!v) return 'Nouakchott';
+  if (v.includes('nktt') || v.includes('nouakchott') || v === 'nkc') return 'Nouakchott';
+  if (v.includes('ndb') || v.includes('nouadhibou')) return 'Nouadhibou';
+  if (v.includes('kaedi') || v.includes('kaédi') || v.includes('keadi')) return 'Kaédi';
+  if (v.includes('rosso')) return 'Rosso';
+  return raw!; // valeur déjà correcte / inconnue, on la laisse telle quelle
+}
+
 function mapEquipe(row: any): Equipe {
   return {
     id: row.id,
@@ -221,7 +233,7 @@ function mapEquipe(row: any): Equipe {
     zones: row.zones ?? [],
     color: row.color ?? '#1565C0',
     elements: row.elements ?? [],
-    ville: row.ville ?? 'Nouakchott',
+    ville: normalizeVille(row.ville) as Equipe['ville'],
   };
 }
 
@@ -799,3 +811,4 @@ export async function loginWithCredentials(name: string, password: string): Prom
     color: COLORS[data.role] ?? '#546E7A',
   };
 }
+

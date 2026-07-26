@@ -19,7 +19,7 @@ import type { SituationNature } from '@/types';
 type NatureFilter = 'all' | SituationNature;
 
 // Classification fiable par TYPE (le champ `nature` importé n'est pas toujours cohérent) :
-// Installation = CPL/TRL/CMI/CLS/RLR/CST · Dérangement = DRG
+// Installation = CPL/TRL/CMI/CLS/RLR/CST/ANS · Dérangement = DRG
 function matchesNature(s: { type: string }, nature: NatureFilter): boolean {
   if (nature === 'all') return true;
   if (nature === 'derangement') return s.type === 'DRG';

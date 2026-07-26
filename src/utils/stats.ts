@@ -163,8 +163,8 @@ export interface TypeStat {
 // Ces types sont fonctionnellement équivalents pour les statistiques (toutes des
 // clôtures d'installation) — on les regroupe en une seule ligne. DRG (et les
 // autres types) restent séparés.
-export const MERGED_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST'];
-export const MERGED_TYPE_LABEL = 'CPL/TRL/CMI/CLS/RLR/CST';
+export const MERGED_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST','ANS'];
+export const MERGED_TYPE_LABEL = 'CPL/TRL/CMI/CLS/RLR/CST/ANS';
 
 export function statsByType(situations: Situation[], nature?: SituationNature): TypeStat[] {
   const byType: Record<string, Situation[]> = {};
@@ -224,6 +224,7 @@ export function exportStatsToExcel(opts: {
   byVille: VilleStat[];
   byType: TypeStat[];
   repeats: ClientRepeat[];
+  situations?: Situation[];
 }) {
   const wb = XLSX.utils.book_new();
 
@@ -260,7 +261,27 @@ export function exportStatsToExcel(opts: {
     })),
   );
   XLSX.utils.book_append_sheet(wb, wsType, 'Par type');
-
+  // Liste détaillée des FGP concernés — mêmes colonnes que le fichier d'import original
+  if (opts.situations) {
+    const wsDetail = XLSX.utils.json_to_sheet(
+      opts.situations.map((s) => ({
+        'DETE MESSAGE': s.dateMessage || '',
+        TYPE: s.type,
+        FGP: s.fgp,
+        'Service Destination': s.serviceDestination || '',
+        ZONE: s.zone,
+        'DETE DEPOT': s.dateDepo || '',
+        'DATE MISE EN SERVICE': s.dateClt || '',
+        Actions: s.status === 'ok' ? 'ok' : s.status === 'non_ok' ? 'no ok' : s.status,
+        status: s.status === 'ok' ? 'ok' : s.status === 'non_ok' ? 'no ok' : s.status,
+        motif: s.motif || 'sans motif',
+        équipe: s.equipe,
+        NbreJourDélaisInst: s.delai,
+        ConformitéDélais: s.conformite === 'HorsDelais' ? 'HorsDélais' : s.conformite === 'TLID' ? 'TLID' : '',
+      })),
+    );
+    XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail FGP');
+  }
   const wsRepeat = XLSX.utils.json_to_sheet(
     opts.repeats.map((r) => ({
       FGP: r.fgp,

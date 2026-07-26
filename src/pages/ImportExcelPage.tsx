@@ -261,7 +261,7 @@ export default function ImportExcelPage() {
         </div>
         {nature === 'mixed' && (
           <span className="text-[11px] text-slate-400">
-            Nature détectée automatiquement par type : CPL/TRL/CMI/CLS/RLR/CST → Installation, DRG → Dérangement
+            Nature détectée automatiquement par type : CPL/TRL/CMI/CLS/RLR/CST/ANS → Installation, DRG → Dérangement
           </span>
         )}
       </div>
