@@ -8,6 +8,32 @@ import type { Situation, SituationNature } from '@/types';
 
 type NatureFilter = 'mixed' | SituationNature;
 
+// Types reconnus par l'app (installation + dérangement). Tout type hors de cette liste
+// part en quarantaine plutôt que d'être importé silencieusement.
+const KNOWN_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST', 'ANS', 'DRG'];
+
+// Normalise le statut quelle que soit la casse/variante saisie dans le fichier :
+// "OK"/"ok" → ok · "NON OK"/"NO OK"/"NOK" → non_ok · "ENCOURS"/"EN COURS" → in_progress.
+function normalizeStatusRaw(raw: string): Situation['status'] | null {
+  const v = raw.trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!v) return null;
+  if (v === 'OK') return 'ok';
+  if (v === 'NON OK' || v === 'NO OK' || v === 'NOK') return 'non_ok';
+  if (v === 'ENCOURS' || v === 'EN COURS') return 'in_progress';
+  return null; // valeur non reconnue — traitée comme absente (repli sur la date)
+}
+
+// Un FGP plausible est un nombre entier de 3 à 7 chiffres. Un FGP hors de cette plage
+// (souvent une date Excel mal convertie, ex: 45255) est suspect et part en quarantaine.
+function isPlausibleFgp(fgp: string): boolean {
+  return /^\d{3,7}$/.test(fgp.trim());
+}
+
+interface RejectedRow {
+  row: Record<string, any>;
+  reason: string;
+}
+
 // Types considérés "installation" pour la détection automatique en mode mixte
 function detectNature(type: string): SituationNature {
   return type === 'DRG' ? 'derangement' : 'installation';
@@ -25,6 +51,7 @@ export default function ImportExcelPage() {
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(false);
   const [nature, setNature] = useState<NatureFilter>('mixed');
+  const [rejectedRows, setRejectedRows] = useState<RejectedRow[]>([]);
 
   // ── Carte dynamique zone → équipe (Supabase en priorité, fallback statique) ──
   const zoneEquipeMap = useMemo(() => {
@@ -78,6 +105,7 @@ export default function ImportExcelPage() {
         const colDateClt = col(['DATE CLT', 'DATE_CLT', 'DATECLT', 'MISE EN SERVICE', 'DATE CLOTURE']);
         const colDelai = col(['DELAI', 'DÉLAI', 'NBREJOUR']);
         const colConf = col(['CONFORMITÉ', 'CONFORMITE']);
+        const colStatus = col(['STATUT', 'STATUS']);
         // Fichiers "installation" (type INSTALLATION_JUIN.xlsx) : une colonne DATE MESSAGE
         // est présente ⇒ elle sert de référence pour le délai, et la colonne DATE DEPOT
         // du fichier n'est volontairement PAS stockée (elle fait doublon / cause des soucis
@@ -85,6 +113,7 @@ export default function ImportExcelPage() {
         const useDateMessage = colDateMessage >= 0;
 
         const rows: (Situation & { _hasDelai?: boolean })[] = [];
+        const rejected: RejectedRow[] = [];
         for (let i = 1; i < data.length; i++) {
           const row = data[i];
           if (!row || !row[colFgp] || !row[colType]) continue;
@@ -94,6 +123,17 @@ export default function ImportExcelPage() {
           const motif = String(row[colMotif] ?? '').trim();
           const equipeFromFile = colEquipe >= 0 ? String(row[colEquipe] ?? '').trim() : '';
           const serviceDestination = colServiceDest >= 0 ? String(row[colServiceDest] ?? '').trim() : '';
+
+          // ── Quarantaine : type non reconnu ou FGP invraisemblable (ex: date Excel mal
+          // convertie) — ces lignes ne sont PAS importées, mais listées pour correction.
+          if (!KNOWN_TYPES.includes(type.toUpperCase())) {
+            rejected.push({ row: { FGP: fgp, TYPE: type, ZONE: zone, Motif: motif }, reason: `Type "${type}" non reconnu` });
+            continue;
+          }
+          if (!isPlausibleFgp(fgp)) {
+            rejected.push({ row: { FGP: fgp, TYPE: type, ZONE: zone, Motif: motif }, reason: `FGP "${fgp}" invraisemblable (probable date Excel)` });
+            continue;
+          }
 
           // ── Auto-distribution : résolution zone → équipe via Supabase ──
           const equipe = resolveEquipe(zone, equipeFromFile);
@@ -114,9 +154,18 @@ export default function ImportExcelPage() {
           // Colonne DATE DEPOT ignorée quand le fichier a une colonne DATE MESSAGE dédiée
           const dateDepo = useDateMessage ? '' : parseDate(colDate >= 0 ? row[colDate] : null);
 
-          // ── Statut auto : DATE MISE EN SERVICE renseignée ⇒ OK, sinon NON OK ──
-          const status: Situation['status'] = dateClt ? 'ok' : 'non_ok';
+          // ── Statut : si le fichier a une colonne STATUT/STATUS explicite, on la respecte
+          // (normalisée : OK/NON OK/NO OK/NOK/ENCOURS quelle que soit la casse), sinon on
+          // déduit automatiquement depuis DATE MISE EN SERVICE.
+          const statusRaw = colStatus >= 0 ? String(row[colStatus] ?? '').trim() : '';
+          const statusFromFile = normalizeStatusRaw(statusRaw);
+          const status: Situation['status'] = statusFromFile ?? (dateClt ? 'ok' : 'non_ok');
           const motifVide = !motif || /^sans\s*motif$/i.test(motif);
+
+          // ── Incohérence date/statut : date de mise en service remplie mais statut ≠ OK
+          // (ou l'inverse) — on importe quand même (ne bloque jamais l'agent terrain),
+          // mais on le signale visiblement dans le commentaire pour vérification.
+          const dateStatusMismatch = (dateClt && status !== 'ok') || (!dateClt && status === 'ok');
 
           // ── Délai : recalculé à l'affichage via calcDelai (date_message → date de clôture) ;
           // on garde ici le délai importé comme repli, et on fige `updatedAt` sur la date de
@@ -148,7 +197,11 @@ export default function ImportExcelPage() {
             dateClt,
             delai,
             status,
-            comment: motifVide ? '' : motif,
+            comment: dateStatusMismatch
+              ? `⚠ incohérence date/statut${motifVide ? '' : ` — Motif import: ${motif}`}`
+              : motifVide
+                ? ''
+                : `Motif import: ${motif}`,
             updatedAt: status === 'ok' && dateClt ? new Date(dateClt).toISOString() : undefined,
             _hasDelai: hasDelai,
           });
@@ -176,12 +229,13 @@ export default function ImportExcelPage() {
         const duplicatesCount = rows.length - dedupedRows.length;
 
         setPreview(dedupedRows);
+        setRejectedRows(rejected);
         const assigned = dedupedRows.filter((r) => r.equipe).length;
         const unassigned = dedupedRows.length - assigned;
         const autoOk = dedupedRows.filter((r) => r.status === 'ok').length;
         showToast(
-          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}`,
-          unassigned === 0 ? 'success' : 'warning',
+          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}${rejected.length > 0 ? ` · ${rejected.length} lignes rejetées (type/FGP invalide, voir ci-dessous)` : ''}`,
+          rejected.length > 0 ? 'warning' : unassigned === 0 ? 'success' : 'warning',
         );
       } catch (err: any) {
         showToast('Erreur lecture: ' + err.message, 'error');
@@ -209,6 +263,7 @@ export default function ImportExcelPage() {
     try {
       await importSituations(preview, fileName);
       setPreview([]);
+      setRejectedRows([]);
       setFileName('');
       showToast(
         ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
@@ -300,6 +355,37 @@ export default function ImportExcelPage() {
           />
         </div>
 
+        {/* Lignes rejetées (quarantaine) */}
+        {rejectedRows.length > 0 && (
+          <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-bold text-red-700">
+                {rejectedRows.length} ligne(s) rejetée(s) — non importées, à corriger dans le fichier source
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const wb = XLSX.utils.book_new();
+                  const ws = XLSX.utils.json_to_sheet(rejectedRows.map((r) => ({ ...r.row, Motif_rejet: r.reason })));
+                  XLSX.utils.book_append_sheet(wb, ws, 'Rejetées');
+                  XLSX.writeFile(wb, `lignes_rejetees_${fileName || 'import'}.xlsx`);
+                }}
+              >
+                Télécharger les lignes rejetées
+              </Button>
+            </div>
+            <div className="mt-2 max-h-40 overflow-y-auto text-xs text-red-600 space-y-1">
+              {rejectedRows.slice(0, 20).map((r, i) => (
+                <div key={i}>
+                  FGP {r.row.FGP} ({r.row.TYPE}) — {r.reason}
+                </div>
+              ))}
+              {rejectedRows.length > 20 && <div>... et {rejectedRows.length - 20} autres (voir le fichier téléchargé)</div>}
+            </div>
+          </div>
+        )}
+
         {/* Preview */}
         {preview.length > 0 && (
           <div className="mt-6">
@@ -314,6 +400,7 @@ export default function ImportExcelPage() {
                   size="sm"
                   onClick={() => {
                     setPreview([]);
+                    setRejectedRows([]);
                     setFileName('');
                   }}
                 >
