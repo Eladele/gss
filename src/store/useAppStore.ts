@@ -170,29 +170,46 @@ export const useAppStore = create<AppState>()(
 
       markOK: async (id) => {
         const today = new Date().toISOString().slice(0, 10);
+        const previous = get().situations.find((s) => s.id === id);
+        if (!previous) return;
+        const newDateClt = previous.dateClt || today;
         // Optimistic update — la "DATE MISE EN SERVICE" est posée automatiquement
         // à la date système dès qu'une situation (installation ou dérangement) passe OK.
         // Ciblée par id (et non fgp) : un même FGP peut avoir plusieurs situations actives
         // en parallèle (types/motifs différents), il ne faut affecter QUE celle cliquée.
         set((s) => ({
           situations: s.situations.map((sit) =>
-            sit.id === id ? { ...sit, status: 'ok', updatedAt: new Date().toISOString(), dateClt: sit.dateClt || today } : sit,
+            sit.id === id ? { ...sit, status: 'ok', updatedAt: new Date().toISOString(), dateClt: newDateClt } : sit,
           ),
         }));
-        const sit = get().situations.find((s) => s.id === id);
-        await updateSituationStatus(id, 'ok', '', sit?.dateClt || today);
+        try {
+          await updateSituationStatus(id, 'ok', '', newDateClt);
+        } catch (err: any) {
+          // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser
+          // croire à un succès (ex: contrainte d'unicité violée, RLS...).
+          set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
+          get().addNotification('Échec', err?.message || "Le statut n'a pas pu être enregistré", 'nok');
+          throw err;
+        }
       },
 
       markNonOK: async (id, comment) => {
+        const previous = get().situations.find((s) => s.id === id);
+        if (!previous) return;
         // Optimistic update
         set((s) => ({
           situations: s.situations.map((sit) =>
             sit.id === id ? { ...sit, status: 'non_ok', comment, updatedAt: new Date().toISOString() } : sit,
           ),
         }));
-        await updateSituationStatus(id, 'non_ok', comment);
-        const sit = get().situations.find((s) => s.id === id);
-        get().addNotification('NON OK détecté', `FGP ${sit?.fgp} — ${sit?.zone} — ${comment}`, 'nok');
+        try {
+          await updateSituationStatus(id, 'non_ok', comment);
+          get().addNotification('NON OK détecté', `FGP ${previous.fgp} — ${previous.zone} — ${comment}`, 'nok');
+        } catch (err: any) {
+          set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
+          get().addNotification('Échec', err?.message || "Le statut n'a pas pu être enregistré", 'nok');
+          throw err;
+        }
       },
 
       addUrgence: async (zone, type, comment, equipeOverride) => {

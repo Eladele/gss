@@ -37,7 +37,10 @@ export async function updateSituationStatus(id: string, status: Situation['statu
   const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
   if (dateClt) payload.date_mise_en_service = dateClt;
   const { error } = await supabase.from('situations').update(payload).eq('id', id);
-  if (error) console.error('updateSituationStatus:', error);
+  if (error) {
+    console.error('updateSituationStatus:', error);
+    throw new Error(error.message);
+  }
 }
 
 export async function insertSituationsBulk(rows: Situation[]): Promise<void> {

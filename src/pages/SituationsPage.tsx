@@ -80,9 +80,13 @@ export default function SituationsPage() {
     [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
   );
 
-  const handleMarkOK = async (id: string, fgp: string) => {
-    await markOK(id);
-    showToast(`FGP ${fgp} marqué OK `, 'success');
+ const handleMarkOK = async (id: string, fgp: string) => {
+    try {
+      await markOK(id);
+      showToast(`FGP ${fgp} marqué OK `, 'success');
+    } catch (err: any) {
+      showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
+    }
   };
   const handleMarkNOK = (id: string, fgp: string, existingComment = '') => {
     setNokId(id);
@@ -91,9 +95,13 @@ export default function SituationsPage() {
     setNokOpen(true);
   };
   const handleNOKConfirm = async (comment: string) => {
-    await markNonOK(nokId, comment);
-    setNokOpen(false);
-    showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
+    try {
+      await markNonOK(nokId, comment);
+      setNokOpen(false);
+      showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
+    } catch (err: any) {
+      showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
+    }
   };
 
   const openReassign = (id: string, fgp: string, currentEquipe: string) => {
