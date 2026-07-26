@@ -148,7 +148,7 @@ export default function ImportExcelPage() {
             dateClt,
             delai,
             status,
-            comment: motifVide ? '' : `Motif import: ${motif}`,
+            comment: motifVide ? '' : motif,
             updatedAt: status === 'ok' && dateClt ? new Date(dateClt).toISOString() : undefined,
             _hasDelai: hasDelai,
           });

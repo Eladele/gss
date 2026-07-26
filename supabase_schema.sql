@@ -45,6 +45,7 @@ CREATE TABLE public.situations (
                    CHECK (status IN ('pending','in_progress','ok','non_ok','urgent')),
     comment    TEXT DEFAULT '',
     is_urgent  BOOLEAN DEFAULT FALSE,
+    import_id  UUID REFERENCES public.import_history(id) ON DELETE CASCADE,
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );

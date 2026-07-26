@@ -236,17 +236,26 @@ export const useAppStore = create<AppState>()(
         try {
           // Persist to Supabase D'ABORD — si ça échoue, on ne met pas à jour l'UI ni
           // l'historique, pour ne jamais afficher un faux "succès".
-          if (newRows.length > 0) await insertSituationsBulk(newRows);
           const savedRecord = await insertImportRecord(importRecord);
+          const importId = savedRecord?.id;
+
+          const newRowsWithImportId = newRows.map((r) => ({
+            ...r,
+            importId,
+          }));
+
+          if (newRowsWithImportId.length > 0) {
+            await insertSituationsBulk(newRowsWithImportId);
+          }
 
           set((s) => ({
-            situations: [...s.situations, ...newRows],
+            situations: [...s.situations, ...newRowsWithImportId],
             // On utilise le VRAI id renvoyé par la base (pas un id local temporaire),
             // sinon un "Supprimer" fait dans la foulée (sans refresh) cible le mauvais
             // enregistrement et ne supprime rien côté base.
             importHistory: [savedRecord ?? { id: Date.now().toString(), ...importRecord }, ...s.importHistory],
           }));
-          get().addNotification('Import réussi', `${newRows.length} nouvelles situations importées`, 'import');
+          get().addNotification('Import réussi', `${newRowsWithImportId.length} nouvelles situations importées`, 'import');
         } catch (err: any) {
           console.error('importSituations failed:', err);
           get().addNotification('Échec de l\'import', err?.message || 'Les situations n\'ont pas pu être enregistrées', 'nok');
@@ -257,7 +266,10 @@ export const useAppStore = create<AppState>()(
       removeImportRecord: async (id) => {
         try {
           await deleteImportRecord(id);
-          set((s) => ({ importHistory: s.importHistory.filter((h) => h.id !== id) }));
+          set((s) => ({
+            importHistory: s.importHistory.filter((h) => h.id !== id),
+            situations: s.situations.filter((sit) => sit.importId !== id),
+          }));
         } catch (err: any) {
           console.error('removeImportRecord failed:', err);
           get().addNotification('Suppression impossible', err?.message || "La ligne n'a pas pu être supprimée en base", 'nok');
