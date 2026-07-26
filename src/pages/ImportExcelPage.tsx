@@ -25,8 +25,10 @@ function normalizeStatusRaw(raw: string): Situation['status'] | null {
 
 // Un FGP plausible est un nombre entier de 3 à 7 chiffres. Un FGP hors de cette plage
 // (souvent une date Excel mal convertie, ex: 45255) est suspect et part en quarantaine.
+// Un FGP plausible est un nombre entier de 3 à 10 chiffres (certaines catégories comme
+// ANS utilisent un numéro à 8 chiffres comme FGP — c'est légitime chez vous, pas une erreur).
 function isPlausibleFgp(fgp: string): boolean {
-  return /^\d{3,7}$/.test(fgp.trim());
+  return /^\d{1,8}$/.test(fgp.trim());
 }
 
 interface RejectedRow {
