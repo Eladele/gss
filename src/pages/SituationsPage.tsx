@@ -37,9 +37,9 @@ export default function SituationsPage() {
   const [fEquipe, setFEquipe] = useState('');
   const [fStatus, setFStatus] = useState('');
   const [fDate, setFDate] = useState('');
-  // Par défaut, on n'affiche que l'essentiel : ce qui n'est pas encore OK, ou ce qui est
-  // prévu aujourd'hui — pas les milliers de situations déjà closes des mois précédents.
-  const [showTodayOrEnCours, setShowTodayOrEnCours] = useState(true);
+  // Par défaut, on n'affiche que l'essentiel : les situations pas encore décidées
+  // (en attente / en cours) — OK et NON OK sont des issues finales, masquées par défaut.
+  const [showEnCoursOnly, setShowEnCoursOnly] = useState(true);
   const [urgOpen, setUrgOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
   const [nokId, setNokId] = useState('');
@@ -60,8 +60,6 @@ export default function SituationsPage() {
   const [urgComment, setUrgComment] = useState('');
   const [urgEquipe, setUrgEquipe] = useState('');
 
-  const todayStr = new Date().toISOString().slice(0, 10);
-
   const filtered = useMemo(
     () =>
       situations.filter((s) => {
@@ -72,16 +70,14 @@ export default function SituationsPage() {
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fStatus && s.status !== fStatus) return false;
         if (fDate && (s.dateDepo || s.dateMessage) !== fDate) return false;
-        // Vue par défaut : seulement "en cours" (pas encore OK) OU prévu aujourd'hui —
-        // désactivable via le bouton "Voir tout l'historique".
-        if (showTodayOrEnCours && !fStatus && !fDate) {
-          const isToday = (s.dateDepo || s.dateMessage) === todayStr;
-          const isEnCours = s.status !== 'ok';
-          if (!isToday && !isEnCours) return false;
+        // Vue par défaut : seulement les situations pas encore décidées (en attente / en
+        // cours) — OK et NON OK sont des issues finales, désactivable via le bouton.
+        if (showEnCoursOnly && !fStatus && !fDate) {
+          if (s.status !== 'pending' && s.status !== 'in_progress') return false;
         }
         return true;
       }),
-    [situations, search, fType, fEquipe, fStatus, fDate, showTodayOrEnCours, todayStr],
+    [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
   );
 
   const handleMarkOK = async (id: string, fgp: string) => {
@@ -142,14 +138,12 @@ export default function SituationsPage() {
           <h1 className="text-2xl font-black text-slate-900">Situations</h1>
           <p className="text-slate-400 text-sm">
             {filtered.length} / {situations.length} situations
-            {showTodayOrEnCours && !fStatus && !fDate && (
-              <span className="text-blue-600 font-medium"> — en cours ou prévu aujourd'hui</span>
-            )}
+            {showEnCoursOnly && !fStatus && !fDate && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setShowTodayOrEnCours(!showTodayOrEnCours)}>
-            {showTodayOrEnCours ? 'Voir tout l\'historique' : "Revenir à aujourd'hui / en cours"}
+          <Button variant="outline" onClick={() => setShowEnCoursOnly(!showEnCoursOnly)}>
+            {showEnCoursOnly ? "Voir tout l'historique" : 'Revenir à "en cours" seulement'}
           </Button>
           {isAdmin && (
             <Button variant="warning" icon="" onClick={() => setUrgOpen(true)}>
