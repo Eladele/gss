@@ -193,6 +193,7 @@ export default function SituationsPage() {
             <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
               <option value="">Tous statuts</option>
               <option value="pending">En attente</option>
+              <option value="in_progress">En cours</option>
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
               <option value="urgent">Urgent</option>
@@ -265,9 +266,15 @@ export default function SituationsPage() {
                     <td className="px-3 py-3">
                       <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
                     </td>
-                    <td className="px-3 py-3 text-xs text-center">{s.dateDepo || s.dateMessage ? `${calcDelai(s)}j` : '—'}</td>
                     <td className="px-3 py-3 text-xs text-center">
-                      {s.conformite ? (
+                      {s.status === 'non_ok' && MERGED_TYPES.includes(s.type)
+                        ? '—'
+                        : s.dateDepo || s.dateMessage
+                          ? `${calcDelai(s)}j`
+                          : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-xs text-center">
+                      {!(s.status === 'non_ok' && MERGED_TYPES.includes(s.type)) && s.conformite ? (
                         <span
                           className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.conformite === 'HorsDelais' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
                         >
