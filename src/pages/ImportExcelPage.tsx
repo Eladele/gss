@@ -204,7 +204,11 @@ export default function ImportExcelPage() {
               : motifVide
                 ? ''
                 : `Motif import: ${motif}`,
-            updatedAt: status === 'ok' && dateClt ? new Date(dateClt).toISOString() : undefined,
+            // On fige `updatedAt` sur la date de mise en service dès qu'elle est fournie,
+            // peu importe le statut — pour les DRG NON OK avec une vraie date de clôture
+            // dans le fichier, le délai doit s'arrêter à cette date, pas continuer jusqu'à
+            // aujourd'hui.
+            updatedAt: dateClt ? new Date(dateClt).toISOString() : undefined,
             _hasDelai: hasDelai,
           });
         }
