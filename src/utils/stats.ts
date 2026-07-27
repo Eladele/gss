@@ -65,6 +65,24 @@ export function calcDelai(s: Situation): number {
   return workingDaysBetween(start, end);
 }
 
+// Extrait le nombre de poteaux posés depuis le texte libre du motif (ex: "+1poteau",
+// "+2POTEAU et+350m", "demande 1poteau"). Additionne toutes les occurrences trouvées ;
+// si le mot "poteau" apparaît sans nombre explicite, compte 1 par défaut.
+export function countPoteaux(motif?: string): number {
+  if (!motif) return 0;
+  const text = motif.toLowerCase();
+  const regex = /(\d+)\s*poteaux?/g;
+  let total = 0;
+  let found = false;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    total += parseInt(match[1], 10);
+    found = true;
+  }
+  if (!found && /poteaux?/.test(text)) total = 1;
+  return total;
+}
+
 export function isHorsDelai(s: Situation): boolean {
   // Basé sur le calcul en direct (jours ouvrés, dimanche/fériés exclus) — identique à ce
   // qu'affiche la page Situations — plutôt que sur la valeur brute importée du fichier.
@@ -165,7 +183,7 @@ export interface TypeStat {
 // Ces types sont fonctionnellement équivalents pour les statistiques (toutes des
 // clôtures d'installation) — on les regroupe en une seule ligne. DRG (et les
 // autres types) restent séparés.
-export const MERGED_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST','ANS'];
+export const MERGED_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST', 'ANS'];
 export const MERGED_TYPE_LABEL = 'CPL/TRL/CMI/CLS/RLR/CST/ANS';
 
 export function statsByType(situations: Situation[], nature?: SituationNature): TypeStat[] {
@@ -263,6 +281,7 @@ export function exportStatsToExcel(opts: {
     })),
   );
   XLSX.utils.book_append_sheet(wb, wsType, 'Par type');
+
   // Liste détaillée des FGP concernés — mêmes colonnes que le fichier d'import original
   if (opts.situations) {
     const wsDetail = XLSX.utils.json_to_sheet(
@@ -284,6 +303,7 @@ export function exportStatsToExcel(opts: {
     );
     XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail FGP');
   }
+
   const wsRepeat = XLSX.utils.json_to_sheet(
     opts.repeats.map((r) => ({
       FGP: r.fgp,
