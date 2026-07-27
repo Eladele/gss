@@ -46,7 +46,8 @@ export interface Situation {
   isUrgent?: boolean;
   nature?: SituationNature;
   conformite?: ConformiteDelai;
-  importId?: string; // relie la situation à sa ligne d'historique d'import (suppression en cascade)
+ importId?: string; // relie la situation à sa ligne d'historique d'import (suppression en cascade)
+  poteau?: number; // nombre de poteaux posés pour cette intervention (colonne POTEAU du fichier)
 }
 
 export interface Notification {

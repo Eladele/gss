@@ -108,6 +108,7 @@ export default function ImportExcelPage() {
         const colDelai = col(['DELAI', 'DÉLAI', 'NBREJOUR']);
         const colConf = col(['CONFORMITÉ', 'CONFORMITE']);
         const colStatus = col(['STATUT', 'STATUS']);
+        const colPoteau = col(['POTEAU']);
         // Fichiers "installation" (type INSTALLATION_JUIN.xlsx) : une colonne DATE MESSAGE
         // est présente ⇒ elle sert de référence pour le délai, et la colonne DATE DEPOT
         // du fichier n'est volontairement PAS stockée (elle fait doublon / cause des soucis
@@ -169,6 +170,16 @@ export default function ImportExcelPage() {
           // mais on le signale visiblement dans le commentaire pour vérification.
           const dateStatusMismatch = (dateClt && status !== 'ok') || (!dateClt && status === 'ok');
 
+          // ── Poteau : colonne dédiée si présente, sinon on essaie de l'extraire du motif
+          // (ex: "+1poteau", "+2POTEAU" — motifs historiques avant l'ajout de la colonne).
+          let poteau = 0;
+          if (colPoteau >= 0) {
+            const raw = row[colPoteau];
+            poteau = raw !== null && raw !== undefined && String(raw).trim() !== '' ? parseInt(String(raw), 10) || 0 : 0;
+          } else {
+            const m = motif.match(/(\d+)\s*poteau/i);
+            poteau = m ? parseInt(m[1], 10) : /poteau/i.test(motif) ? 1 : 0;
+          }
           // ── Délai : recalculé à l'affichage via calcDelai (date_message → date de clôture) ;
           // on garde ici le délai importé comme repli, et on fige `updatedAt` sur la date de
           // mise en service pour que le calcul automatique retombe sur la bonne valeur historique.
@@ -209,7 +220,8 @@ export default function ImportExcelPage() {
             // dans le fichier, le délai doit s'arrêter à cette date, pas continuer jusqu'à
             // aujourd'hui.
             updatedAt: dateClt ? new Date(dateClt).toISOString() : undefined,
-            _hasDelai: hasDelai,
+           _hasDelai: hasDelai,
+            poteau,
           });
         }
 

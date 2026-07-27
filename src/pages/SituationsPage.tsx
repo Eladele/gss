@@ -228,7 +228,8 @@ export default function SituationsPage() {
                     'Motif',
                     'Équipe',
                     'Délai',
-                    'Conformité',
+                   'Conformité',
+                    'Poteau',
                     'Statut',
                     'Actions',
                   ].map((h) => (
@@ -286,6 +287,8 @@ export default function SituationsPage() {
                         '—'
                       )}
                     </td>
+                   <td className="px-3 py-3 text-xs text-center">{s.poteau ? s.poteau : '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">{s.poteau ? s.poteau : '—'}</td>
                     <td className="px-3 py-3">
                       <StatusBadge status={s.status} />
                     </td>

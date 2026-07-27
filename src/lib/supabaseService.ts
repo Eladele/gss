@@ -189,8 +189,9 @@ function mapSituation(row: any): Situation {
     updatedAt: row.updated_at,
     isUrgent: row.is_urgent ?? false,
     nature: row.nature ?? 'installation',
-    conformite: row.conformite ?? undefined,
+   conformite: row.conformite ?? undefined,
     importId: row.import_id ?? undefined,
+    poteau: row.poteau != null ? Number(row.poteau) : 0,
   };
 }
 
@@ -212,8 +213,9 @@ function toDbSituation(s: Situation) {
     is_urgent: s.isUrgent ?? false,
     updated_at: s.updatedAt ?? new Date().toISOString(),
     nature: s.nature ?? 'installation',
-    conformite: s.conformite ?? null,
+   conformite: s.conformite ?? null,
     import_id: s.importId ?? null,
+    poteau: s.poteau ?? 0,
   };
 }
 

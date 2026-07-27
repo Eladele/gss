@@ -1,239 +1,189 @@
-import { useMemo, useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
+import { calcDelai, isHorsDelai, MERGED_TYPES } from '@/utils/stats';
 import {
-  statsByEquipe,
-  statsByVille,
-  statsByType,
-  repeatDerangementByClient,
-  inPeriod,
-  exportStatsToExcel,
-  MERGED_TYPES,
-  isHorsDelai,
-  type PeriodFilter,
-} from '@/utils/stats';
-import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
-import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
-import type { SituationNature } from '@/types';
+  Card,
+  CardHeader,
+  CardTitle,
+  Button,
+  TypeBadge,
+  StatusBadge,
+  ZoneChip,
+  EquipeTag,
+  Modal,
+  NOKSheet,
+  Select,
+  Textarea,
+  EmptyState,
+} from '@/components/ui';
+import { useToast } from '@/components/ui';
 
-type NatureFilter = 'all' | SituationNature;
-
-// Classification fiable par TYPE (le champ `nature` importé n'est pas toujours cohérent) :
-// Installation = CPL/TRL/CMI/CLS/RLR/CST/ANS · Dérangement = DRG
-function matchesNature(s: { type: string }, nature: NatureFilter): boolean {
-  if (nature === 'all') return true;
-  if (nature === 'derangement') return s.type === 'DRG';
-  return MERGED_TYPES.includes(s.type);
-}
-
-function todayStr() {
-  return new Date().toISOString().slice(0, 10);
-}
-function firstOfMonthStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-}
-
-type PeriodPreset = 'tout' | 'jour' | 'semaine' | 'mois' | 'custom';
-
-function presetToRange(preset: PeriodPreset): PeriodFilter {
-  const now = new Date();
-  if (preset === 'tout') return {};
-  if (preset === 'jour') return { from: todayStr(), to: todayStr() };
-  if (preset === 'semaine') {
-    const day = (now.getDay() + 6) % 7; // lundi = 0
-    const monday = new Date(now);
-    monday.setDate(now.getDate() - day);
-    return { from: monday.toISOString().slice(0, 10), to: todayStr() };
-  }
-  if (preset === 'mois') return { from: firstOfMonthStr(), to: todayStr() };
-  return {};
-}
-
-const VILLE_COLORS: Record<string, string> = {
-  Nouakchott: '#1565C0',
-  Kaédi: '#E9A93B',
-  Rosso: '#2E7D32',
-  Nouadhibou: '#00838F',
-};
-const WEEKDAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
-
-export default function StatistiquesPage() {
+export default function SituationsPage() {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
+  const user = useAppStore((s) => s.user)!;
+  const markOK = useAppStore((s) => s.markOK);
+  const markNonOK = useAppStore((s) => s.markNonOK);
+  const addUrgence = useAppStore((s) => s.addUrgence);
+  const reassign = useAppStore((s) => s.reassign);
+  const loadAll = useAppStore((s) => s.loadAll);
+  const { showToast } = useToast();
 
-  const [nature, setNature] = useState<NatureFilter>('installation');
-  const [preset, setPreset] = useState<PeriodPreset>('tout');
-  const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
-  const [customTo, setCustomTo] = useState(todayStr());
+  const isAdmin = user.role === 'admin' || user.role === 'superviseur';
+
+  const [search, setSearch] = useState('');
+  const [fType, setFType] = useState('');
   const [fEquipe, setFEquipe] = useState('');
-  const [fVille, setFVille] = useState('');
-  const [delaiDetail, setDelaiDetail] = useState<'dans' | 'hors' | null>(null);
-  const [repeatsOpen, setRepeatsOpen] = useState(false);
+  const [fStatus, setFStatus] = useState('');
+  const [fDate, setFDate] = useState('');
+  // Par défaut, on n'affiche que l'essentiel : ce qui n'est pas encore OK, ou ce qui est
+  // prévu aujourd'hui — pas les milliers de situations déjà closes des mois précédents.
+  const [showEnCoursOnly, setShowEnCoursOnly] = useState(true);
+  const [urgOpen, setUrgOpen] = useState(false);
+  const [nokFgp, setNokFgp] = useState('');
+  const [nokId, setNokId] = useState('');
+  const [nokInitialComment, setNokInitialComment] = useState('');
+  const [nokOpen, setNokOpen] = useState(false);
 
-  const period: PeriodFilter = preset === 'custom' ? { from: customFrom, to: customTo } : presetToRange(preset);
+  // Reassign modal
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [reassignFgp, setReassignFgp] = useState('');
+  const [reassignId, setReassignId] = useState('');
+  const [reassignEquipe, setReassignEquipe] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  const villes = useMemo(() => [...new Set(equipes.map((e) => e.ville ?? 'Nouakchott'))].sort(), [equipes]);
+  // Urgence form
+  const allZones = useMemo(() => [...new Set(situations.map((s) => s.zone))].sort(), [situations]);
+  const [urgZone, setUrgZone] = useState('');
+  const [urgType, setUrgType] = useState('DRG');
+  const [urgComment, setUrgComment] = useState('');
+  const [urgEquipe, setUrgEquipe] = useState('');
 
-  const scoped = useMemo(
+  const filtered = useMemo(
     () =>
       situations.filter((s) => {
-        if (!matchesNature(s, nature)) return false;
-        // Fichiers "installation" (DATE MESSAGE) laissent dateDepo vide par design —
-        // on filtre sur la date pertinente disponible (dateDepo, sinon dateMessage),
-        // sinon toutes ces situations étaient exclues de la période choisie.
-        if (!inPeriod(s.dateDepo || s.dateMessage || '', period)) return false;
+        if (search && !s.fgp.includes(search) && !s.zone.toLowerCase().includes(search.toLowerCase())) return false;
+        if (fType === '__installation__' && !MERGED_TYPES.includes(s.type)) return false;
+        else if (fType === '__derangement__' && s.type !== 'DRG') return false;
+        else if (fType && fType !== '__installation__' && fType !== '__derangement__' && s.type !== fType) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
-        if (fVille) {
-          const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
-          if ((eq?.ville ?? 'Nouakchott') !== fVille) return false;
+        if (fStatus && s.status !== fStatus) return false;
+        if (fDate && (s.dateDepo || s.dateMessage) !== fDate) return false;
+        // Vue par défaut : seulement les situations pas encore décidées (en attente / en
+        // cours) — OK et NON OK sont des issues finales, désactivable via le bouton.
+        if (showEnCoursOnly && !fStatus && !fDate) {
+          if (s.status !== 'pending' && s.status !== 'in_progress') return false;
         }
         return true;
       }),
-    [situations, nature, period, fEquipe, fVille, equipes],
+    [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
   );
 
-  const byEquipe = useMemo(() => statsByEquipe(scoped, equipes), [scoped, equipes]);
-  const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
-  const byType = useMemo(() => statsByType(scoped), [scoped]);
-  const repeats = useMemo(
-    () => repeatDerangementByClient(situations.filter((s) => inPeriod(s.dateDepo || s.dateMessage || '', period))),
-    [situations, period],
-  );
-
-  const total = scoped.length;
-  const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
-  const dansDelai = total - horsDelai;
-  const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
-  const today = todayStr();
-  const totalAujourdhui = scoped.filter((s) => (s.dateDepo || s.dateMessage) === today).length;
-  const weekStart = presetToRange('semaine').from!;
-  const totalSemaine = scoped.filter((s) => (s.dateDepo || s.dateMessage || '') >= weekStart).length;
-  const villesActives = new Set(
-    scoped.map((s) => {
-      const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
-      return eq?.ville ?? 'Nouakchott';
-    }),
-  ).size;
-
-  const delaiDetailRows = useMemo(() => {
-    if (!delaiDetail) return [];
-    return scoped.filter((s) => (delaiDetail === 'hors' ? isHorsDelai(s) : !isHorsDelai(s)));
-  }, [scoped, delaiDetail]);
-
-  // Courbe de tendance (30 derniers jours de la période, ou toute la période si + courte)
-  const trendPoints = useMemo(() => {
-    const days: string[] = [];
-    const end = period.to ? new Date(period.to) : new Date();
-    const span = 29;
-    for (let i = span; i >= 0; i--) {
-      const d = new Date(end);
-      d.setDate(end.getDate() - i);
-      days.push(d.toISOString().slice(0, 10));
+  const handleMarkOK = async (id: string, fgp: string) => {
+    try {
+      await markOK(id);
+      showToast(`FGP ${fgp} marqué OK `, 'success');
+    } catch (err: any) {
+      showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
     }
-    const byDay: Record<string, number> = {};
-    situations
-      .filter((s) => matchesNature(s, nature))
-      .forEach((s) => {
-        const d = s.dateDepo || s.dateMessage;
-        if (d) byDay[d] = (byDay[d] ?? 0) + 1;
-      });
-    return days.map((d) => ({ label: d.slice(8, 10) + '/' + d.slice(5, 7), value: byDay[d] ?? 0 }));
-  }, [situations, nature, period.to]);
+  };
+  const handleMarkNOK = (id: string, fgp: string, existingComment = '') => {
+    setNokId(id);
+    setNokFgp(fgp);
+    setNokInitialComment(existingComment);
+    setNokOpen(true);
+  };
+  const handleNOKConfirm = async (comment: string) => {
+    try {
+      await markNonOK(nokId, comment);
+      setNokOpen(false);
+      showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
+    } catch (err: any) {
+      showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
+    }
+  };
 
-  // Répartition par jour de semaine
-  const weekdayData = useMemo(() => {
-    const counts = [0, 0, 0, 0, 0, 0, 0];
-    scoped.forEach((s) => {
-      const d = s.dateDepo || s.dateMessage;
-      if (d) counts[new Date(d).getDay()]++;
-    });
-    return WEEKDAYS.map((label, i) => ({ label, value: counts[i] }));
-  }, [scoped]);
+  const openReassign = (id: string, fgp: string, currentEquipe: string) => {
+    setReassignId(id);
+    setReassignFgp(fgp);
+    setReassignEquipe(equipes.find((e) => e.name.toLowerCase() === currentEquipe?.toLowerCase())?.id ?? '');
+    setReassignOpen(true);
+  };
 
-  // Classement équipes les plus performantes (taux de conformité)
-  const leaderboard = useMemo(
-    () =>
-      byEquipe
-        .filter((e) => e.total >= 1)
-        .slice()
-        .sort((a, b) => b.pctConformite - a.pctConformite || b.total - a.total)
-        .slice(0, 5)
-        .map((e) => ({
-          name: e.equipe,
-          sub: `${e.ville} — ${e.total} dossier(s)`,
-          value: e.pctConformite,
-          unit: '%',
-          color: getEquipeColor(e.equipe, equipes),
-        })),
-    [byEquipe, equipes],
-  );
+  const handleReassign = async () => {
+    const eq = equipes.find((e) => e.id === reassignEquipe);
+    if (!eq) {
+      showToast('Sélectionnez une équipe', 'error');
+      return;
+    }
+    setSaving(true);
+    // `reassign` (store) persiste déjà en base — pas d'appel direct à reassignSituationEquipe ici.
+    reassign(reassignId, eq.name);
+    setSaving(false);
+    setReassignOpen(false);
+    showToast(`FGP ${reassignFgp} → ${eq.name} `, 'success');
+  };
 
-  const donutData = byVille.map((v) => ({ label: v.ville, value: v.total, color: VILLE_COLORS[v.ville] ?? '#546E7A' }));
-
-  const handleExport = () => {
-    exportStatsToExcel({
-      fileName: `stats_${nature}_${period.from ?? 'all'}_${period.to ?? 'all'}.xlsx`,
-      byEquipe,
-      byVille,
-      byType,
-      repeats,
-    });
+  const submitUrgence = async () => {
+    if (!urgComment.trim()) {
+      showToast('Commentaire obligatoire', 'error');
+      return;
+    }
+    const zone = urgZone || allZones[0];
+    // If equipe specified, override the zone-based auto-assignment
+    await addUrgence(zone, urgType, urgComment.trim(), urgEquipe || undefined);
+    setUrgOpen(false);
+    setUrgComment('');
+    setUrgEquipe('');
+    showToast(`Urgence créée → ${urgEquipe || 'auto-assignée'} `, 'warning');
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-black text-slate-900">Statistiques</h1>
-          <p className="text-slate-400 text-sm">Délai / conformité par équipe, ville, type — installation & dérangement séparés</p>
+          <h1 className="text-2xl font-black text-slate-900">Situations</h1>
+          <p className="text-slate-400 text-sm">
+            {filtered.length} / {situations.length} situations
+            {showEnCoursOnly && !fStatus && !fDate && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
+          </p>
         </div>
-        <Button icon="" variant="outline" onClick={handleExport}>
-          Exporter Excel
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setShowEnCoursOnly(!showEnCoursOnly)}>
+            {showEnCoursOnly ? "Voir tout l'historique" : 'Revenir à "en cours" seulement'}
+          </Button>
+          {isAdmin && (
+            <Button variant="warning" icon="" onClick={() => setUrgOpen(true)}>
+              Créer Urgence
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* Nature toggle */}
-      <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
-        {(['all', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
-          <button
-            key={n}
-            onClick={() => setNature(n)}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
-          >
-            {n === 'all' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
-          </button>
-        ))}
-      </div>
-
-      {/* Filters */}
       <Card>
         <CardHeader>
+          {/* Filters */}
           <div className="flex items-center gap-2 flex-wrap w-full">
-            <Select value={preset} onChange={(e) => setPreset(e.target.value as PeriodPreset)} style={{ width: 'auto' }}>
-              <option value="tout">Toute la période</option>
-              <option value="jour">Aujourd'hui</option>
-              <option value="semaine">Cette semaine</option>
-              <option value="mois">Ce mois</option>
-              <option value="custom">Période personnalisée</option>
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 flex-1 min-w-48">
+              <span className="text-slate-400"></span>
+              <input
+                className="bg-transparent text-sm focus:outline-none flex-1"
+                placeholder="Rechercher FGP, zone..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <Select value={fType} onChange={(e) => setFType(e.target.value)} style={{ width: 'auto' }}>
+              <option value="">Tous types</option>
+              <option value="__installation__">Installation (CPL/TRL/CMI/CLS/RLR/CST/ANS)</option>
+              <option value="__derangement__">Dérangement (DRG)</option>
+              {['CPL', 'DRG', 'TRL', 'CST', 'ANS', 'CLS', 'CMI', 'RLR'].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
             </Select>
-            {preset === 'custom' && (
-              <>
-                <input
-                  type="date"
-                  value={customFrom}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                />
-                <span className="text-slate-400 text-sm">→</span>
-                <input
-                  type="date"
-                  value={customTo}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                />
-              </>
-            )}
             <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} style={{ width: 'auto' }}>
               <option value="">Toutes équipes</option>
               {equipes.map((e) => (
@@ -242,276 +192,231 @@ export default function StatistiquesPage() {
                 </option>
               ))}
             </Select>
-            <Select value={fVille} onChange={(e) => setFVille(e.target.value)} style={{ width: 'auto' }}>
-              <option value="">Toutes villes</option>
-              {villes.map((v) => (
-                <option key={v} value={v}>
-                  {v}
+            <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
+              <option value="">Tous statuts</option>
+              <option value="pending">En attente</option>
+              <option value="in_progress">En cours</option>
+              <option value="ok">OK</option>
+              <option value="non_ok">NON OK</option>
+              <option value="urgent">Urgent</option>
+            </Select>
+            <input
+              type="date"
+              value={fDate}
+              onChange={(e) => setFDate(e.target.value)}
+              className="border border-slate-200 rounded-lg px-2 py-2 text-sm"
+              title="Filtrer par date de dépôt"
+            />
+          </div>
+        </CardHeader>
+
+        {filtered.length === 0 ? (
+          <EmptyState icon="" text="Aucune situation trouvée" />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  {[
+                    'FGP',
+                    'Type',
+                    'Date Message',
+                    'Service Dest.',
+                    'Zone',
+                    'Date Dépôt',
+                    'Date Mise en Service',
+                    'Motif',
+                    'Équipe',
+                    'Délai',
+                    'Conformité',
+                    'Statut',
+                    'Actions',
+                  ].map((h) => (
+                    <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((s) => (
+                  <tr
+                    key={s.id}
+                    className={`border-b border-slate-50 hover:bg-slate-50/50 transition-colors ${s.isUrgent ? 'bg-orange-50/30' : ''}`}
+                  >
+                    <td className="px-3 py-3 font-bold text-slate-800">
+                      {s.fgp}
+                      {s.isUrgent && <span className="ml-1 text-orange-500 text-xs"></span>}
+                    </td>
+                    <td className="px-3 py-3">
+                      <TypeBadge type={s.type} />
+                    </td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateMessage || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-400">{s.serviceDestination || '—'}</td>
+                    <td className="px-3 py-3">
+                      <ZoneChip zone={s.zone} />
+                    </td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
+                      {s.status === 'non_ok' && s.comment ? (
+                        <span className="text-red-600 font-medium">{s.comment}</span>
+                      ) : (
+                        s.motif || '—'
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
+                    </td>
+                    <td className="px-3 py-3 text-xs text-center">
+                      {s.status === 'non_ok' && MERGED_TYPES.includes(s.type)
+                        ? '—'
+                        : s.dateDepo || s.dateMessage
+                          ? `${calcDelai(s)}j`
+                          : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-xs text-center">
+                      {!(s.status === 'non_ok' && MERGED_TYPES.includes(s.type)) && (s.dateDepo || s.dateMessage) ? (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                        >
+                          {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className="px-3 py-3">
+                      <StatusBadge status={s.status} />
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex gap-2 flex-wrap items-center">
+                        {s.status !== 'ok' && (
+                          <button
+                            onClick={() => handleMarkOK(s.id, s.fgp)}
+                            title="Marquer OK"
+                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
+                          >
+                            OK
+                          </button>
+                        )}
+                        {s.status !== 'non_ok' && (
+                          <button
+                            onClick={() => handleMarkNOK(s.id, s.fgp, '')}
+                            title="Marquer NON OK"
+                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-red-100 hover:bg-red-600 hover:text-white text-red-700"
+                          >
+                            NOK
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => openReassign(s.id, s.fgp, s.equipe)}
+                            className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95 shadow-sm"
+                          >
+                            Réaffecter équipe
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* ─── Créer Urgence Modal */}
+      <Modal open={urgOpen} onClose={() => setUrgOpen(false)} title=" Créer une Urgence">
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Zone</label>
+            <Select className="w-full" value={urgZone || allZones[0]} onChange={(e) => setUrgZone(e.target.value)}>
+              {allZones.map((z) => (
+                <option key={z} value={z}>
+                  {z}
                 </option>
               ))}
             </Select>
           </div>
-        </CardHeader>
-      </Card>
-
-      {/* KPIs — style dashboard (villes actives / semaine / jour / total) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard value={`${villesActives}/${villes.length}`} label="Villes actives" icon="" accent="#1565C0" />
-        <StatCard value={totalSemaine} label="Cette semaine" icon="" accent="#2E7D32" />
-        <StatCard value={totalAujourdhui} label="Aujourd'hui" icon="" accent="#00838F" />
-        <StatCard value={total} label="Total période" icon="" accent="#E65100" />
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard value={`${pctConf}%`} label="Conformité" icon="" accent="#2E7D32" />
-        <StatCard
-          value={dansDelai}
-          label="Dans délai"
-          icon=""
-          accent="#1565C0"
-          active={delaiDetail === 'dans'}
-          onClick={() => setDelaiDetail(delaiDetail === 'dans' ? null : 'dans')}
-        />
-        <StatCard
-          value={horsDelai}
-          label="Hors délai"
-          icon=""
-          accent="#C62828"
-          active={delaiDetail === 'hors'}
-          onClick={() => setDelaiDetail(delaiDetail === 'hors' ? null : 'hors')}
-        />
-        <StatCard
-          value={repeats.length}
-          label="DRG répétés"
-          icon=""
-          accent="#8E24AA"
-          active={repeatsOpen}
-          onClick={() => setRepeatsOpen(!repeatsOpen)}
-        />
-      </div>
-
-      {/* Détail — situations dans/hors délai (clic sur les cartes ci-dessus) */}
-      {delaiDetail && (
-        <Card className={delaiDetail === 'hors' ? 'border-red-200 bg-red-50/30' : 'border-blue-200 bg-blue-50/30'}>
-          <CardHeader>
-            <div className="flex items-center justify-between w-full">
-              <CardTitle>
-                {delaiDetail === 'hors' ? 'Situations hors délai' : 'Situations dans les délais'} ({delaiDetailRows.length})
-              </CardTitle>
-              <button onClick={() => setDelaiDetail(null)} className="text-xs font-semibold text-slate-500 hover:text-slate-700">
-                Fermer ✕
-              </button>
-            </div>
-          </CardHeader>
-          {delaiDetailRows.length === 0 ? (
-            <EmptyState icon="" text="Aucune situation" />
-          ) : (
-            <div className="overflow-x-auto max-h-96 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-slate-50">
-                  <tr className="border-b border-slate-100">
-                    {['FGP', 'Type', 'Zone', 'Équipe', 'Motif', 'Statut'].map((h) => (
-                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {delaiDetailRows.slice(0, 300).map((s) => (
-                    <tr key={s.id} className="border-b border-slate-50">
-                      <td className="px-3 py-2 font-bold text-slate-800">{s.fgp}</td>
-                      <td className="px-3 py-2">
-                        <TypeBadge type={s.type} />
-                      </td>
-                      <td className="px-3 py-2">
-                        <ZoneChip zone={s.zone} />
-                      </td>
-                      <td className="px-3 py-2">
-                        <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-500 max-w-40 truncate">{s.motif || '—'}</td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
-                        >
-                          {s.status === 'ok' ? 'OK' : s.status === 'non_ok' ? 'NON OK' : s.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {delaiDetailRows.length > 300 && (
-                <p className="text-[11px] text-slate-400 p-3">
-                  Affichage limité à 300 lignes sur {delaiDetailRows.length} — affinez les filtres pour cibler.
-                </p>
-              )}
-            </div>
-          )}
-        </Card>
-      )}
-
-      {/* DRG répétés — même emplacement/style que le détail délai ci-dessus */}
-      {repeatsOpen && (
-        <Card className="border-purple-200 bg-purple-50/30">
-          <CardHeader>
-            <div className="flex items-center justify-between w-full">
-              <CardTitle>DRG répétés ({repeats.length}) — triés du plus au moins répété</CardTitle>
-              <button onClick={() => setRepeatsOpen(false)} className="text-xs font-semibold text-slate-500 hover:text-slate-700">
-                Fermer ✕
-              </button>
-            </div>
-          </CardHeader>
-          {repeats.length === 0 ? (
-            <EmptyState icon="" text="Aucun client avec plusieurs dérangements sur la période" />
-          ) : (
-            <div className="overflow-x-auto max-h-96 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-slate-50">
-                  <tr className="border-b border-slate-100">
-                    {['FGP', 'Nb interventions', 'Zone', 'Équipe', 'Motifs'].map((h) => (
-                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {repeats.slice(0, 300).map((r) => (
-                    <tr key={r.fgp} className="border-b border-slate-50">
-                      <td className="px-3 py-2 font-bold text-slate-800">{r.fgp}</td>
-                      <td className="px-3 py-2">
-                        <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-bold">{r.count}×</span>
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-500">{r.zone}</td>
-                      <td className="px-3 py-2">
-                        <EquipeTag name={r.equipe || '—'} color={getEquipeColor(r.equipe, equipes)} />
-                      </td>
-                      <td className="px-3 py-2 text-xs text-slate-400 max-w-xs truncate" title={r.motifs.join(' | ')}>
-                        {r.motifs.join(' | ') || '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {repeats.length > 300 && (
-                <p className="text-[11px] text-slate-400 p-3">
-                  Affichage limité à 300 lignes sur {repeats.length} — affinez les filtres pour cibler.
-                </p>
-              )}
-            </div>
-          )}
-        </Card>
-      )}
-
-      {/* Équipes les plus actives + courbe de tendance */}
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle> Équipes les plus actives</CardTitle>
-          </CardHeader>
-          <div className="p-5">
-            {byEquipe.length === 0 ? (
-              <EmptyState icon="" text="Aucune donnée" />
-            ) : (
-              <RankedBars
-                data={byEquipe.slice(0, 8).map((e) => ({ label: e.equipe, value: e.total, sub: `(${e.pctConformite}%)` }))}
-                color="#1565C0"
-              />
-            )}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Type</label>
+            <Select className="w-full" value={urgType} onChange={(e) => setUrgType(e.target.value)}>
+              <option value="DRG">DRG — Dérangement</option>
+              <option value="CPL">CPL — Installation</option>
+            </Select>
           </div>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle> Tendance — 30 derniers jours</CardTitle>
-          </CardHeader>
-          <div className="p-5">
-            <TrendArea points={trendPoints} color={nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0'} />
-          </div>
-        </Card>
-      </div>
 
-      {/* Répartition par ville (donut) + par jour de semaine */}
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle> Répartition par ville</CardTitle>
-          </CardHeader>
-          <div className="p-5">
-            {donutData.length === 0 ? <EmptyState icon="" text="Aucune donnée" /> : <DonutChart data={donutData} />}
-          </div>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle> Répartition par jour de semaine</CardTitle>
-          </CardHeader>
-          <div className="p-5">
-            <WeekdayBars data={weekdayData} color={nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0'} />
-          </div>
-        </Card>
-      </div>
-
-      {/* Leaderboard équipes + par type */}
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle> Équipes les plus performantes (% conformité)</CardTitle>
-          </CardHeader>
-          <div className="p-5">
-            {leaderboard.length === 0 ? <EmptyState icon="" text="Aucune donnée" /> : <Leaderboard items={leaderboard} />}
-          </div>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle> Par type (CLS, CPL, RLR, CMI, TRL, CST...)</CardTitle>
-          </CardHeader>
-          <div className="p-5">
-            {byType.length === 0 ? (
-              <EmptyState icon="" text="Aucune donnée" />
-            ) : (
-              <RankedBars data={byType.map((t) => ({ label: t.type, value: t.total, sub: `(${t.pctConformite}%)` }))} color="#00838F" />
-            )}
-          </div>
-        </Card>
-      </div>
-
-      {/* Par ville - tableau détaillé */}
-      <Card>
-        <CardHeader>
-          <CardTitle> Détail par ville</CardTitle>
-        </CardHeader>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-100">
-                {['Ville', 'Total', 'Dans délai', 'Hors délai', '% Conf.'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {byVille.map((v) => (
-                <tr key={v.ville} className="border-b border-slate-50">
-                  <td className="px-3 py-2 font-semibold text-slate-700">{v.ville}</td>
-                  <td className="px-3 py-2">{v.total}</td>
-                  <td className="px-3 py-2 text-green-700 font-semibold">{v.dansDelai}</td>
-                  <td className="px-3 py-2 text-red-700 font-semibold">{v.horsDelai}</td>
-                  <td className="px-3 py-2">{v.pctConformite}%</td>
-                </tr>
+          {/* NEW: Équipe assignment */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">
+              Affecter à l'équipe <span className="text-slate-300 font-normal">(optionnel — sinon auto par zone)</span>
+            </label>
+            <Select className="w-full" value={urgEquipe} onChange={(e) => setUrgEquipe(e.target.value)}>
+              <option value="">Auto (par zone)</option>
+              {equipes.map((e) => (
+                <option key={e.id} value={e.name}>
+                  {e.name} — {e.leader}
+                </option>
               ))}
-              {byVille.length === 0 && (
-                <tr>
-                  <td colSpan={5}>
-                    <EmptyState icon="" text="Aucune donnée" />
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            </Select>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Commentaire (FGP + Tel client + Problème)</label>
+            <Textarea
+              rows={4}
+              value={urgComment}
+              onChange={(e) => setUrgComment(e.target.value)}
+              placeholder={'FGP: 223344\nClient: 46464646\nPas de signal fibre'}
+            />
+          </div>
+          <div className="flex gap-3 justify-end pt-2">
+            <Button variant="outline" onClick={() => setUrgOpen(false)}>
+              Annuler
+            </Button>
+            <Button variant="danger" onClick={submitUrgence}>
+              {' '}
+              Créer Urgence
+            </Button>
+          </div>
         </div>
-      </Card>
+      </Modal>
+
+      {/* ─── Réaffecter situation modal */}
+      <Modal open={reassignOpen} onClose={() => setReassignOpen(false)} title={` Réaffecter FGP ${reassignFgp}`}>
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs font-bold text-slate-500 block mb-1.5">Nouvelle équipe</label>
+            <Select className="w-full" value={reassignEquipe} onChange={(e) => setReassignEquipe(e.target.value)}>
+              <option value="">-- Sélectionner --</option>
+              {equipes.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name} — {e.leader}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex gap-3 justify-end pt-2">
+            <Button variant="outline" onClick={() => setReassignOpen(false)}>
+              Annuler
+            </Button>
+            <Button onClick={handleReassign} disabled={saving}>
+              {saving ? '...' : ' Confirmer'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* NOK sheet */}
+      <NOKSheet
+        open={nokOpen}
+        fgp={nokFgp}
+        initialComment={nokInitialComment}
+        onClose={() => setNokOpen(false)}
+        onConfirm={handleNOKConfirm}
+      />
     </div>
   );
 }
