@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
-import { calcDelai, isHorsDelai, MERGED_TYPES } from '@/utils/stats';
+import { calcDelai, isHorsDelai, countPoteaux, MERGED_TYPES } from '@/utils/stats';
 import {
   Card,
   CardHeader,
@@ -22,6 +22,8 @@ import { useToast } from '@/components/ui';
 export default function SituationsPage() {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
+  const scans = useAppStore((s) => s.scans);
+  const loadScans = useAppStore((s) => s.loadScans);
   const user = useAppStore((s) => s.user)!;
   const markOK = useAppStore((s) => s.markOK);
   const markNonOK = useAppStore((s) => s.markNonOK);
@@ -55,6 +57,25 @@ export default function SituationsPage() {
 
   // Urgence form
   const allZones = useMemo(() => [...new Set(situations.map((s) => s.zone))].sort(), [situations]);
+
+  // ── Correspondance Scans Réseau ↔ Situations : ONU Name == FGP ──
+  // On charge les scans une seule fois (silencieux si déjà en mémoire) pour pouvoir
+  // afficher l'état réseau (scanné/non scanné, qualité signal) de chaque FGP.
+  useEffect(() => {
+    if (isAdmin && scans.length === 0) loadScans();
+  }, [isAdmin]);
+  // Normalisation utilisée des DEUX côtés (clé de la map ET lookup) : trim + majuscules.
+  // Sans ça, une différence de casse ou un espace superflu entre s.fgp (Situations) et
+  // sc.onuName (Scans) fait échouer silencieusement la correspondance → colonnes réseau
+  // vides ("—") alors que le FGP existe bel et bien dans le fichier de scan.
+  const normalizeKey = (v: string | null | undefined) => (v ?? '').trim().toUpperCase();
+  const scanByFgp = useMemo(() => {
+    const map = new Map<string, (typeof scans)[number]>();
+    scans.forEach((sc) => {
+      if (sc.onuName) map.set(normalizeKey(sc.onuName), sc);
+    });
+    return map;
+  }, [scans]);
   const [urgZone, setUrgZone] = useState('');
   const [urgType, setUrgType] = useState('DRG');
   const [urgComment, setUrgComment] = useState('');
@@ -226,10 +247,18 @@ export default function SituationsPage() {
                     'Date Dépôt',
                     'Date Mise en Service',
                     'Motif',
+                    'Poteau',
                     'Équipe',
                     'Délai',
-                   'Conformité',
-                    'Poteau',
+                    'Conformité',
+                    'Réseau',
+                    'ONU Install Time',
+                    'Port ID',
+                    'ONU ID',
+                    'SN/MAC',
+                    'Rx (dBm)',
+                    'Ranging (m)',
+                    'Remarque',
                     'Statut',
                     'Actions',
                   ].map((h) => (
@@ -240,7 +269,9 @@ export default function SituationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((s) => (
+                {filtered.map((s) => {
+                  const sc = scanByFgp.get(normalizeKey(s.fgp));
+                  return (
                   <tr
                     key={s.id}
                     className={`border-b border-slate-50 hover:bg-slate-50/50 transition-colors ${s.isUrgent ? 'bg-orange-50/30' : ''}`}
@@ -266,6 +297,16 @@ export default function SituationsPage() {
                         s.motif || '—'
                       )}
                     </td>
+                    <td className="px-3 py-3 text-xs text-center">
+                      {(() => {
+                        const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+                        return nb > 0 ? (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{nb}</span>
+                        ) : (
+                          '—'
+                        );
+                      })()}
+                    </td>
                     <td className="px-3 py-3">
                       <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
                     </td>
@@ -287,8 +328,34 @@ export default function SituationsPage() {
                         '—'
                       )}
                     </td>
-                   <td className="px-3 py-3 text-xs text-center">{s.poteau ? s.poteau : '—'}</td>
-                    <td className="px-3 py-3 text-xs text-center">{s.poteau ? s.poteau : '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">
+                      {(() => {
+                        if (!sc) return <span className="text-slate-300">—</span>;
+                        if (sc.result !== 'SCANNE') {
+                          return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">Non scanné</span>;
+                        }
+                        const rx = sc.rxPower;
+                        const quality = rx == null ? null : rx >= -22 ? 'Excellent' : rx >= -25 ? 'Moyen' : 'Dégradé';
+                        const color =
+                          quality === 'Excellent'
+                            ? 'bg-green-100 text-green-700'
+                            : quality === 'Moyen'
+                              ? 'bg-yellow-100 text-yellow-700'
+                              : 'bg-red-100 text-red-700';
+                        return (
+                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${color}`} title={rx != null ? `${rx} dBm` : ''}>
+                            {quality ?? 'Scanné'}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{sc?.timeAddedToNms || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">{sc?.portId ?? '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">{sc?.onuId ?? '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-400">{sc?.snMac || '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">{sc?.rxPower != null ? sc.rxPower : '—'}</td>
+                    <td className="px-3 py-3 text-xs text-center">{sc?.ranging != null ? sc.ranging : '—'}</td>
+                    <td className="px-3 py-3 text-xs text-slate-400 max-w-32 truncate">{sc?.remarque || '—'}</td>
                     <td className="px-3 py-3">
                       <StatusBadge status={s.status} />
                     </td>
@@ -323,7 +390,8 @@ export default function SituationsPage() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
