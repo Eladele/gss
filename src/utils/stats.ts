@@ -66,9 +66,11 @@ export function calcDelai(s: Situation): number {
 }
 
 export function isHorsDelai(s: Situation): boolean {
-  // Comparé directement à la valeur importée du fichier (NbreJourDélaisInst = s.delai),
-  // pas à un recalcul depuis les dates : DRG hors délai si > 1, Installation si > 2.
-  return s.delai > delaiThresholdFor(s);
+  // Basé sur le calcul en direct (jours ouvrés, dimanche/fériés exclus) — identique à ce
+  // qu'affiche la page Situations — plutôt que sur la valeur brute importée du fichier.
+  // S'applique automatiquement à toutes les données, y compris déjà importées, puisque
+  // c'est un calcul en direct à partir des dates, pas une valeur figée.
+  return calcDelai(s) > delaiThresholdFor(s);
 }
 
 export function villeForEquipe(equipeName: string, equipes: Equipe[]): string {

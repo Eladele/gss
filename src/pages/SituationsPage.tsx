@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
-import { calcDelai, MERGED_TYPES } from '@/utils/stats';
+import { calcDelai, isHorsDelai, MERGED_TYPES } from '@/utils/stats';
 import {
   Card,
   CardHeader,
@@ -37,8 +37,8 @@ export default function SituationsPage() {
   const [fEquipe, setFEquipe] = useState('');
   const [fStatus, setFStatus] = useState('');
   const [fDate, setFDate] = useState('');
-  // Par défaut, on n'affiche que l'essentiel : les situations pas encore décidées
-  // (en attente / en cours) — OK et NON OK sont des issues finales, masquées par défaut.
+  // Par défaut, on n'affiche que l'essentiel : ce qui n'est pas encore OK, ou ce qui est
+  // prévu aujourd'hui — pas les milliers de situations déjà closes des mois précédents.
   const [showEnCoursOnly, setShowEnCoursOnly] = useState(true);
   const [urgOpen, setUrgOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
@@ -80,7 +80,7 @@ export default function SituationsPage() {
     [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
   );
 
- const handleMarkOK = async (id: string, fgp: string) => {
+  const handleMarkOK = async (id: string, fgp: string) => {
     try {
       await markOK(id);
       showToast(`FGP ${fgp} marqué OK `, 'success');
@@ -276,11 +276,11 @@ export default function SituationsPage() {
                           : '—'}
                     </td>
                     <td className="px-3 py-3 text-xs text-center">
-                      {!(s.status === 'non_ok' && MERGED_TYPES.includes(s.type)) && s.conformite ? (
+                      {!(s.status === 'non_ok' && MERGED_TYPES.includes(s.type)) && (s.dateDepo || s.dateMessage) ? (
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.conformite === 'HorsDelais' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
                         >
-                          {s.conformite === 'HorsDelais' ? 'HorsDélais' : 'TLID'}
+                          {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
                         </span>
                       ) : (
                         '—'
