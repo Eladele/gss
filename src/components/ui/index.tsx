@@ -180,7 +180,134 @@ export function NOKSheet({
   );
 }
 
-// ─── Toast ────────────────────────────────────────────────────────────────────
+// ─── OKSheet (formulaire de clôture — pré-rempli, tout modifiable) ──────────
+export interface OKSheetValues {
+  poteau: number;
+  equipe: string;
+  motif: string;
+  dateClt: string;
+  rxDbm: number | '';
+  rangingM: number | '';
+}
+
+export function OKSheet({
+  open,
+  fgp,
+  initialValues,
+  equipesOptions,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  fgp: string;
+  initialValues: OKSheetValues;
+  equipesOptions: { id: string; name: string }[];
+  onClose: () => void;
+  onConfirm: (values: OKSheetValues) => void;
+}) {
+  const [values, setValues] = useState<OKSheetValues>(initialValues);
+  useEffect(() => {
+    if (open) setValues(initialValues);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  if (!open) return null;
+
+  const set = <K extends keyof OKSheetValues>(key: K, v: OKSheetValues[K]) => setValues((s) => ({ ...s, [key]: v }));
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} />
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl p-6 shadow-2xl animate-slide-up max-h-[90vh] overflow-y-auto">
+        <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-4" />
+        <p className="font-bold text-green-700 text-lg mb-1">Clôturer OK — FGP {fgp}</p>
+        <p className="text-xs text-slate-500 mb-4">Les champs sont pré-remplis avec ce qui est déjà programmé — modifie si besoin.</p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Poteau (nombre utilisé)</label>
+            <input
+              type="number"
+              min={0}
+              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+              value={values.poteau}
+              onChange={(e) => set('poteau', Number(e.target.value) || 0)}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Équipe</label>
+            <select
+              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+              value={values.equipe}
+              onChange={(e) => set('equipe', e.target.value)}
+            >
+              <option value="">-- Sélectionner --</option>
+              {equipesOptions.map((eq) => (
+                <option key={eq.id} value={eq.name}>
+                  {eq.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Motif (si nécessaire)</label>
+            <textarea
+              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm resize-none bg-slate-50 focus:outline-none focus:border-blue-500"
+              rows={2}
+              value={values.motif}
+              onChange={(e) => set('motif', e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Date de mise en service</label>
+            <input
+              type="date"
+              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+              value={values.dateClt}
+              onChange={(e) => set('dateClt', e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Rx (dBm)</label>
+              <input
+                type="number"
+                step="0.01"
+                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+                value={values.rxDbm}
+                onChange={(e) => set('rxDbm', e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Ranging (m)</label>
+              <input
+                type="number"
+                step="0.01"
+                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+                value={values.rangingM}
+                onChange={(e) => set('rangingM', e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 mt-5">
+          <Button variant="outline" size="lg" className="flex-1" onClick={onClose}>
+            Annuler
+          </Button>
+          <Button variant="success" size="lg" className="flex-1" onClick={() => onConfirm(values)}>
+            Confirmer OK
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+
 interface Toast {
   id: number;
   message: string;

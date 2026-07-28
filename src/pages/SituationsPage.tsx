@@ -13,10 +13,12 @@ import {
   EquipeTag,
   Modal,
   NOKSheet,
+  OKSheet,
   Select,
   Textarea,
   EmptyState,
 } from '@/components/ui';
+import type { OKSheetValues } from '@/components/ui';
 import { useToast } from '@/components/ui';
 
 export default function SituationsPage() {
@@ -47,6 +49,18 @@ export default function SituationsPage() {
   const [nokId, setNokId] = useState('');
   const [nokInitialComment, setNokInitialComment] = useState('');
   const [nokOpen, setNokOpen] = useState(false);
+
+  const [okOpen, setOkOpen] = useState(false);
+  const [okId, setOkId] = useState('');
+  const [okFgp, setOkFgp] = useState('');
+  const [okInitialValues, setOkInitialValues] = useState<OKSheetValues>({
+    poteau: 0,
+    equipe: '',
+    motif: '',
+    dateClt: '',
+    rxDbm: '',
+    rangingM: '',
+  });
 
   // Reassign modal
   const [reassignOpen, setReassignOpen] = useState(false);
@@ -101,10 +115,35 @@ export default function SituationsPage() {
     [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
   );
 
-  const handleMarkOK = async (id: string, fgp: string) => {
+  const openOkSheet = (s: (typeof situations)[number]) => {
+    const sc = scanByFgp.get(s.fgp);
+    const defaultPoteau = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+    const today = new Date().toISOString().slice(0, 10);
+    setOkId(s.id);
+    setOkFgp(s.fgp);
+    setOkInitialValues({
+      poteau: defaultPoteau || 0,
+      equipe: s.equipe || '',
+      motif: s.motif || '',
+      dateClt: s.dateClt || today,
+      rxDbm: s.rxDbm ?? sc?.rxPower ?? '',
+      rangingM: s.rangingM ?? sc?.ranging ?? '',
+    });
+    setOkOpen(true);
+  };
+
+  const handleOkConfirm = async (values: OKSheetValues) => {
     try {
-      await markOK(id);
-      showToast(`FGP ${fgp} marqué OK `, 'success');
+      await markOK(okId, {
+        poteau: values.poteau,
+        equipe: values.equipe,
+        motif: values.motif,
+        dateClt: values.dateClt,
+        rxDbm: values.rxDbm === '' ? undefined : values.rxDbm,
+        rangingM: values.rangingM === '' ? undefined : values.rangingM,
+      });
+      setOkOpen(false);
+      showToast(`FGP ${okFgp} marqué OK `, 'success');
     } catch (err: any) {
       showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
     }
@@ -363,7 +402,7 @@ export default function SituationsPage() {
                       <div className="flex gap-2 flex-wrap items-center">
                         {s.status !== 'ok' && (
                           <button
-                            onClick={() => handleMarkOK(s.id, s.fgp)}
+                            onClick={() => openOkSheet(s)}
                             title="Marquer OK"
                             className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
                           >
@@ -487,6 +526,16 @@ export default function SituationsPage() {
         initialComment={nokInitialComment}
         onClose={() => setNokOpen(false)}
         onConfirm={handleNOKConfirm}
+      />
+
+      {/* OK sheet — clôture avec détails (poteau, équipe, motif, date, Rx, Ranging) */}
+      <OKSheet
+        open={okOpen}
+        fgp={okFgp}
+        initialValues={okInitialValues}
+        equipesOptions={equipes}
+        onClose={() => setOkOpen(false)}
+        onConfirm={handleOkConfirm}
       />
     </div>
   );

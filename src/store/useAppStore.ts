@@ -60,7 +60,10 @@ interface AppState {
   // Data loading
   loadAll: () => Promise<void>;
   // Situations
-  markOK: (id: string) => Promise<void>;
+  markOK: (
+    id: string,
+    details?: { poteau?: number; equipe?: string; motif?: string; dateClt?: string; rxDbm?: number; rangingM?: number },
+  ) => Promise<void>;
   markNonOK: (id: string, comment: string) => Promise<void>;
   addUrgence: (zone: string, type: string, comment: string, equipe?: string) => Promise<void>;
   importSituations: (rows: Situation[], fileName: string) => Promise<void>;
@@ -168,22 +171,41 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      markOK: async (id) => {
+      markOK: async (id, details) => {
         const today = new Date().toISOString().slice(0, 10);
         const previous = get().situations.find((s) => s.id === id);
         if (!previous) return;
-        const newDateClt = previous.dateClt || today;
+        const newDateClt = details?.dateClt || previous.dateClt || today;
         // Optimistic update — la "DATE MISE EN SERVICE" est posée automatiquement
-        // à la date système dès qu'une situation (installation ou dérangement) passe OK.
+        // à la date système dès qu'une situation (installation ou dérangement) passe OK,
+        // sauf si une date a été saisie dans le formulaire de clôture.
         // Ciblée par id (et non fgp) : un même FGP peut avoir plusieurs situations actives
         // en parallèle (types/motifs différents), il ne faut affecter QUE celle cliquée.
         set((s) => ({
           situations: s.situations.map((sit) =>
-            sit.id === id ? { ...sit, status: 'ok', updatedAt: new Date().toISOString(), dateClt: newDateClt } : sit,
+            sit.id === id
+              ? {
+                  ...sit,
+                  status: 'ok',
+                  updatedAt: new Date().toISOString(),
+                  dateClt: newDateClt,
+                  poteau: details?.poteau ?? sit.poteau,
+                  equipe: details?.equipe ?? sit.equipe,
+                  motif: details?.motif ?? sit.motif,
+                  rxDbm: details?.rxDbm ?? sit.rxDbm,
+                  rangingM: details?.rangingM ?? sit.rangingM,
+                }
+              : sit,
           ),
         }));
         try {
-          await updateSituationStatus(id, 'ok', '', newDateClt);
+          await updateSituationStatus(id, 'ok', '', newDateClt, {
+            poteau: details?.poteau,
+            equipe: details?.equipe,
+            motif: details?.motif,
+            rxDbm: details?.rxDbm ?? null,
+            rangingM: details?.rangingM ?? null,
+          });
         } catch (err: any) {
           // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser
           // croire à un succès (ex: contrainte d'unicité violée, RLS...).

@@ -33,9 +33,22 @@ export async function upsertSituation(sit: Situation): Promise<void> {
   if (error) console.error('upsertSituation:', error);
 }
 
-export async function updateSituationStatus(id: string, status: Situation['status'], comment = '', dateClt?: string): Promise<void> {
+export async function updateSituationStatus(
+  id: string,
+  status: Situation['status'],
+  comment = '',
+  dateClt?: string,
+  extra?: { poteau?: number; equipe?: string; motif?: string; rxDbm?: number | null; rangingM?: number | null },
+): Promise<void> {
   const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
   if (dateClt) payload.date_mise_en_service = dateClt;
+  if (extra) {
+    if (extra.poteau !== undefined) payload.poteau = extra.poteau;
+    if (extra.equipe !== undefined) payload.equipe = extra.equipe;
+    if (extra.motif !== undefined) payload.motif = extra.motif;
+    if (extra.rxDbm !== undefined) payload.rx_dbm = extra.rxDbm;
+    if (extra.rangingM !== undefined) payload.ranging_m = extra.rangingM;
+  }
   const { error } = await supabase.from('situations').update(payload).eq('id', id);
   if (error) {
     console.error('updateSituationStatus:', error);
@@ -192,6 +205,8 @@ function mapSituation(row: any): Situation {
    conformite: row.conformite ?? undefined,
     importId: row.import_id ?? undefined,
     poteau: row.poteau != null ? Number(row.poteau) : 0,
+    rxDbm: row.rx_dbm != null ? Number(row.rx_dbm) : undefined,
+    rangingM: row.ranging_m != null ? Number(row.ranging_m) : undefined,
   };
 }
 
