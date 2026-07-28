@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import type { Role } from '@/types';
 import {
@@ -17,7 +17,8 @@ import {
   Network,
   LogOut,
   Menu as MenuIcon,
-  X
+  X,
+  Download,
 } from 'lucide-react';
 
 // Pages
@@ -127,6 +128,40 @@ export default function AppLayout() {
   const [page, setPage] = useState<Page>(defaultPage);
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // ── PWA Install Prompt ───────────────────────────────────────────────────────
+  // Capture l'événement natif du navigateur AVANT qu'il ne soit affiché automatiquement
+  // pour pouvoir le déclencher manuellement via notre bouton "Installer".
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    // Vérifie si l'app est déjà installée (mode standalone = lancée depuis l'écran d'accueil)
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setInstalled(true);
+      return;
+    }
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', () => {
+      setInstalled(true);
+      setInstallPrompt(null);
+    });
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstalled(true);
+      setInstallPrompt(null);
+    }
+  };
+
   const PageMap: Record<Page, React.ReactNode> = {
     dashboard: <Dashboard onNavigate={setPage} />,
     situations: <SituationsPage />,
@@ -167,6 +202,17 @@ export default function AppLayout() {
           <span className="font-semibold text-slate-800 text-sm hidden sm:block">{PAGE_TITLES[page]}</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Bouton installer l'app PWA */}
+          {installPrompt && !installed && (
+            <button
+              onClick={handleInstall}
+              title="Installer l'application sur votre appareil"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold text-blue-700 border border-blue-200 bg-blue-50 hover:bg-blue-100 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Installer</span>
+            </button>
+          )}
           <button
             onClick={() => setPage('notifications')}
             className="relative px-3 py-1.5 rounded-full hover:bg-slate-100 transition-colors text-xs font-semibold text-slate-600 border border-slate-200"
