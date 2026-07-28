@@ -228,23 +228,23 @@ export async function exportEmployesPresentsExcel(opts: {
 }) {
   const { month, employees, leaves } = opts;
   const [y, m] = month.split('-').map(Number);
-  const start = new Date(y, (m || 1) - 1, 1);
-  const end = new Date(y, m || 1, 0, 23, 59, 59);
 
-  // Mois suivant (M+1) — sert à détecter qui PART EN CONGÉ le mois prochain,
-  // pour doubler son salaire CE mois-ci.
-  const nextStart = new Date(y, m || 1, 1);
-  const nextEnd = new Date(y, (m || 1) + 1, 0, 23, 59, 59);
-
-  const overlaps = (l: LeaveRecord, rangeStart: Date, rangeEnd: Date) => {
-    if (!l.dateDebut || !l.dateFin) return false;
-    const d1 = new Date(l.dateDebut);
-    const d2 = new Date(l.dateFin);
-    return d1 <= rangeEnd && d2 >= rangeStart;
+  // On se base sur le MOIS DE DÉBUT du congé (pas sur un chevauchement de
+  // dates) : un congé "du 3 juin au 3 juillet" est un congé DE JUIN (comme
+  // l'indique toujours son motif, ex. "Congé annuel — Juin 2026"), même s'il
+  // déborde de quelques jours sur le mois suivant. Se baser sur un simple
+  // chevauchement excluait à tort l'employé du mois suivant entier.
+  const monthOf = (dateStr?: string): string | null => {
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return null;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
 
-  const onLeaveIds = new Set(leaves.filter((l) => overlaps(l, start, end)).map((l) => l.employeeId));
-  const doublingIds = new Set(leaves.filter((l) => overlaps(l, nextStart, nextEnd)).map((l) => l.employeeId));
+  const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+
+  const onLeaveIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === month).map((l) => l.employeeId));
+  const doublingIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === nextMonth).map((l) => l.employeeId));
 
   const present = employees
     .filter((e) => e.actif !== false && !onLeaveIds.has(e.id))
