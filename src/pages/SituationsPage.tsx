@@ -30,7 +30,6 @@ export default function SituationsPage() {
   const markOK = useAppStore((s) => s.markOK);
   const markNonOK = useAppStore((s) => s.markNonOK);
   const addUrgence = useAppStore((s) => s.addUrgence);
-  const reassign = useAppStore((s) => s.reassign);
   const loadAll = useAppStore((s) => s.loadAll);
   const { showToast } = useToast();
 
@@ -63,13 +62,6 @@ export default function SituationsPage() {
     scanStatut: 'NON SCANE',
   });
 
-  // Reassign modal
-  const [reassignOpen, setReassignOpen] = useState(false);
-  const [reassignFgp, setReassignFgp] = useState('');
-  const [reassignId, setReassignId] = useState('');
-  const [reassignEquipe, setReassignEquipe] = useState('');
-  const [saving, setSaving] = useState(false);
-
   // Urgence form
   const allZones = useMemo(() => [...new Set(situations.map((s) => s.zone))].sort(), [situations]);
 
@@ -96,6 +88,9 @@ export default function SituationsPage() {
   const [urgComment, setUrgComment] = useState('');
   const [urgEquipe, setUrgEquipe] = useState('');
 
+  const PAGE_SIZE = 25;
+  const [page, setPage] = useState(1);
+
   const filtered = useMemo(
     () =>
       situations.filter((s) => {
@@ -115,6 +110,17 @@ export default function SituationsPage() {
       }),
     [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
   );
+
+  // Colonnes réduites tant qu'on est dans la vue "en cours" par défaut (sans filtre
+  // statut/date explicite) — vue simplifiée pour aller à l'essentiel au quotidien.
+  const isEnCoursView = showEnCoursOnly && !fStatus && !fDate;
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, fType, fEquipe, fStatus, fDate, showEnCoursOnly]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
 
   const openOkSheet = (s: (typeof situations)[number]) => {
     const sc = scanByFgp.get(s.fgp);
@@ -165,27 +171,6 @@ export default function SituationsPage() {
     } catch (err: any) {
       showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
     }
-  };
-
-  const openReassign = (id: string, fgp: string, currentEquipe: string) => {
-    setReassignId(id);
-    setReassignFgp(fgp);
-    setReassignEquipe(equipes.find((e) => e.name.toLowerCase() === currentEquipe?.toLowerCase())?.id ?? '');
-    setReassignOpen(true);
-  };
-
-  const handleReassign = async () => {
-    const eq = equipes.find((e) => e.id === reassignEquipe);
-    if (!eq) {
-      showToast('Sélectionnez une équipe', 'error');
-      return;
-    }
-    setSaving(true);
-    // `reassign` (store) persiste déjà en base — pas d'appel direct à reassignSituationEquipe ici.
-    reassign(reassignId, eq.name);
-    setSaving(false);
-    setReassignOpen(false);
-    showToast(`FGP ${reassignFgp} → ${eq.name} `, 'success');
   };
 
   const submitUrgence = async () => {
@@ -280,30 +265,33 @@ export default function SituationsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
-                  {[
-                    'FGP',
-                    'Type',
-                    'Date Message',
-                    'Service Dest.',
-                    'Zone',
-                    'Date Dépôt',
-                    'Date Mise en Service',
-                    'Motif',
-                    'Poteau',
-                    'Équipe',
-                    'Délai',
-                    'Conformité',
-                    'Réseau',
-                    'ONU Install Time',
-                    'Port ID',
-                    'ONU ID',
-                    'SN/MAC',
-                    'Rx (dBm)',
-                    'Ranging (m)',
-                    'Remarque',
-                    'Statut',
-                    'Actions',
-                  ].map((h) => (
+                  {(isEnCoursView
+                    ? ['FGP', 'Type', 'Date Message', 'Zone', 'Statut', 'Actions']
+                    : [
+                        'FGP',
+                        'Type',
+                        'Date Message',
+                        'Service Dest.',
+                        'Zone',
+                        'Date Dépôt',
+                        'Date Mise en Service',
+                        'Motif',
+                        'Poteau',
+                        'Équipe',
+                        'Délai',
+                        'Conformité',
+                        'Réseau',
+                        'ONU Install Time',
+                        'Port ID',
+                        'ONU ID',
+                        'SN/MAC',
+                        'Rx (dBm)',
+                        'Ranging (m)',
+                        'Remarque',
+                        'Statut',
+                        'Actions',
+                      ]
+                  ).map((h) => (
                     <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
                       {h}
                     </th>
@@ -311,7 +299,7 @@ export default function SituationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((s) => {
+                {paginated.map((s) => {
                   const sc = scanByFgp.get(normalizeKey(s.fgp));
                   return (
                   <tr
@@ -326,12 +314,19 @@ export default function SituationsPage() {
                       <TypeBadge type={s.type} />
                     </td>
                     <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateMessage || '—'}</td>
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400">{s.serviceDestination || '—'}</td>
+                    )}
                     <td className="px-3 py-3">
                       <ZoneChip zone={s.zone} />
                     </td>
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
                       {s.status === 'non_ok' && s.comment ? (
                         <span className="text-red-600 font-medium">{s.comment}</span>
@@ -339,6 +334,8 @@ export default function SituationsPage() {
                         s.motif || '—'
                       )}
                     </td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">
                       {(() => {
                         const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
@@ -349,9 +346,13 @@ export default function SituationsPage() {
                         );
                       })()}
                     </td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3">
                       <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
                     </td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">
                       {s.status === 'non_ok' && MERGED_TYPES.includes(s.type)
                         ? '—'
@@ -359,6 +360,8 @@ export default function SituationsPage() {
                           ? `${calcDelai(s)}j`
                           : '—'}
                     </td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">
                       {!(s.status === 'non_ok' && MERGED_TYPES.includes(s.type)) && (s.dateDepo || s.dateMessage) ? (
                         <span
@@ -370,6 +373,8 @@ export default function SituationsPage() {
                         '—'
                       )}
                     </td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">
                       {(() => {
                         if (!sc) return <span className="text-slate-300">—</span>;
@@ -391,13 +396,28 @@ export default function SituationsPage() {
                         );
                       })()}
                     </td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{sc?.timeAddedToNms || '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">{sc?.portId ?? '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">{sc?.onuId ?? '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400">{sc?.snMac || '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">{sc?.rxPower != null ? sc.rxPower : '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">{sc?.ranging != null ? sc.ranging : '—'}</td>
+                    )}
+                    {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400 max-w-32 truncate">{sc?.remarque || '—'}</td>
+                    )}
                     <td className="px-3 py-3">
                       <StatusBadge status={s.status} />
                     </td>
@@ -421,14 +441,6 @@ export default function SituationsPage() {
                             NOK
                           </button>
                         )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => openReassign(s.id, s.fgp, s.equipe)}
-                            className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95 shadow-sm"
-                          >
-                            Réaffecter équipe
-                          </button>
-                        )}
                       </div>
                     </td>
                   </tr>
@@ -436,6 +448,25 @@ export default function SituationsPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {filtered.length > 0 && (
+          <div className="flex items-center justify-between px-3 py-3 border-t border-slate-100 flex-wrap gap-2">
+            <p className="text-xs text-slate-400">
+              {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} sur {filtered.length}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+                Précédent
+              </Button>
+              <span className="text-xs text-slate-500 font-medium px-1">
+                Page {page} / {totalPages}
+              </span>
+              <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>
+                Suivant
+              </Button>
+            </div>
           </div>
         )}
       </Card>
@@ -492,31 +523,6 @@ export default function SituationsPage() {
             <Button variant="danger" onClick={submitUrgence}>
               {' '}
               Créer Urgence
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* ─── Réaffecter situation modal */}
-      <Modal open={reassignOpen} onClose={() => setReassignOpen(false)} title={` Réaffecter FGP ${reassignFgp}`}>
-        <div className="space-y-4">
-          <div>
-            <label className="text-xs font-bold text-slate-500 block mb-1.5">Nouvelle équipe</label>
-            <Select className="w-full" value={reassignEquipe} onChange={(e) => setReassignEquipe(e.target.value)}>
-              <option value="">-- Sélectionner --</option>
-              {equipes.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name} — {e.leader}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="flex gap-3 justify-end pt-2">
-            <Button variant="outline" onClick={() => setReassignOpen(false)}>
-              Annuler
-            </Button>
-            <Button onClick={handleReassign} disabled={saving}>
-              {saving ? '...' : ' Confirmer'}
             </Button>
           </div>
         </div>
