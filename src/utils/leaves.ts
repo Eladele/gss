@@ -132,10 +132,10 @@ function buildVirementSheet(
   rDest.getCell(3).alignment = { horizontal: 'center' };
   ws.mergeCells(rDest.number, 3, rDest.number, isBpm ? 9 : 8);
 
-  const rCompte = ws.addRow(['', '', SOCIETE.compte, '', '', fmtMontant(total), 'MRU']);
+  const rCompte = ws.addRow(['', '', SOCIETE.compte]);
   rCompte.getCell(3).font = { name: 'Times New Roman', size: 13 };
 
-  const rChiffres = ws.addRow(['', '', 'En chiffres : ', '', '', fmtMontant(total), 'MRU']);
+  const rChiffres = ws.addRow(['', '', 'En chiffres : ', undefined, undefined, fmtMontant(total), 'MRU']);
   rChiffres.getCell(3).font = { name: 'Times New Roman', size: 13 };
   rChiffres.getCell(6).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
   rChiffres.getCell(7).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
