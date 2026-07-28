@@ -15,8 +15,21 @@ const SOCIETE = {
 
 const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 
-const THIN: Partial<ExcelJS.Border> = { style: 'thin' };
+// ── Palette — reprise des couleurs du logo GSS (bleu-sarcelle) ──────────
+const COLOR = {
+  accent: 'FF0A7F94',      // bleu-sarcelle (couleur principale du logo)
+  accentDark: 'FF075A68',  // même teinte, plus soutenue (titre, total)
+  headerFill: 'FF0A7F94',  // fond de l'en-tête du tableau
+  headerText: 'FFFFFFFF',  // texte blanc sur l'en-tête
+  bandFill: 'FFEAF5F7',    // bande alternée très pâle
+  totalFill: 'FFD6EDF1',   // fond de la ligne TOTAL
+  infoFill: 'FFF4FAFB',    // fond du bloc "Siège social / RC / NIF"
+  border: 'FFB9DCE2',      // bordures fines du tableau
+};
+
+const THIN: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: COLOR.border } };
 const FULL_BORDER: Partial<ExcelJS.Borders> = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+const MEDIUM: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: COLOR.accentDark } };
 
 function fmtMontant(n: number): string {
   return n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -33,13 +46,14 @@ function nextOrdre(base: string, offset: number): string {
 }
 
 /**
- * Construit une feuille "Ordre de virement" identique au modèle Excel GSS
- * officiel : mêmes polices (Times New Roman / Calibri / Arial selon les
- * zones), gras, soulignés, bordures du tableau, largeurs de colonnes, et
- * réglage d'impression tenant sur une seule page A4.
+ * Construit une feuille "Ordre de virement" — même contenu officiel que le
+ * modèle GSS (logo, en-tête société, motif, tableau, total, signature) mais
+ * avec une mise en page plus soignée : bloc d'en-tête teinté, en-tête de
+ * tableau colorée, bandes alternées, ligne TOTAL mise en valeur, quadrillage
+ * masqué au profit de bordures propres. Tient toujours sur une seule page A4.
  *
- * Colonnes (comme l'original) : A = marge, B = Ordre, C = Mle, D = Nom,
- * E = Banque, F = RIB (ou Numéro de compte pour BPM), G = Montant, H = marge.
+ * Colonnes : A = marge, B = Ordre, C = Mle, D = Nom, E = Banque,
+ * F = RIB (ou N° de compte pour BPM), G = Montant, H = marge.
  */
 function buildVirementSheet(
   workbook: ExcelJS.Workbook,
@@ -56,10 +70,11 @@ function buildVirementSheet(
   const { sheetName, banque, employees, ordreNum, dateStr, motifMois } = opts;
   const isBpm = banque === 'BPM';
   const total = employees.reduce((s, e) => s + (e.montantSheet || 0), 0);
+  const lastCol = isBpm ? 9 : 7;
 
-  const ws = workbook.addWorksheet(sheetName.slice(0, 31));
+  const ws = workbook.addWorksheet(sheetName.slice(0, 31), { views: [{ showGridLines: false }] });
 
-  // ── Colonnes (largeurs identiques au modèle GSS) ──────────────────────
+  // ── Colonnes ───────────────────────────────────────────────────────
   ws.columns = [
     { width: 3 },                          // A — marge gauche
     { width: 7.2 },                        // B — Ordre
@@ -72,33 +87,41 @@ function buildVirementSheet(
     ...(isBpm ? [{ width: 14 }] : []),     // I — Montant (BPM uniquement)
   ];
 
-  // ── Logo (même position que le modèle : haut-gauche, lignes 1-6) ──────
+  // ── Logo ───────────────────────────────────────────────────────────
   ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 220, height: 87 } });
   for (let i = 0; i < 6; i++) ws.addRow([]);
   ws.getRow(6).height = 6;
 
-  // ── En-tête société ────────────────────────────────────────────────
+  // ── Bloc en-tête société — fond teinté, filet gauche coloré ──────────
   const rSiege = ws.addRow([SOCIETE.siege]);
-  rSiege.getCell(1).font = { name: 'Calibri', size: 12 };
   const rRc = ws.addRow([SOCIETE.rc]);
-  rRc.getCell(1).font = { name: 'Calibri', size: 12 };
   const rNif = ws.addRow([SOCIETE.nif]);
-  rNif.getCell(1).font = { name: 'Calibri', size: 12, bold: true };
+  [rSiege, rRc, rNif].forEach((r, idx) => {
+    for (let c = 1; c <= lastCol; c++) {
+      r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.infoFill } };
+    }
+    r.getCell(1).border = { left: MEDIUM };
+    r.getCell(1).font = idx === 2 ? { name: 'Calibri', size: 12, bold: true } : { name: 'Calibri', size: 12 };
+  });
 
   const rBlank1 = ws.addRow([]);
   rBlank1.height = 6;
 
   const rDate = ws.addRow(['', '', '', '', '', 'Nouakchott,', `le ${dateStr}`]);
   rDate.height = 18;
-  rDate.getCell(6).font = { name: 'Times New Roman', size: 13 };
-  rDate.getCell(7).font = { name: 'Times New Roman', size: 13 };
+  rDate.getCell(6).font = { name: 'Times New Roman', size: 13, italic: true };
+  rDate.getCell(7).font = { name: 'Times New Roman', size: 13, italic: true };
   rDate.getCell(7).alignment = { horizontal: 'center' };
 
   const rTitre = ws.addRow(['', '', '', `ORDRE DE VIREMENT N° ${ordreNum}`]);
-  rTitre.height = 25.5;
-  rTitre.getCell(4).font = { name: 'Times New Roman', size: 18, bold: true };
-  rTitre.getCell(4).alignment = { horizontal: 'center' };
+  rTitre.height = 28;
+  rTitre.getCell(4).font = { name: 'Times New Roman', size: 18, bold: true, color: { argb: COLOR.accentDark } };
+  rTitre.getCell(4).alignment = { horizontal: 'center', vertical: 'middle' };
   ws.mergeCells(rTitre.number, 4, rTitre.number, isBpm ? 9 : 8);
+  // Filet coloré sous le titre, sur toute la largeur du tableau
+  for (let c = 2; c <= lastCol; c++) {
+    rTitre.getCell(c).border = { bottom: { style: 'medium', color: { argb: COLOR.accent } } };
+  }
 
   const rA = ws.addRow(['', '', '', 'A']);
   rA.getCell(4).font = { name: 'Times New Roman', size: 13, bold: true };
@@ -114,8 +137,8 @@ function buildVirementSheet(
 
   const rChiffres = ws.addRow(['', '', 'En chiffres : ', '', '', fmtMontant(total), 'MRU']);
   rChiffres.getCell(3).font = { name: 'Times New Roman', size: 13 };
-  rChiffres.getCell(6).font = { name: 'Times New Roman', size: 13, bold: true };
-  rChiffres.getCell(7).font = { name: 'Times New Roman', size: 13, bold: true };
+  rChiffres.getCell(6).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
+  rChiffres.getCell(7).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
 
   const rLettres = ws.addRow(['', '', 'En lettres :', `${numberToFrenchWords(total)} MRU`]);
   rLettres.getCell(3).font = { name: 'Times New Roman', size: 13 };
@@ -129,60 +152,69 @@ function buildVirementSheet(
 
   const rNombre = ws.addRow(['', '', 'Nombre:', employees.length]);
   rNombre.getCell(3).font = { name: 'Times New Roman', size: 13 };
-  rNombre.getCell(4).font = { name: 'Times New Roman', size: 13 };
+  rNombre.getCell(4).font = { name: 'Times New Roman', size: 13, bold: true };
   rNombre.getCell(4).alignment = { horizontal: 'center' };
 
-  // ── Tableau des employés ──────────────────────────────────────────
+  ws.addRow([]);
+
+  // ── En-tête du tableau — fond coloré, texte blanc ────────────────────
   const headers = isBpm
     ? ['', 'Ordre', 'Mle', 'NOM et PRENOM', 'Banque', 'Numéro de compte', 'Clé RIB', '', 'Montant (MRU)']
     : ['', 'Ordre', 'Mle', 'NOM et PRENOM', 'Banque', 'RIB', 'Montant (MRU)'];
   const rHead = ws.addRow(headers);
-  rHead.height = 19.5;
-  const lastCol = isBpm ? 9 : 7;
+  rHead.height = 22;
   for (let c = 2; c <= lastCol; c++) {
     const cell = rHead.getCell(c);
-    cell.font = { name: 'Times New Roman', size: 12, bold: true };
-    cell.alignment = { horizontal: 'center' };
+    cell.font = { name: 'Times New Roman', size: 12, bold: true, color: { argb: COLOR.headerText } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.headerFill } };
     cell.border = FULL_BORDER;
   }
 
+  // ── Lignes employés — bandes alternées ───────────────────────────────
   employees.forEach((e, i) => {
     const row = isBpm
       ? ['', i + 1, e.mle, e.name, banque, e.rib || '', '', '', fmtMontant(e.montantSheet)]
       : ['', i + 1, e.mle, e.name, banque, e.rib || '', fmtMontant(e.montantSheet)];
     const r = ws.addRow(row);
     r.height = 18;
+    const banded = i % 2 === 1;
     for (let c = 2; c <= lastCol; c++) {
       const cell = r.getCell(c);
       cell.border = FULL_BORDER;
+      if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
       if (c === 6) {
         // Colonne RIB — police Arial 10, comme le modèle
         cell.font = { name: 'Arial', size: 10 };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
       } else if (c === 4) {
         cell.font = { name: 'Times New Roman', size: 11 };
+        cell.alignment = { vertical: 'middle' };
       } else {
         cell.font = { name: 'Times New Roman', size: 11 };
-        cell.alignment = { horizontal: 'center' };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
       }
     }
   });
 
+  // ── Ligne TOTAL — mise en valeur ─────────────────────────────────────
   const totalRow = isBpm
     ? ['', '', '', '', '', '', 'TOTAL', '', fmtMontant(total)]
     : ['', '', '', '', '', 'TOTAL', fmtMontant(total)];
   const rTotal = ws.addRow(totalRow);
-  rTotal.height = 19.5;
+  rTotal.height = 20;
   for (let c = 2; c <= lastCol; c++) {
-    rTotal.getCell(c).border = FULL_BORDER;
-    rTotal.getCell(c).font = { name: 'Times New Roman', size: 12, bold: true };
+    rTotal.getCell(c).border = { ...FULL_BORDER, top: { style: 'medium', color: { argb: COLOR.accentDark } } };
+    rTotal.getCell(c).font = { name: 'Times New Roman', size: 12, bold: true, color: { argb: COLOR.accentDark } };
+    rTotal.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.totalFill } };
+    rTotal.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
   }
 
   ws.addRow([]);
   const rBlank2 = ws.addRow([]);
   rBlank2.height = 24;
   const rSign = ws.addRow(['', '', '', SOCIETE.signataire]);
-  rSign.getCell(4).font = { name: 'Times New Roman', size: 14, bold: true, underline: true };
+  rSign.getCell(4).font = { name: 'Times New Roman', size: 14, bold: true, underline: true, color: { argb: COLOR.accentDark } };
 
   // ── Impression sur une seule page A4, portrait, marges serrées ────
   ws.pageSetup = {
@@ -210,13 +242,13 @@ function downloadWorkbook(buffer: ArrayBuffer, fileName: string) {
 
 /**
  * Exporte, pour un mois donné, la liste des employés QUI NE SONT PAS EN CONGÉ,
- * au format EXACT des "Ordres de virement" GSS (logo, polices, gras,
- * bordures, largeurs de colonnes, impression sur une seule page) — un onglet
- * par banque, plus un onglet récapitulatif.
+ * au format des "Ordres de virement" GSS (logo, en-tête, tableau, total,
+ * signature), avec une mise en page soignée — un onglet par banque, plus un
+ * onglet récapitulatif.
  *
- * Règle congé GSS : un employé dont le congé démarre le MOIS SUIVANT voit son
- * salaire de CE mois DOUBLÉ ; un employé en congé CE mois-ci est EXCLU du
- * virement (déjà payé en double le mois précédent).
+ * Règle congé GSS : un employé dont le congé DÉMARRE le mois suivant voit son
+ * salaire de CE mois DOUBLÉ ; un employé dont le congé DÉMARRE ce mois-ci est
+ * EXCLU du virement (déjà payé en double le mois précédent).
  */
 export async function exportEmployesPresentsExcel(opts: {
   month: string; // "YYYY-MM"
@@ -229,11 +261,8 @@ export async function exportEmployesPresentsExcel(opts: {
   const { month, employees, leaves } = opts;
   const [y, m] = month.split('-').map(Number);
 
-  // On se base sur le MOIS DE DÉBUT du congé (pas sur un chevauchement de
-  // dates) : un congé "du 3 juin au 3 juillet" est un congé DE JUIN (comme
-  // l'indique toujours son motif, ex. "Congé annuel — Juin 2026"), même s'il
-  // déborde de quelques jours sur le mois suivant. Se baser sur un simple
-  // chevauchement excluait à tort l'employé du mois suivant entier.
+  // On se base sur le MOIS DE DÉBUT du congé (un congé "du 3 juin au 3
+  // juillet" est un congé DE JUIN, même s'il déborde de quelques jours).
   const monthOf = (dateStr?: string): string | null => {
     if (!dateStr) return null;
     const d = new Date(dateStr);
@@ -276,22 +305,26 @@ export async function exportEmployesPresentsExcel(opts: {
     });
   });
 
-  // Onglet récapitulatif complet (avec logo aussi, + colonne Remarque congé)
-  const wsAll = workbook.addWorksheet(`Récap ${motifMois}`.slice(0, 31));
+  // ── Onglet récapitulatif — même style (en-tête coloré, bandes alternées) ──
+  const wsAll = workbook.addWorksheet(`Récap ${motifMois}`.slice(0, 31), { views: [{ showGridLines: false }] });
   wsAll.columns = [
     { width: 7 }, { width: 8 }, { width: 30 }, { width: 16 }, { width: 12 },
     { width: 18 }, { width: 10 }, { width: 26 }, { width: 14 }, { width: 32 },
   ];
   wsAll.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 220, height: 87 } });
   for (let i = 0; i < 6; i++) wsAll.addRow([]);
+
   const rHeadAll = wsAll.addRow([
     'Ordre', 'Mle', 'Nom et prénom', 'Poste', 'Ville', 'Équipe', 'Banque', 'RIB / N° compte', 'Montant (MRU)', 'Remarque',
   ]);
+  rHeadAll.height = 22;
   rHeadAll.eachCell((cell) => {
-    cell.font = { name: 'Times New Roman', size: 12, bold: true };
-    cell.alignment = { horizontal: 'center' };
+    cell.font = { name: 'Times New Roman', size: 12, bold: true, color: { argb: COLOR.headerText } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.headerFill } };
     cell.border = FULL_BORDER;
   });
+
   present.forEach((e, i) => {
     const r = wsAll.addRow([
       i + 1,
@@ -305,8 +338,19 @@ export async function exportEmployesPresentsExcel(opts: {
       e.montant ?? '',
       e.conge_double ? 'Congé le mois prochain — salaire doublé' : '',
     ]);
-    r.eachCell((cell) => (cell.border = FULL_BORDER));
+    r.height = 18;
+    const banded = i % 2 === 1;
+    r.eachCell((cell, colNumber) => {
+      cell.border = FULL_BORDER;
+      cell.font = { name: 'Times New Roman', size: 11 };
+      cell.alignment = { horizontal: colNumber === 3 ? 'left' : 'center', vertical: 'middle' };
+      if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
+      if (colNumber === 10 && e.conge_double) {
+        cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
+      }
+    });
   });
+
   wsAll.pageSetup = {
     paperSize: 9,
     orientation: 'landscape',
