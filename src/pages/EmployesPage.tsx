@@ -160,8 +160,8 @@ export default function EmployesPage() {
     setCongeModal(false);
   };
 
-  const handleExportPresents = () => {
-    exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, ordreBase: exportOrdre });
+  const handleExportPresents = async () => {
+    await exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, ordreBase: exportOrdre });
     showToast('Fichier Excel des employés présents généré ', 'success');
   };
 
