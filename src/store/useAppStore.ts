@@ -184,6 +184,7 @@ export const useAppStore = create<AppState>()(
         const previous = get().situations.find((s) => s.id === id);
         if (!previous) return;
         const newDateClt = details?.dateClt || previous.dateClt || today;
+        const closedBy = get().user?.name || 'Inconnu';
         // Optimistic update — la "DATE MISE EN SERVICE" est posée automatiquement
         // à la date système dès qu'une situation (installation ou dérangement) passe OK,
         // sauf si une date a été saisie dans le formulaire de clôture.
@@ -203,6 +204,7 @@ export const useAppStore = create<AppState>()(
                   rxDbm: details?.rxDbm ?? sit.rxDbm,
                   rangingM: details?.rangingM ?? sit.rangingM,
                   scanStatut: details?.scanStatut ?? sit.scanStatut,
+                  closedBy,
                 }
               : sit,
           ),
@@ -215,6 +217,7 @@ export const useAppStore = create<AppState>()(
             rxDbm: details?.rxDbm ?? null,
             rangingM: details?.rangingM ?? null,
             scanStatut: details?.scanStatut ?? null,
+            closedBy,
           });
         } catch (err: any) {
           // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser

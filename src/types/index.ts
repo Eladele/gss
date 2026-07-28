@@ -51,6 +51,7 @@ export interface Situation {
   rxDbm?: number; // Rx (dBm) confirmé à la clôture OK
   rangingM?: number; // Ranging (m) confirmé à la clôture OK
   scanStatut?: 'SCANNE' | 'NON SCANE'; // statut réseau confirmé à la clôture OK
+  closedBy?: string; // nom de l'utilisateur ayant clôturé la situation en OK
 }
 
 export interface Notification {

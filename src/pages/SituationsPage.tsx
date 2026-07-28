@@ -543,6 +543,7 @@ export default function SituationsPage() {
         fgp={okFgp}
         initialValues={okInitialValues}
         equipesOptions={equipes}
+        currentUser={user.name}
         onClose={() => setOkOpen(false)}
         onConfirm={handleOkConfirm}
       />
