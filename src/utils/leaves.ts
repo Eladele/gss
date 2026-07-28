@@ -31,9 +31,7 @@ const THIN: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: COLOR.bord
 const FULL_BORDER: Partial<ExcelJS.Borders> = { top: THIN, left: THIN, bottom: THIN, right: THIN };
 const MEDIUM: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: COLOR.accentDark } };
 
-function fmtMontant(n: number): string {
-  return n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+const MONTANT_FMT = '#,##0.00';
 
 /** Incrémente le numéro d'ordre (ex: "018/DG/GSS/2026" -> "019/DG/GSS/2026") */
 function nextOrdre(base: string, offset: number): string {
@@ -132,12 +130,16 @@ function buildVirementSheet(
   rDest.getCell(3).alignment = { horizontal: 'center' };
   ws.mergeCells(rDest.number, 3, rDest.number, isBpm ? 9 : 8);
 
-  const rCompte = ws.addRow(['', '', SOCIETE.compte]);
+  const rCompte = ws.addRow(['', '', SOCIETE.compte, undefined, undefined, undefined, total, 'MRU']);
   rCompte.getCell(3).font = { name: 'Times New Roman', size: 13 };
+  rCompte.getCell(7).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
+  rCompte.getCell(7).numFmt = MONTANT_FMT;
+  rCompte.getCell(8).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
 
-  const rChiffres = ws.addRow(['', '', 'En chiffres : ', undefined, undefined, fmtMontant(total), 'MRU']);
+  const rChiffres = ws.addRow(['', '', 'En chiffres : ', undefined, undefined, total, 'MRU']);
   rChiffres.getCell(3).font = { name: 'Times New Roman', size: 13 };
   rChiffres.getCell(6).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
+  rChiffres.getCell(6).numFmt = MONTANT_FMT;
   rChiffres.getCell(7).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
 
   const rLettres = ws.addRow(['', '', 'En lettres :', `${numberToFrenchWords(total)} MRU`]);
@@ -172,10 +174,14 @@ function buildVirementSheet(
   }
 
   // ── Lignes employés — bandes alternées ───────────────────────────────
+  const montantCol = isBpm ? 9 : 7; // colonne "Montant (MRU)" de la table
+  const montantColLetter = isBpm ? 'I' : 'G';
+  const firstDataRow = rHead.number + 1;
+
   employees.forEach((e, i) => {
     const row = isBpm
-      ? ['', i + 1, e.mle, e.name, banque, e.rib || '', '', '', fmtMontant(e.montantSheet)]
-      : ['', i + 1, e.mle, e.name, banque, e.rib || '', fmtMontant(e.montantSheet)];
+      ? ['', i + 1, e.mle, e.name, banque, e.rib || '', '', '', e.montantSheet]
+      : ['', i + 1, e.mle, e.name, banque, e.rib || '', e.montantSheet];
     const r = ws.addRow(row);
     r.height = 18;
     const banded = i % 2 === 1;
@@ -194,13 +200,16 @@ function buildVirementSheet(
         cell.font = { name: 'Times New Roman', size: 11 };
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
       }
+      if (c === montantCol) cell.numFmt = MONTANT_FMT; // vrai nombre, calculable/modifiable dans Excel
     }
   });
+  const lastDataRow = rHead.number + employees.length;
 
-  // ── Ligne TOTAL — mise en valeur ─────────────────────────────────────
+  // ── Ligne TOTAL — vraie formule SUM (se recalcule si un montant est modifié) ──
+  const totalFormula = employees.length > 0 ? { formula: `SUM(${montantColLetter}${firstDataRow}:${montantColLetter}${lastDataRow})` } : 0;
   const totalRow = isBpm
-    ? ['', '', '', '', '', '', 'TOTAL', '', fmtMontant(total)]
-    : ['', '', '', '', '', 'TOTAL', fmtMontant(total)];
+    ? ['', '', '', '', '', '', 'TOTAL', '', totalFormula]
+    : ['', '', '', '', '', 'TOTAL', totalFormula];
   const rTotal = ws.addRow(totalRow);
   rTotal.height = 20;
   for (let c = 2; c <= lastCol; c++) {
@@ -209,6 +218,12 @@ function buildVirementSheet(
     rTotal.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.totalFill } };
     rTotal.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' };
   }
+  rTotal.getCell(montantCol).numFmt = MONTANT_FMT;
+
+  // "Par le débit..." et "En chiffres :" pointent maintenant vers la ligne TOTAL,
+  // pour rester cohérents si un montant est modifié après export.
+  rCompte.getCell(7).value = { formula: `${montantColLetter}${rTotal.number}` };
+  rChiffres.getCell(6).value = { formula: `${montantColLetter}${rTotal.number}` };
 
   ws.addRow([]);
   const rBlank2 = ws.addRow([]);
@@ -335,7 +350,7 @@ export async function exportEmployesPresentsExcel(opts: {
       e.equipeNom || '',
       e.banque || 'Caisse',
       e.rib || '',
-      e.montant ?? '',
+      e.montant ?? undefined,
       e.conge_double ? 'Congé le mois prochain — salaire doublé' : '',
     ]);
     r.height = 18;
@@ -345,6 +360,7 @@ export async function exportEmployesPresentsExcel(opts: {
       cell.font = { name: 'Times New Roman', size: 11 };
       cell.alignment = { horizontal: colNumber === 3 ? 'left' : 'center', vertical: 'middle' };
       if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
+      if (colNumber === 9) cell.numFmt = MONTANT_FMT; // Montant — vrai nombre
       if (colNumber === 10 && e.conge_double) {
         cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
       }
