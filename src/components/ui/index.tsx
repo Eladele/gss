@@ -188,6 +188,7 @@ export interface OKSheetValues {
   dateClt: string;
   rxDbm: number | '';
   rangingM: number | '';
+  scanStatut: 'SCANNE' | 'NON SCANE';
 }
 
 export function OKSheet({
@@ -268,6 +269,18 @@ export function OKSheet({
               value={values.dateClt}
               onChange={(e) => set('dateClt', e.target.value)}
             />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Statut réseau</label>
+            <select
+              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+              value={values.scanStatut}
+              onChange={(e) => set('scanStatut', e.target.value as OKSheetValues['scanStatut'])}
+            >
+              <option value="SCANNE">Scanné</option>
+              <option value="NON SCANE">Non scanné</option>
+            </select>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

@@ -50,6 +50,7 @@ export interface Situation {
   poteau?: number; // nombre de poteaux posés pour cette intervention (colonne POTEAU du fichier)
   rxDbm?: number; // Rx (dBm) confirmé à la clôture OK
   rangingM?: number; // Ranging (m) confirmé à la clôture OK
+  scanStatut?: 'SCANNE' | 'NON SCANE'; // statut réseau confirmé à la clôture OK
 }
 
 export interface Notification {

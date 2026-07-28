@@ -60,6 +60,7 @@ export default function SituationsPage() {
     dateClt: '',
     rxDbm: '',
     rangingM: '',
+    scanStatut: 'NON SCANE',
   });
 
   // Reassign modal
@@ -128,6 +129,7 @@ export default function SituationsPage() {
       dateClt: s.dateClt || today,
       rxDbm: s.rxDbm ?? sc?.rxPower ?? '',
       rangingM: s.rangingM ?? sc?.ranging ?? '',
+      scanStatut: s.scanStatut ?? sc?.result ?? 'NON SCANE',
     });
     setOkOpen(true);
   };
@@ -141,6 +143,7 @@ export default function SituationsPage() {
         dateClt: values.dateClt,
         rxDbm: values.rxDbm === '' ? undefined : values.rxDbm,
         rangingM: values.rangingM === '' ? undefined : values.rangingM,
+        scanStatut: values.scanStatut,
       });
       setOkOpen(false);
       showToast(`FGP ${okFgp} marqué OK `, 'success');

@@ -62,7 +62,15 @@ interface AppState {
   // Situations
   markOK: (
     id: string,
-    details?: { poteau?: number; equipe?: string; motif?: string; dateClt?: string; rxDbm?: number; rangingM?: number },
+    details?: {
+      poteau?: number;
+      equipe?: string;
+      motif?: string;
+      dateClt?: string;
+      rxDbm?: number;
+      rangingM?: number;
+      scanStatut?: 'SCANNE' | 'NON SCANE';
+    },
   ) => Promise<void>;
   markNonOK: (id: string, comment: string) => Promise<void>;
   addUrgence: (zone: string, type: string, comment: string, equipe?: string) => Promise<void>;
@@ -194,6 +202,7 @@ export const useAppStore = create<AppState>()(
                   motif: details?.motif ?? sit.motif,
                   rxDbm: details?.rxDbm ?? sit.rxDbm,
                   rangingM: details?.rangingM ?? sit.rangingM,
+                  scanStatut: details?.scanStatut ?? sit.scanStatut,
                 }
               : sit,
           ),
@@ -205,6 +214,7 @@ export const useAppStore = create<AppState>()(
             motif: details?.motif,
             rxDbm: details?.rxDbm ?? null,
             rangingM: details?.rangingM ?? null,
+            scanStatut: details?.scanStatut ?? null,
           });
         } catch (err: any) {
           // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser

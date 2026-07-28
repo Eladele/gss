@@ -38,7 +38,7 @@ export async function updateSituationStatus(
   status: Situation['status'],
   comment = '',
   dateClt?: string,
-  extra?: { poteau?: number; equipe?: string; motif?: string; rxDbm?: number | null; rangingM?: number | null },
+  extra?: { poteau?: number; equipe?: string; motif?: string; rxDbm?: number | null; rangingM?: number | null; scanStatut?: string | null },
 ): Promise<void> {
   const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
   if (dateClt) payload.date_mise_en_service = dateClt;
@@ -48,6 +48,7 @@ export async function updateSituationStatus(
     if (extra.motif !== undefined) payload.motif = extra.motif;
     if (extra.rxDbm !== undefined) payload.rx_dbm = extra.rxDbm;
     if (extra.rangingM !== undefined) payload.ranging_m = extra.rangingM;
+    if (extra.scanStatut !== undefined) payload.scan_statut = extra.scanStatut;
   }
   const { error } = await supabase.from('situations').update(payload).eq('id', id);
   if (error) {
@@ -207,6 +208,7 @@ function mapSituation(row: any): Situation {
     poteau: row.poteau != null ? Number(row.poteau) : 0,
     rxDbm: row.rx_dbm != null ? Number(row.rx_dbm) : undefined,
     rangingM: row.ranging_m != null ? Number(row.ranging_m) : undefined,
+    scanStatut: row.scan_statut ?? undefined,
   };
 }
 
