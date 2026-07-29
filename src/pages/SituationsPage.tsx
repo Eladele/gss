@@ -288,6 +288,7 @@ export default function SituationsPage() {
                         'Rx (dBm)',
                         'Ranging (m)',
                         'Remarque',
+                        'Clôturé par',
                         'Statut',
                         'Actions',
                       ]
@@ -417,6 +418,17 @@ export default function SituationsPage() {
                     )}
                     {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-slate-400 max-w-32 truncate">{sc?.remarque || '—'}</td>
+                    )}
+                    {!isEnCoursView && (
+                    <td className="px-3 py-3 text-xs whitespace-nowrap">
+                      {s.closedBy ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-semibold border border-green-200">
+                          <span>✓</span> {s.closedBy}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
                     )}
                     <td className="px-3 py-3">
                       <StatusBadge status={s.status} />
