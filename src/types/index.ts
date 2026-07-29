@@ -51,7 +51,7 @@ export interface Situation {
   rxDbm?: number; // Rx (dBm) confirmé à la clôture OK
   rangingM?: number; // Ranging (m) confirmé à la clôture OK
   scanStatut?: 'SCANNE' | 'NON SCANE'; // statut réseau confirmé à la clôture OK
-  closedBy?: string; // nom de l'utilisateur ayant clôturé la situation en OK
+  closedBy?: string; // nom de la personne ayant clôturé (marqué OK) la situation
 }
 
 export interface Notification {
@@ -88,6 +88,19 @@ export interface Employee {
   equipeNom?: string; // équipe RH d'appartenance (ex: ARAFAT, CENTRE VILLE, TVZ, Déploiement...)
   dateEmbauche?: string;
   actif: boolean;
+  createdAt?: string;
+}
+
+export interface Loan {
+  id: string;
+  employeeId: string;
+  montantTotal: number;
+  mensualite: number;
+  dateDebut: string;
+  dureeMois?: number;
+  reste: number;
+  banqueCaisse?: string;
+  statut: 'actif' | 'solde';
   createdAt?: string;
 }
 

@@ -1,5 +1,9 @@
 import { supabase } from './supabase';
-import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord } from '@/types';
+import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan } from '@/types';
+
+// Ligne brute Supabase (le projet n'utilise pas de types générés) — un seul point
+// `any` centralisé ici, réutilisé partout, au lieu d'un `any` dispersé sur chaque fonction.
+type Row = Record<string, any>;
 
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
 
@@ -28,6 +32,7 @@ export async function fetchSituations(): Promise<Situation[]> {
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- on retire volontairement `id` avant l'upsert
   const { id: _omit, ...payload } = toDbSituation(sit);
   const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_mise_en_service' });
   if (error) console.error('upsertSituation:', error);
@@ -38,9 +43,17 @@ export async function updateSituationStatus(
   status: Situation['status'],
   comment = '',
   dateClt?: string,
-  extra?: { poteau?: number; equipe?: string; motif?: string; rxDbm?: number | null; rangingM?: number | null; scanStatut?: string | null; closedBy?: string | null },
+  extra?: {
+    poteau?: number;
+    equipe?: string;
+    motif?: string;
+    rxDbm?: number | null;
+    rangingM?: number | null;
+    scanStatut?: string | null;
+    closedBy?: string | null;
+  },
 ): Promise<void> {
-  const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
+  const payload: Row = { status, comment, updated_at: new Date().toISOString() };
   if (dateClt) payload.date_mise_en_service = dateClt;
   if (extra) {
     if (extra.poteau !== undefined) payload.poteau = extra.poteau;
@@ -68,6 +81,7 @@ export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
     // avec "invalid input syntax for type uuid". On laisse Postgres générer le vrai UUID ;
     // le upsert se base sur `fgp` (onConflict) pour la déduplication, pas sur `id`.
     const chunk = rows.slice(i, i + CHUNK).map((r) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- on retire volontairement `id` avant l'upsert
       const { id: _omit, ...rest } = toDbSituation(r);
       return rest;
     });
@@ -132,7 +146,7 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
 }
 
 export async function updateEquipe(id: string, patch: Partial<Equipe>): Promise<void> {
-  const payload: Record<string, any> = {};
+  const payload: Row = {};
   if (patch.name !== undefined) payload.name = patch.name;
   if (patch.leader !== undefined) payload.leader_name = patch.leader;
   if (patch.color !== undefined) payload.color = patch.color;
@@ -186,7 +200,7 @@ export async function deleteImportRecord(id: string): Promise<void> {
 
 // ─── MAPPERS ─────────────────────────────────────────────────────────────────
 
-function mapSituation(row: any): Situation {
+function mapSituation(row: Row): Situation {
   return {
     id: row.id,
     fgp: row.fgp,
@@ -235,7 +249,6 @@ function toDbSituation(s: Situation) {
    conformite: s.conformite ?? null,
     import_id: s.importId ?? null,
     poteau: s.poteau ?? 0,
-    closed_by: s.closedBy ?? null,
   };
 }
 
@@ -251,7 +264,7 @@ function normalizeVille(raw?: string | null): string {
   return raw!; // valeur déjà correcte / inconnue, on la laisse telle quelle
 }
 
-function mapEquipe(row: any): Equipe {
+function mapEquipe(row: Row): Equipe {
   return {
     id: row.id,
     name: row.name,
@@ -263,7 +276,7 @@ function mapEquipe(row: any): Equipe {
   };
 }
 
-function mapEmployee(row: any): Employee {
+function mapEmployee(row: Row): Employee {
   return {
     id: row.id,
     mle: row.mle ?? '',
@@ -282,7 +295,7 @@ function mapEmployee(row: any): Employee {
   };
 }
 
-function mapVehicle(row: any): Vehicle {
+function mapVehicle(row: Row): Vehicle {
   return {
     id: row.id,
     type: row.type,
@@ -296,7 +309,7 @@ function mapVehicle(row: any): Vehicle {
   };
 }
 
-function mapMateriel(row: any): Materiel {
+function mapMateriel(row: Row): Materiel {
   return {
     id: row.id,
     code: row.code ?? '',
@@ -309,7 +322,7 @@ function mapMateriel(row: any): Materiel {
   };
 }
 
-function mapLeave(row: any): LeaveRecord {
+function mapLeave(row: Row): LeaveRecord {
   return {
     id: row.id,
     employeeId: row.employee_id,
@@ -323,7 +336,7 @@ function mapLeave(row: any): LeaveRecord {
   };
 }
 
-function mapImportRecord(row: any): ImportRecord {
+function mapImportRecord(row: Row): ImportRecord {
   return {
     id: row.id,
     fileName: row.file_name,
@@ -437,6 +450,89 @@ export async function deleteEmployee(id: string): Promise<void> {
   if (error) console.error('deleteEmployee:', error);
 }
 
+// ─── PRÊTS ─────────────────────────────────────────────────────────────────────
+
+function mapLoan(row: Row): Loan {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    montantTotal: Number(row.montant_total),
+    mensualite: Number(row.mensualite),
+    dateDebut: row.date_debut,
+    dureeMois: row.duree_mois != null ? Number(row.duree_mois) : undefined,
+    reste: Number(row.reste),
+    banqueCaisse: row.banque_caisse ?? undefined,
+    statut: row.statut,
+    createdAt: row.created_at,
+  };
+}
+
+export async function fetchLoans(): Promise<Loan[]> {
+  const { data, error } = await supabase.from('loans').select('*').order('created_at', { ascending: false });
+  if (error) {
+    console.error('fetchLoans:', error);
+    return [];
+  }
+  return (data ?? []).map(mapLoan);
+}
+
+export async function createLoan(loan: {
+  employeeId: string;
+  montantTotal: number;
+  mensualite: number;
+  dateDebut: string;
+  dureeMois?: number;
+  banqueCaisse?: string;
+}): Promise<Loan | null> {
+  const { data, error } = await supabase
+    .from('loans')
+    .insert({
+      employee_id: loan.employeeId,
+      montant_total: loan.montantTotal,
+      mensualite: loan.mensualite,
+      date_debut: loan.dateDebut,
+      duree_mois: loan.dureeMois ?? null,
+      reste: loan.montantTotal,
+      banque_caisse: loan.banqueCaisse ?? null,
+      statut: 'actif',
+    })
+    .select()
+    .single();
+  if (error) {
+    console.error('createLoan:', error);
+    return null;
+  }
+  return mapLoan(data);
+}
+
+// Enregistre la mensualité du mois (idempotent — la contrainte UNIQUE(loan_id, month)
+// empêche de déduire deux fois la même mensualité si on clique par erreur deux fois),
+// puis met à jour le reste dû (et passe le prêt en "solde" s'il atteint 0).
+export async function recordLoanPayment(loanId: string, month: string, montant: number, newReste: number): Promise<void> {
+  const { error: payErr } = await supabase.from('loan_payments').insert({ loan_id: loanId, month, montant });
+  if (payErr) {
+    console.error('recordLoanPayment (insert):', payErr);
+    throw new Error(payErr.message);
+  }
+  const { error: updErr } = await supabase
+    .from('loans')
+    .update({ reste: newReste, statut: newReste <= 0 ? 'solde' : 'actif' })
+    .eq('id', loanId);
+  if (updErr) {
+    console.error('recordLoanPayment (update reste):', updErr);
+    throw new Error(updErr.message);
+  }
+}
+
+export async function fetchLoanPayments(): Promise<{ id: string; loanId: string; month: string; montant: number }[]> {
+  const { data, error } = await supabase.from('loan_payments').select('*');
+  if (error) {
+    console.error('fetchLoanPayments:', error);
+    return [];
+  }
+  return (data ?? []).map((r: Row) => ({ id: r.id, loanId: r.loan_id, month: r.month, montant: Number(r.montant) }));
+}
+
 // ─── CONGÉS ────────────────────────────────────────────────────────────────────
 
 export async function fetchLeaves(): Promise<LeaveRecord[]> {
@@ -521,7 +617,7 @@ export async function createVehicle(v: Partial<Vehicle>): Promise<Vehicle | null
 }
 
 export async function updateVehicle(id: string, v: Partial<Vehicle>): Promise<void> {
-  const payload: Record<string, any> = {
+  const payload: Row = {
     type: v.type,
     immatriculation: v.immatriculation,
     statut: v.statut,
@@ -591,7 +687,7 @@ export async function deleteMateriel(id: string): Promise<void> {
   if (error) console.error('deleteMateriel:', error);
 }
 
-function mapScan(row: any): ScanRecord {
+function mapScan(row: Row): ScanRecord {
   return {
     id: row.id,
     zone: row.zone ?? '',
@@ -707,7 +803,7 @@ export interface ScanImportSnapshot {
   } | null;
 }
 
-function mapScanSnapshot(row: any): ScanImportSnapshot {
+function mapScanSnapshot(row: Row): ScanImportSnapshot {
   return {
     id: row.id,
     importedAt: row.imported_at,

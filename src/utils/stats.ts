@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import type { Situation, Equipe, SituationNature } from '@/types';
 
 export const INSTALL_DERANG_TYPES = ['CLS', 'CPL', 'RLR', 'CMI', 'TRL', 'CST'] as const;
@@ -238,7 +238,33 @@ export function repeatDerangementByClient(situations: Situation[]): ClientRepeat
     .sort((a, b) => b.count - a.count);
 }
 
-export function exportStatsToExcel(opts: {
+// Ajoute une feuille à partir d'un tableau d'objets (équivalent de
+// XLSX.utils.json_to_sheet) — les clés du 1er objet deviennent l'en-tête.
+export function addSheetFromObjects(workbook: ExcelJS.Workbook, name: string, rows: Record<string, unknown>[]) {
+  const ws = workbook.addWorksheet(name.slice(0, 31));
+  if (rows.length === 0) return ws;
+  const headers = Object.keys(rows[0]);
+  ws.addRow(headers).font = { bold: true };
+  rows.forEach((r) => ws.addRow(headers.map((h) => r[h] ?? '')));
+  ws.columns.forEach((col) => {
+    col.width = 18;
+  });
+  return ws;
+}
+
+export function downloadWorkbookBuffer(buffer: ArrayBuffer, fileName: string) {
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function exportStatsToExcel(opts: {
   fileName: string;
   byEquipe: EquipeStat[];
   byVille: VilleStat[];
@@ -246,9 +272,11 @@ export function exportStatsToExcel(opts: {
   repeats: ClientRepeat[];
   situations?: Situation[];
 }) {
-  const wb = XLSX.utils.book_new();
+  const workbook = new ExcelJS.Workbook();
 
-  const wsEquipe = XLSX.utils.json_to_sheet(
+  addSheetFromObjects(
+    workbook,
+    'Par équipe',
     opts.byEquipe.map((r) => ({
       Équipe: r.equipe,
       Ville: r.ville,
@@ -258,9 +286,10 @@ export function exportStatsToExcel(opts: {
       '% Conformité': r.pctConformite,
     })),
   );
-  XLSX.utils.book_append_sheet(wb, wsEquipe, 'Par équipe');
 
-  const wsVille = XLSX.utils.json_to_sheet(
+  addSheetFromObjects(
+    workbook,
+    'Par ville',
     opts.byVille.map((r) => ({
       Ville: r.ville,
       Total: r.total,
@@ -269,9 +298,10 @@ export function exportStatsToExcel(opts: {
       '% Conformité': r.pctConformite,
     })),
   );
-  XLSX.utils.book_append_sheet(wb, wsVille, 'Par ville');
 
-  const wsType = XLSX.utils.json_to_sheet(
+  addSheetFromObjects(
+    workbook,
+    'Par type',
     opts.byType.map((r) => ({
       Type: r.type,
       Total: r.total,
@@ -280,11 +310,12 @@ export function exportStatsToExcel(opts: {
       '% Conformité': r.pctConformite,
     })),
   );
-  XLSX.utils.book_append_sheet(wb, wsType, 'Par type');
 
   // Liste détaillée des FGP concernés — mêmes colonnes que le fichier d'import original
   if (opts.situations) {
-    const wsDetail = XLSX.utils.json_to_sheet(
+    addSheetFromObjects(
+      workbook,
+      'Détail FGP',
       opts.situations.map((s) => ({
         'DETE MESSAGE': s.dateMessage || '',
         TYPE: s.type,
@@ -301,10 +332,11 @@ export function exportStatsToExcel(opts: {
         ConformitéDélais: s.conformite === 'HorsDelais' ? 'HorsDélais' : s.conformite === 'TLID' ? 'TLID' : '',
       })),
     );
-    XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail FGP');
   }
 
-  const wsRepeat = XLSX.utils.json_to_sheet(
+  addSheetFromObjects(
+    workbook,
+    'Dérangements répétés',
     opts.repeats.map((r) => ({
       FGP: r.fgp,
       'Nb interventions': r.count,
@@ -313,7 +345,7 @@ export function exportStatsToExcel(opts: {
       Motifs: r.motifs.join(' | '),
     })),
   );
-  XLSX.utils.book_append_sheet(wb, wsRepeat, 'Dérangements répétés');
 
-  XLSX.writeFile(wb, opts.fileName);
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadWorkbookBuffer(buffer as ArrayBuffer, opts.fileName);
 }

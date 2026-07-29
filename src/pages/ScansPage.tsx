@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { useAppStore } from '@/store/useAppStore';
 import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useToast } from '@/components/ui';
 import type { ScanRecord } from '@/types';
@@ -109,73 +109,69 @@ function computeDiffAndTag(oldRows: ScanRecord[], newRows: Partial<ScanRecord>[]
 
 // Lit un fichier .xlsx de scan et renvoie les lignes normalisées (réutilisé par
 // l'import principal ET l'outil "Comparer deux fichiers").
-function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target!.result as string, { type: 'binary', cellDates: true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        if (data.length < 2) {
-          reject(new Error('Fichier vide ou invalide'));
-          return;
-        }
-
-        const header = data[0].map((h: any) =>
-          String(h ?? '')
-            .trim()
-            .toUpperCase(),
-        );
-        const col = (keywords: string[]) => header.findIndex((h) => keywords.some((k) => h.includes(k)));
-        const cZone = col(['ZONE']);
-        const cStt = col(['STT']);
-        const cResult = col(['RESULT']);
-        const cScanTime = col(['SCAN TIME']);
-        const cPort = col(['PORT ID']);
-        const cOnuId = col(['ONU ID']);
-        const cOnuName = col(['ONU NAME']);
-        const cSw = col(['SOFTWARE VERSION']);
-        const cSn = col(['SN/MAC', 'SN MAC']);
-        const cAdded = col(['TIME ADDED']);
-        const cRx = col(['RX OPTICAL', 'RX POWER']);
-        const cRanging = col(['RANGING']);
-        const cRemarque = col(['REMARQUE']);
-
-        const toIso = (v: any) => (v instanceof Date ? v.toISOString() : v ? String(v) : undefined);
-        const toNum = (v: any) => (v === null || v === undefined || v === '' || v === '--' ? null : isNaN(Number(v)) ? null : Number(v));
-
-        const rows: Partial<ScanRecord>[] = [];
-        for (let i = 1; i < data.length; i++) {
-          const row = data[i];
-          if (!row || row.every((c) => c === null || c === undefined || c === '')) continue;
-          rows.push({
-            zone: cZone >= 0 ? String(row[cZone] ?? '').trim() : '',
-            stt: cStt >= 0 ? String(row[cStt] ?? '').trim() : '',
-            result:
-              cResult >= 0 && /SCANNE$/i.test(String(row[cResult] ?? '')) && !/NON/i.test(String(row[cResult] ?? ''))
-                ? 'SCANNE'
-                : 'NON SCANE',
-            scanTime: cScanTime >= 0 ? toIso(row[cScanTime]) : undefined,
-            portId: cPort >= 0 ? (toNum(row[cPort]) ?? undefined) : undefined,
-            onuId: cOnuId >= 0 ? (toNum(row[cOnuId]) ?? undefined) : undefined,
-            onuName: cOnuName >= 0 ? String(row[cOnuName] ?? '').trim() : undefined,
-            softwareVersion: cSw >= 0 ? String(row[cSw] ?? '').trim() : undefined,
-            snMac: cSn >= 0 ? String(row[cSn] ?? '').trim() : undefined,
-            timeAddedToNms: cAdded >= 0 ? toIso(row[cAdded]) : undefined,
-            rxPower: cRx >= 0 ? toNum(row[cRx]) : null,
-            ranging: cRanging >= 0 ? toNum(row[cRanging]) : null,
-            remarque: cRemarque >= 0 ? String(row[cRemarque] ?? '').trim() : '',
-          });
-        }
-        resolve(rows);
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = () => reject(new Error('Erreur de lecture du fichier'));
-    reader.readAsBinaryString(file);
+async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
+  const buffer = await file.arrayBuffer();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const ws = workbook.worksheets[0];
+  // Reconstruit un tableau 2D [ligne][colonne] équivalent à
+  // XLSX.utils.sheet_to_json(ws, { header: 1 }).
+  const data: unknown[][] = [];
+  ws.eachRow({ includeEmpty: true }, (row) => {
+    const values = row.values as unknown[]; // 1-indexé par ExcelJS
+    data.push(values.slice(1));
   });
+  if (data.length < 2) {
+    throw new Error('Fichier vide ou invalide');
+  }
+
+  const header = data[0].map((h: unknown) =>
+    String(h ?? '')
+      .trim()
+      .toUpperCase(),
+  );
+  const col = (keywords: string[]) => header.findIndex((h) => keywords.some((k) => h.includes(k)));
+  const cZone = col(['ZONE']);
+  const cStt = col(['STT']);
+  const cResult = col(['RESULT']);
+  const cScanTime = col(['SCAN TIME']);
+  const cPort = col(['PORT ID']);
+  const cOnuId = col(['ONU ID']);
+  const cOnuName = col(['ONU NAME']);
+  const cSw = col(['SOFTWARE VERSION']);
+  const cSn = col(['SN/MAC', 'SN MAC']);
+  const cAdded = col(['TIME ADDED']);
+  const cRx = col(['RX OPTICAL', 'RX POWER']);
+  const cRanging = col(['RANGING']);
+  const cRemarque = col(['REMARQUE']);
+
+  const toIso = (v: unknown) => (v instanceof Date ? v.toISOString() : v ? String(v) : undefined);
+  const toNum = (v: unknown) => (v === null || v === undefined || v === '' || v === '--' ? null : isNaN(Number(v)) ? null : Number(v));
+
+  const rows: Partial<ScanRecord>[] = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row || row.every((c) => c === null || c === undefined || c === '')) continue;
+    rows.push({
+      zone: cZone >= 0 ? String(row[cZone] ?? '').trim() : '',
+      stt: cStt >= 0 ? String(row[cStt] ?? '').trim() : '',
+      result:
+        cResult >= 0 && /SCANNE$/i.test(String(row[cResult] ?? '')) && !/NON/i.test(String(row[cResult] ?? ''))
+          ? 'SCANNE'
+          : 'NON SCANE',
+      scanTime: cScanTime >= 0 ? toIso(row[cScanTime]) : undefined,
+      portId: cPort >= 0 ? (toNum(row[cPort]) ?? undefined) : undefined,
+      onuId: cOnuId >= 0 ? (toNum(row[cOnuId]) ?? undefined) : undefined,
+      onuName: cOnuName >= 0 ? String(row[cOnuName] ?? '').trim() : undefined,
+      softwareVersion: cSw >= 0 ? String(row[cSw] ?? '').trim() : undefined,
+      snMac: cSn >= 0 ? String(row[cSn] ?? '').trim() : undefined,
+      timeAddedToNms: cAdded >= 0 ? toIso(row[cAdded]) : undefined,
+      rxPower: cRx >= 0 ? toNum(row[cRx]) : null,
+      ranging: cRanging >= 0 ? toNum(row[cRanging]) : null,
+      remarque: cRemarque >= 0 ? String(row[cRemarque] ?? '').trim() : '',
+    });
+  }
+  return rows;
 }
 
 export default function ScansPage() {

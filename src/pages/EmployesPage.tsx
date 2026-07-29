@@ -47,6 +47,7 @@ function daysBetween(a: string, b: string): number {
 export default function EmployesPage() {
   const employees = useAppStore((s) => s.employees);
   const leaves = useAppStore((s) => s.leaves);
+  const loans = useAppStore((s) => s.loans);
   const loadEmployees = useAppStore((s) => s.loadEmployees);
   const addEmployee = useAppStore((s) => s.addEmployee);
   const editEmployee = useAppStore((s) => s.editEmployee);
@@ -161,7 +162,7 @@ export default function EmployesPage() {
   };
 
   const handleExportPresents = async () => {
-    await exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, ordreBase: exportOrdre });
+    await exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, loans, ordreBase: exportOrdre });
     showToast('Fichier Excel des employés présents généré ', 'success');
   };
 
@@ -452,7 +453,12 @@ export default function EmployesPage() {
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-500 block mb-1.5">RIB</label>
-              <Input value={form.rib ?? ''} onChange={(e) => setForm((f) => ({ ...f, rib: e.target.value }))} />
+              <Input
+                value={form.rib ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, rib: e.target.value.replace(/\s+/g, '') }))}
+                placeholder="23 chiffres, sans espace"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Format bancaire compact — les espaces sont retirés automatiquement.</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">

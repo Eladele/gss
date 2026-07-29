@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord } from '@/types';
+import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan } from '@/types';
 import type { ScanImportSnapshot } from '@/lib/supabaseService';
 import { SAMPLE_NOTIFICATIONS, ZONE_EQUIPE_MAP } from '@/data';
 import {
@@ -38,10 +38,13 @@ import {
   fetchScanImportHistory,
   insertScanImportSnapshot,
   deleteScanImportSnapshot,
+  fetchLoans,
+  createLoan,
+  recordLoanPayment as recordLoanPaymentService,
 } from '@/lib/supabaseService';
 
 interface AppState {
-  currentUser: any;
+  currentUser: unknown;
   user: User | null;
   situations: Situation[];
   notifications: Notification[];
@@ -49,6 +52,7 @@ interface AppState {
   equipes: Equipe[];
   employees: Employee[];
   leaves: LeaveRecord[];
+  loans: Loan[];
   vehicles: Vehicle[];
   materiels: Materiel[];
   scans: ScanRecord[];
@@ -93,6 +97,15 @@ interface AppState {
   addLeave: (leave: Partial<LeaveRecord>) => Promise<void>;
   editLeave: (id: string, leave: Partial<LeaveRecord>) => Promise<void>;
   removeLeave: (id: string) => Promise<void>;
+  addLoan: (loan: {
+    employeeId: string;
+    montantTotal: number;
+    mensualite: number;
+    dateDebut: string;
+    dureeMois?: number;
+    banqueCaisse?: string;
+  }) => Promise<void>;
+  recordLoanPayment: (loanId: string, month: string) => Promise<void>;
   // Véhicules (admin uniquement)
   loadVehicles: () => Promise<void>;
   addVehicle: (v: Partial<Vehicle>) => Promise<void>;
@@ -142,6 +155,7 @@ export const useAppStore = create<AppState>()(
       equipes: [],
       employees: [],
       leaves: [],
+      loans: [],
       vehicles: [],
       materiels: [],
       scans: [],
@@ -161,6 +175,7 @@ export const useAppStore = create<AppState>()(
           equipes: [],
           employees: [],
           leaves: [],
+          loans: [],
           vehicles: [],
           materiels: [],
           scans: [],
@@ -184,7 +199,7 @@ export const useAppStore = create<AppState>()(
         const previous = get().situations.find((s) => s.id === id);
         if (!previous) return;
         const newDateClt = details?.dateClt || previous.dateClt || today;
-        const closedBy = get().user?.name || 'Inconnu';
+        const closedByName = get().user?.name;
         // Optimistic update — la "DATE MISE EN SERVICE" est posée automatiquement
         // à la date système dès qu'une situation (installation ou dérangement) passe OK,
         // sauf si une date a été saisie dans le formulaire de clôture.
@@ -204,7 +219,7 @@ export const useAppStore = create<AppState>()(
                   rxDbm: details?.rxDbm ?? sit.rxDbm,
                   rangingM: details?.rangingM ?? sit.rangingM,
                   scanStatut: details?.scanStatut ?? sit.scanStatut,
-                  closedBy,
+                  closedBy: closedByName ?? sit.closedBy,
                 }
               : sit,
           ),
@@ -217,7 +232,7 @@ export const useAppStore = create<AppState>()(
             rxDbm: details?.rxDbm ?? null,
             rangingM: details?.rangingM ?? null,
             scanStatut: details?.scanStatut ?? null,
-            closedBy,
+            closedBy: closedByName ?? null,
           });
         } catch (err: any) {
           // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser
@@ -380,10 +395,10 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ equipes: s.equipes.filter((e) => e.id !== id) }));
       },
 
-      // ─── Employés & congés ───────────────────────────────────────────────────
+      // ─── Employés, congés & prêts ─────────────────────────────────────────
       loadEmployees: async () => {
-        const [employees, leaves] = await Promise.all([fetchEmployees(), fetchLeaves()]);
-        set({ employees, leaves });
+        const [employees, leaves, loans] = await Promise.all([fetchEmployees(), fetchLeaves(), fetchLoans()]);
+        set({ employees, leaves, loans });
       },
 
       addEmployee: async (emp) => {
@@ -424,6 +439,31 @@ export const useAppStore = create<AppState>()(
       removeLeave: async (id) => {
         await deleteLeave(id);
         set((s) => ({ leaves: s.leaves.filter((l) => l.id !== id) }));
+      },
+
+      addLoan: async (loan) => {
+        const newLoan = await createLoan(loan);
+        if (newLoan) {
+          set((s) => ({ loans: [newLoan, ...s.loans] }));
+          get().addNotification('Prêt enregistré', `Prêt ajouté pour un montant de ${newLoan.montantTotal} MRU.`, 'ok');
+        }
+      },
+
+      recordLoanPayment: async (loanId, month) => {
+        const loan = get().loans.find((l) => l.id === loanId);
+        if (!loan) return;
+        const montant = Math.min(loan.mensualite, loan.reste);
+        const newReste = Math.max(0, loan.reste - loan.mensualite);
+        try {
+          await recordLoanPaymentService(loanId, month, montant, newReste);
+          set((s) => ({
+            loans: s.loans.map((l) => (l.id === loanId ? { ...l, reste: newReste, statut: newReste <= 0 ? 'solde' : 'actif' } : l)),
+          }));
+          get().addNotification('Mensualité prélevée', `${montant} MRU déduits — reste ${newReste} MRU.`, 'ok');
+        } catch (err: any) {
+          get().addNotification('Échec', err?.message || 'Mensualité déjà enregistrée pour ce mois ?', 'nok');
+          throw err;
+        }
       },
 
       // ─── Véhicules ────────────────────────────────────────────────────────────
@@ -523,6 +563,7 @@ export const useAppStore = create<AppState>()(
         importHistory: state.importHistory,
         employees: state.employees,
         leaves: state.leaves,
+        loans: state.loans,
         vehicles: state.vehicles,
         materiels: state.materiels,
       }),

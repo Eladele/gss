@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import type { Employee, LeaveRecord } from '@/types';
+import type { Employee, LeaveRecord, Loan } from '@/types';
 import { numberToFrenchWords } from './numberToWordsFr';
 import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
 
@@ -32,6 +32,13 @@ const FULL_BORDER: Partial<ExcelJS.Borders> = { top: THIN, left: THIN, bottom: T
 const MEDIUM: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: COLOR.accentDark } };
 
 const MONTANT_FMT = '#,##0.00';
+
+/** Format bancaire compact — retire tout espace du RIB/numéro de compte, quelle
+ * que soit la façon dont il a été saisi (le système bancaire travaille sur la
+ * chaîne compacte de chiffres, les espaces ne sont qu'une convention d'affichage). */
+function cleanRib(rib?: string): string {
+  return (rib || '').replace(/\s+/g, '');
+}
 
 /** Incrémente le numéro d'ordre (ex: "018/DG/GSS/2026" -> "019/DG/GSS/2026") */
 function nextOrdre(base: string, offset: number): string {
@@ -180,8 +187,8 @@ function buildVirementSheet(
 
   employees.forEach((e, i) => {
     const row = isBpm
-      ? ['', i + 1, e.mle, e.name, banque, e.rib || '', '', '', e.montantSheet]
-      : ['', i + 1, e.mle, e.name, banque, e.rib || '', e.montantSheet];
+      ? ['', i + 1, e.mle, e.name, banque, cleanRib(e.rib), '', '', e.montantSheet]
+      : ['', i + 1, e.mle, e.name, banque, cleanRib(e.rib), e.montantSheet];
     const r = ws.addRow(row);
     r.height = 18;
     const banded = i % 2 === 1;
@@ -269,11 +276,12 @@ export async function exportEmployesPresentsExcel(opts: {
   month: string; // "YYYY-MM"
   employees: Employee[];
   leaves: LeaveRecord[];
+  loans?: Loan[]; // prêts en cours — la mensualité active est déduite automatiquement
   ordreBase?: string; // ex: "020/DG/GSS/2026" — incrémenté automatiquement par banque
   dateStr?: string; // ex: "17/07/2026" — défaut : aujourd'hui
   fileName?: string;
 }) {
-  const { month, employees, leaves } = opts;
+  const { month, employees, leaves, loans = [] } = opts;
   const [y, m] = month.split('-').map(Number);
 
   // On se base sur le MOIS DE DÉBUT du congé (un congé "du 3 juin au 3
@@ -290,11 +298,21 @@ export async function exportEmployesPresentsExcel(opts: {
   const onLeaveIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === month).map((l) => l.employeeId));
   const doublingIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === nextMonth).map((l) => l.employeeId));
 
+  // Prêts actifs (reste dû > 0) par employé — la mensualité (plafonnée au reste
+  // dû) est déduite du salaire exporté ce mois-ci, automatiquement.
+  const activeLoanByEmployee = new Map<string, Loan>();
+  loans.forEach((l) => {
+    if (l.statut === 'actif' && l.reste > 0) activeLoanByEmployee.set(l.employeeId, l);
+  });
+
   const present = employees
     .filter((e) => e.actif !== false && !onLeaveIds.has(e.id))
     .map((e) => {
       const conge_double = doublingIds.has(e.id);
-      return { ...e, montant: conge_double ? (e.montant ?? 0) * 2 : e.montant, conge_double };
+      const baseMontant = conge_double ? (e.montant ?? 0) * 2 : (e.montant ?? 0);
+      const loan = activeLoanByEmployee.get(e.id);
+      const pret_deduit = loan ? Math.min(loan.mensualite, loan.reste) : 0;
+      return { ...e, montant: baseMontant - pret_deduit, conge_double, pret_deduit, pret_reste_apres: loan ? Math.max(0, loan.reste - pret_deduit) : undefined };
     });
 
   const motifMois = `${MOIS_FR[(m || 1) - 1]} ${y}`;
@@ -341,6 +359,9 @@ export async function exportEmployesPresentsExcel(opts: {
   });
 
   present.forEach((e, i) => {
+    const remarques: string[] = [];
+    if (e.conge_double) remarques.push('Congé le mois prochain — salaire doublé');
+    if (e.pret_deduit) remarques.push(`Prêt : -${e.pret_deduit.toLocaleString('fr-FR')} MRU (reste ${e.pret_reste_apres?.toLocaleString('fr-FR')} MRU)`);
     const r = wsAll.addRow([
       i + 1,
       e.mle,
@@ -349,9 +370,9 @@ export async function exportEmployesPresentsExcel(opts: {
       e.ville || '',
       e.equipeNom || '',
       e.banque || 'Caisse',
-      e.rib || '',
+      cleanRib(e.rib),
       e.montant ?? undefined,
-      e.conge_double ? 'Congé le mois prochain — salaire doublé' : '',
+      remarques.join(' · '),
     ]);
     r.height = 18;
     const banded = i % 2 === 1;
@@ -361,7 +382,7 @@ export async function exportEmployesPresentsExcel(opts: {
       cell.alignment = { horizontal: colNumber === 3 ? 'left' : 'center', vertical: 'middle' };
       if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
       if (colNumber === 9) cell.numFmt = MONTANT_FMT; // Montant — vrai nombre
-      if (colNumber === 10 && e.conge_double) {
+      if (colNumber === 10 && remarques.length > 0) {
         cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
       }
     });

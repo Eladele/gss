@@ -10,7 +10,9 @@ type Filter = 'all' | SituationStatus;
 export default function ChefProgrammePage() {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
-  const currentUser = useAppStore((s) => s.currentUser); // { teamName, teamId, name, role, ... }
+  const currentUser = useAppStore((s) => s.currentUser) as
+    | { teamId?: string; teamName?: string; name?: string; role?: string }
+    | null; // { teamName, teamId, name, role, ... }
   const loading = useAppStore((s) => s.loading);
 
   const [filter, setFilter] = useState<Filter>('all');

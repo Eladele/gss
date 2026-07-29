@@ -1,5 +1,13 @@
 import type { SituationStatus, SituationType } from '@/types';
 
+// Extrait un message d'erreur lisible sans utiliser `any` — remplace le pattern
+// `catch (err: any) { err?.message }` par `catch (err: unknown) { errMsg(err) }`.
+export function errMsg(err: unknown, fallback = 'Erreur inconnue'): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  return fallback;
+}
+
 // Color palette for equipes (fallback if not in DB)
 const FALLBACK_COLORS: Record<string, string> = {
   hamadi: '#2E7D32',

@@ -1,9 +1,11 @@
 import { useRef, useState, useMemo } from 'react';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { useAppStore } from '@/store/useAppStore';
 import { ZONE_EQUIPE_MAP } from '@/data';
 import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, EmptyState } from '@/components/ui';
 import { useToast } from '@/components/ui';
+import { errMsg } from '@/utils';
+import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
 import type { Situation, SituationNature } from '@/types';
 
 type NatureFilter = 'mixed' | SituationNature;
@@ -73,22 +75,29 @@ export default function ImportExcelPage() {
     return zoneEquipeMap[key] ?? zoneEquipeMap[zone] ?? '';
   };
 
-  const parseFile = (file: File) => {
+  const parseFile = async (file: File) => {
     setLoading(true);
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target!.result as string, { type: 'binary', cellDates: true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-        if (data.length < 2) {
-          showToast('Fichier vide ou invalide', 'error');
-          setLoading(false);
-          return;
-        }
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer);
+      const ws = workbook.worksheets[0];
+      // Reconstruit un tableau 2D [ligne][colonne] équivalent à
+      // XLSX.utils.sheet_to_json(ws, { header: 1 }) — le reste du code
+      // (recherche de colonnes par en-tête, etc.) n'a pas besoin de changer.
+      const data: unknown[][] = [];
+      ws.eachRow({ includeEmpty: true }, (row) => {
+        const values = row.values as unknown[]; // 1-indexé par ExcelJS (index 0 = undefined)
+        data.push(values.slice(1));
+      });
+      if (data.length < 2) {
+        showToast('Fichier vide ou invalide', 'error');
+        setLoading(false);
+        return;
+      }
 
-        const header = data[0].map((h: any) =>
+        const header = data[0].map((h: unknown) =>
           String(h ?? '')
             .trim()
             .toUpperCase(),
@@ -141,7 +150,7 @@ export default function ImportExcelPage() {
           // ── Auto-distribution : résolution zone → équipe via Supabase ──
           const equipe = resolveEquipe(zone, equipeFromFile);
 
-          const parseDate = (val: any) => {
+          const parseDate = (val: unknown) => {
             if (!val) return '';
             if (val instanceof Date) return val.toISOString().slice(0, 10);
             return String(val).slice(0, 10);
@@ -149,7 +158,7 @@ export default function ImportExcelPage() {
 
           const delaiCellRaw = colDelai >= 0 ? row[colDelai] : null;
           const hasDelai = delaiCellRaw !== null && delaiCellRaw !== undefined && String(delaiCellRaw).trim() !== '';
-          const delaiImporte = hasDelai ? parseFloat(delaiCellRaw) || 0 : 0;
+          const delaiImporte = hasDelai ? parseFloat(String(delaiCellRaw)) || 0 : 0;
           const confRaw = colConf >= 0 ? String(row[colConf] ?? '').trim() : '';
 
           const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
@@ -255,13 +264,11 @@ export default function ImportExcelPage() {
           `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}${rejected.length > 0 ? ` · ${rejected.length} lignes rejetées (type/FGP invalide, voir ci-dessous)` : ''}`,
           rejected.length > 0 ? 'warning' : unassigned === 0 ? 'success' : 'warning',
         );
-      } catch (err: any) {
-        showToast('Erreur lecture: ' + err.message, 'error');
-      } finally {
+        setLoading(false);
+      } catch (err: unknown) {
+        showToast('Erreur lecture: ' + errMsg(err), 'error');
         setLoading(false);
       }
-    };
-    reader.readAsBinaryString(file);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -289,10 +296,10 @@ export default function ImportExcelPage() {
         }`,
         unassigned > 0 ? 'warning' : 'success',
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       // On garde la preview affichée pour permettre de réessayer, au lieu de laisser
       // croire à un succès alors que rien n'a été enregistré en base.
-      showToast("Échec de l'import : " + (err?.message || 'vérifiez le schéma de la base'), 'error');
+      showToast("Échec de l'import : " + errMsg(err, 'vérifiez le schéma de la base'), 'error');
     } finally {
       setImporting(false);
     }
@@ -383,11 +390,15 @@ export default function ImportExcelPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  const wb = XLSX.utils.book_new();
-                  const ws = XLSX.utils.json_to_sheet(rejectedRows.map((r) => ({ ...r.row, Motif_rejet: r.reason })));
-                  XLSX.utils.book_append_sheet(wb, ws, 'Rejetées');
-                  XLSX.writeFile(wb, `lignes_rejetees_${fileName || 'import'}.xlsx`);
+                onClick={async () => {
+                  const workbook = new ExcelJS.Workbook();
+                  addSheetFromObjects(
+                    workbook,
+                    'Rejetées',
+                    rejectedRows.map((r) => ({ ...r.row, Motif_rejet: r.reason })),
+                  );
+                  const buffer = await workbook.xlsx.writeBuffer();
+                  downloadWorkbookBuffer(buffer as ArrayBuffer, `lignes_rejetees_${fileName || 'import'}.xlsx`);
                 }}
               >
                 Télécharger les lignes rejetées
@@ -541,8 +552,8 @@ export default function ImportExcelPage() {
                             "Supprimer cet import ?\n\nATTENTION : ça supprime aussi TOUTES les situations créées par cet import (suppression en cascade), pas seulement la ligne d'historique. Cette action est irréversible.\n\nNote : les imports faits avant la mise en place de ce lien ne sont pas concernés (seule la ligne d'historique sera retirée dans ce cas).",
                           )
                         ) {
-                          removeImportRecord(h.id).catch((err: any) => {
-                            showToast('Suppression échouée : ' + (err?.message || 'erreur inconnue'), 'error');
+                          removeImportRecord(h.id).catch((err: unknown) => {
+                            showToast('Suppression échouée : ' + errMsg(err), 'error');
                           });
                         }
                       }}

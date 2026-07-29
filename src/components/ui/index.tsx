@@ -196,7 +196,6 @@ export function OKSheet({
   fgp,
   initialValues,
   equipesOptions,
-  currentUser,
   onClose,
   onConfirm,
 }: {
@@ -204,7 +203,6 @@ export function OKSheet({
   fgp: string;
   initialValues: OKSheetValues;
   equipesOptions: { id: string; name: string }[];
-  currentUser?: string;
   onClose: () => void;
   onConfirm: (values: OKSheetValues) => void;
 }) {
@@ -223,42 +221,18 @@ export function OKSheet({
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl p-6 shadow-2xl animate-slide-up max-h-[90vh] overflow-y-auto">
         <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-4" />
         <p className="font-bold text-green-700 text-lg mb-1">Clôturer OK — FGP {fgp}</p>
-        <p className="text-xs text-slate-500 mb-3">Les champs sont pré-remplis avec ce qui est déjà programmé — modifie si besoin.</p>
-
-        {/* Clôturé par — affiché en lecture seule, automatiquement rempli */}
-        {currentUser && (
-          <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-green-50 border border-green-200 rounded-lg">
-            <span className="text-xs font-semibold text-green-700">Clôturé par :</span>
-            <span className="text-xs font-bold text-green-900">{currentUser}</span>
-          </div>
-        )}
+        <p className="text-xs text-slate-500 mb-4">Les champs sont pré-remplis avec ce qui est déjà programmé — modifie si besoin.</p>
 
         <div className="space-y-3">
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Poteau (nombre utilisé)</label>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="w-10 h-10 border border-slate-200 rounded-lg flex items-center justify-center bg-white text-slate-600 font-bold hover:bg-slate-50 active:scale-95 transition-all cursor-pointer"
-                onClick={() => set('poteau', Math.max(0, values.poteau - 1))}
-              >
-                -
-              </button>
-              <input
-                type="number"
-                min={0}
-                className="flex-1 text-center border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
-                value={values.poteau}
-                onChange={(e) => set('poteau', Math.max(0, Number(e.target.value) || 0))}
-              />
-              <button
-                type="button"
-                className="w-10 h-10 border border-slate-200 rounded-lg flex items-center justify-center bg-white text-slate-600 font-bold hover:bg-slate-50 active:scale-95 transition-all cursor-pointer"
-                onClick={() => set('poteau', values.poteau + 1)}
-              >
-                +
-              </button>
-            </div>
+            <input
+              type="number"
+              min={0}
+              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+              value={values.poteau}
+              onChange={(e) => set('poteau', Number(e.target.value) || 0)}
+            />
           </div>
 
           <div>

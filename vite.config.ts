@@ -10,7 +10,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'pwa-icon-192.png', 'pwa-icon-512.png'],
+      includeAssets: ['favicon.svg', 'pwa-icon-192.png', 'pwa-icon-512.png', 'pwa-icon-512-maskable.png'],
       manifest: {
         name: 'GSS Program Manager · FTTH',
         short_name: 'GSS',
@@ -33,10 +33,10 @@ export default defineConfig({
             type: 'image/png',
           },
           {
-            src: 'pwa-icon-512.png',
+            src: 'pwa-icon-512-maskable.png',
             sizes: '512x512',
             type: 'image/png',
-            purpose: 'any maskable',
+            purpose: 'maskable',
           },
         ],
       },
