@@ -16,7 +16,7 @@ export default function PretsPage() {
   const { showToast } = useToast();
 
   useEffect(() => {
-    if (employees.length === 0) loadEmployees();
+    loadEmployees();
   }, []);
 
   const employeeById = useMemo(() => {
