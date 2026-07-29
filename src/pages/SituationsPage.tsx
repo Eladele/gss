@@ -5,7 +5,6 @@ import { calcDelai, isHorsDelai, countPoteaux, MERGED_TYPES } from '@/utils/stat
 import {
   Card,
   CardHeader,
-  CardTitle,
   Button,
   TypeBadge,
   StatusBadge,
@@ -20,6 +19,7 @@ import {
 } from '@/components/ui';
 import type { OKSheetValues } from '@/components/ui';
 import { useToast } from '@/components/ui';
+import { errMsg } from '@/utils';
 
 export default function SituationsPage() {
   const situations = useAppStore((s) => s.situations);
@@ -30,7 +30,6 @@ export default function SituationsPage() {
   const markOK = useAppStore((s) => s.markOK);
   const markNonOK = useAppStore((s) => s.markNonOK);
   const addUrgence = useAppStore((s) => s.addUrgence);
-  const loadAll = useAppStore((s) => s.loadAll);
   const { showToast } = useToast();
 
   const isAdmin = user.role === 'admin' || user.role === 'superviseur';
@@ -159,8 +158,8 @@ export default function SituationsPage() {
       });
       setOkOpen(false);
       showToast(`FGP ${okFgp} marqué OK `, 'success');
-    } catch (err: any) {
-      showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
+    } catch (err: unknown) {
+      showToast("Échec — non enregistré : " + errMsg(err), 'error');
     }
   };
   const handleMarkNOK = (id: string, fgp: string, existingComment = '') => {
@@ -174,8 +173,8 @@ export default function SituationsPage() {
       await markNonOK(nokId, comment);
       setNokOpen(false);
       showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
-    } catch (err: any) {
-      showToast("Échec — non enregistré : " + (err?.message || 'erreur inconnue'), 'error');
+    } catch (err: unknown) {
+      showToast("Échec — non enregistré : " + errMsg(err), 'error');
     }
   };
 
