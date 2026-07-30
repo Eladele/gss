@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan } from '@/types';
+import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier } from '@/types';
 
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
 
@@ -533,6 +533,125 @@ export async function fetchLoanPayments(): Promise<{ id: string; loanId: string;
     return [];
   }
   return (data ?? []).map((r: any) => ({ id: r.id, loanId: r.loan_id, month: r.month, montant: Number(r.montant) }));
+}
+
+// ─── CHANTIERS (déploiement) ───────────────────────────────────────────────────
+
+function mapChantier(row: any): Chantier {
+  return {
+    id: row.id,
+    nom: row.nom,
+    zone: row.zone ?? undefined,
+    ville: row.ville ?? undefined,
+    equipeNom: row.equipe_nom ?? undefined,
+    typeDeploiement: row.type_deploiement === 'souterrain' ? 'souterrain' : 'aerien',
+    statut: row.statut,
+    dateDebut: row.date_debut ?? undefined,
+    dateFinPrevue: row.date_fin_prevue ?? undefined,
+    poteauxPrevus: row.poteaux_prevus ?? 0,
+    poteauxPoses: row.poteaux_poses ?? 0,
+    tranchéePrevueM: row.tranchee_prevue_m != null ? Number(row.tranchee_prevue_m) : 0,
+    tranchéePoseeM: row.tranchee_posee_m != null ? Number(row.tranchee_posee_m) : 0,
+    blocagePrevu: row.blocage_prevu ?? 0,
+    blocageFait: row.blocage_fait ?? 0,
+    ouverturePrevue: row.ouverture_prevue ?? 0,
+    ouvertureFaite: row.ouverture_faite ?? 0,
+    closerMpoPrevu: row.closer_mpo_prevu ?? 0,
+    closerMpoFait: row.closer_mpo_fait ?? 0,
+    closerDisPrevu: row.closer_dis_prevu ?? 0,
+    closerDisFait: row.closer_dis_fait ?? 0,
+    xBoxPrevus: row.x_box_prevus ?? 0,
+    xBoxPoses: row.x_box_poses ?? 0,
+    hubBoxPrevus: row.hub_box_prevus ?? 0,
+    hubBoxPoses: row.hub_box_poses ?? 0,
+    subBoxPrevus: row.sub_box_prevus ?? 0,
+    subBoxPoses: row.sub_box_poses ?? 0,
+    endBoxPrevus: row.end_box_prevus ?? 0,
+    endBoxPoses: row.end_box_poses ?? 0,
+    cableMpoPrevuM: row.cable_mpo_prevu_m != null ? Number(row.cable_mpo_prevu_m) : 0,
+    cableMpoPoseM: row.cable_mpo_pose_m != null ? Number(row.cable_mpo_pose_m) : 0,
+    cableDistributionPrevuM: row.cable_distribution_prevu_m != null ? Number(row.cable_distribution_prevu_m) : 0,
+    cableDistributionPoseM: row.cable_distribution_pose_m != null ? Number(row.cable_distribution_pose_m) : 0,
+    notes: row.notes ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+function toDbChantier(c: Partial<Chantier>): Record<string, any> {
+  const payload: Record<string, any> = {};
+  if (c.nom !== undefined) payload.nom = c.nom;
+  if (c.zone !== undefined) payload.zone = c.zone || null;
+  if (c.ville !== undefined) payload.ville = c.ville || null;
+  if (c.equipeNom !== undefined) payload.equipe_nom = c.equipeNom || null;
+  if (c.typeDeploiement !== undefined) payload.type_deploiement = c.typeDeploiement;
+  if (c.statut !== undefined) payload.statut = c.statut;
+  if (c.dateDebut !== undefined) payload.date_debut = c.dateDebut || null;
+  if (c.dateFinPrevue !== undefined) payload.date_fin_prevue = c.dateFinPrevue || null;
+  if (c.poteauxPrevus !== undefined) payload.poteaux_prevus = c.poteauxPrevus;
+  if (c.poteauxPoses !== undefined) payload.poteaux_poses = c.poteauxPoses;
+  if (c.tranchéePrevueM !== undefined) payload.tranchee_prevue_m = c.tranchéePrevueM;
+  if (c.tranchéePoseeM !== undefined) payload.tranchee_posee_m = c.tranchéePoseeM;
+  if (c.blocagePrevu !== undefined) payload.blocage_prevu = c.blocagePrevu;
+  if (c.blocageFait !== undefined) payload.blocage_fait = c.blocageFait;
+  if (c.ouverturePrevue !== undefined) payload.ouverture_prevue = c.ouverturePrevue;
+  if (c.ouvertureFaite !== undefined) payload.ouverture_faite = c.ouvertureFaite;
+  if (c.closerMpoPrevu !== undefined) payload.closer_mpo_prevu = c.closerMpoPrevu;
+  if (c.closerMpoFait !== undefined) payload.closer_mpo_fait = c.closerMpoFait;
+  if (c.closerDisPrevu !== undefined) payload.closer_dis_prevu = c.closerDisPrevu;
+  if (c.closerDisFait !== undefined) payload.closer_dis_fait = c.closerDisFait;
+  if (c.xBoxPrevus !== undefined) payload.x_box_prevus = c.xBoxPrevus;
+  if (c.xBoxPoses !== undefined) payload.x_box_poses = c.xBoxPoses;
+  if (c.hubBoxPrevus !== undefined) payload.hub_box_prevus = c.hubBoxPrevus;
+  if (c.hubBoxPoses !== undefined) payload.hub_box_poses = c.hubBoxPoses;
+  if (c.subBoxPrevus !== undefined) payload.sub_box_prevus = c.subBoxPrevus;
+  if (c.subBoxPoses !== undefined) payload.sub_box_poses = c.subBoxPoses;
+  if (c.endBoxPrevus !== undefined) payload.end_box_prevus = c.endBoxPrevus;
+  if (c.endBoxPoses !== undefined) payload.end_box_poses = c.endBoxPoses;
+  if (c.cableMpoPrevuM !== undefined) payload.cable_mpo_prevu_m = c.cableMpoPrevuM;
+  if (c.cableMpoPoseM !== undefined) payload.cable_mpo_pose_m = c.cableMpoPoseM;
+  if (c.cableDistributionPrevuM !== undefined) payload.cable_distribution_prevu_m = c.cableDistributionPrevuM;
+  if (c.cableDistributionPoseM !== undefined) payload.cable_distribution_pose_m = c.cableDistributionPoseM;
+  if (c.notes !== undefined) payload.notes = c.notes || null;
+  payload.updated_at = new Date().toISOString();
+  return payload;
+}
+
+export async function fetchChantiers(): Promise<Chantier[]> {
+  const { data, error } = await supabase.from('chantiers').select('*').order('created_at', { ascending: false });
+  if (error) {
+    console.error('fetchChantiers:', error);
+    return [];
+  }
+  return (data ?? []).map(mapChantier);
+}
+
+export async function createChantier(c: Partial<Chantier>): Promise<Chantier | null> {
+  const { data, error } = await supabase
+    .from('chantiers')
+    .insert(toDbChantier(c))
+    .select()
+    .single();
+  if (error) {
+    console.error('createChantier:', error);
+    return null;
+  }
+  return mapChantier(data);
+}
+
+export async function updateChantier(id: string, c: Partial<Chantier>): Promise<void> {
+  const { error } = await supabase.from('chantiers').update(toDbChantier(c)).eq('id', id);
+  if (error) {
+    console.error('updateChantier:', error);
+    throw new Error(error.message);
+  }
+}
+
+export async function deleteChantier(id: string): Promise<void> {
+  const { error } = await supabase.from('chantiers').delete().eq('id', id);
+  if (error) {
+    console.error('deleteChantier:', error);
+    throw new Error(error.message);
+  }
 }
 
 // ─── CONGÉS ────────────────────────────────────────────────────────────────────

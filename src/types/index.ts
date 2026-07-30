@@ -104,6 +104,51 @@ export interface Loan {
   createdAt?: string;
 }
 
+export interface Chantier {
+  id: string;
+  nom: string;
+  zone?: string; // code zone ex: CA3Z05, CI1Z01
+  ville?: string;
+  equipeNom?: string;
+  typeDeploiement: 'aerien' | 'souterrain';
+  statut: 'en_cours' | 'termine' | 'suspendu';
+  dateDebut?: string;
+  dateFinPrevue?: string;
+
+  // ── Aérien uniquement ──
+  poteauxPrevus: number;
+  poteauxPoses: number;
+
+  // ── Souterrain uniquement ──
+  tranchéePrevueM: number;
+  tranchéePoseeM: number;
+  blocagePrevu: number;
+  blocageFait: number;
+  ouverturePrevue: number;
+  ouvertureFaite: number;
+  closerMpoPrevu: number;
+  closerMpoFait: number;
+  closerDisPrevu: number;
+  closerDisFait: number;
+
+  // ── Commun aux deux modes ──
+  xBoxPrevus: number;
+  xBoxPoses: number;
+  hubBoxPrevus: number;
+  hubBoxPoses: number;
+  subBoxPrevus: number;
+  subBoxPoses: number;
+  endBoxPrevus: number;
+  endBoxPoses: number;
+  cableMpoPrevuM: number;
+  cableMpoPoseM: number;
+  cableDistributionPrevuM: number;
+  cableDistributionPoseM: number;
+
+  notes?: string;
+  createdAt?: string;
+}
+
 export interface LeaveRecord {
   id: string;
   employeeId: string;

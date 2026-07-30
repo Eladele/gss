@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan } from '@/types';
+import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier } from '@/types';
 import type { ScanImportSnapshot } from '@/lib/supabaseService';
 import { SAMPLE_NOTIFICATIONS, ZONE_EQUIPE_MAP } from '@/data';
 import { errMsg } from '@/utils';
@@ -43,6 +43,10 @@ import {
   fetchLoans,
   createLoan,
   recordLoanPayment as recordLoanPaymentService,
+  fetchChantiers,
+  createChantier,
+  updateChantier,
+  deleteChantier,
 } from '@/lib/supabaseService';
 
 interface AppState {
@@ -55,6 +59,7 @@ interface AppState {
   employees: Employee[];
   leaves: LeaveRecord[];
   loans: Loan[];
+  chantiers: Chantier[];
   vehicles: Vehicle[];
   materiels: Materiel[];
   scans: ScanRecord[];
@@ -121,6 +126,10 @@ interface AppState {
     banqueCaisse?: string;
   }) => Promise<void>;
   recordLoanPayment: (loanId: string, month: string) => Promise<void>;
+  loadChantiers: () => Promise<void>;
+  addChantier: (c: Partial<Chantier>) => Promise<void>;
+  editChantier: (id: string, c: Partial<Chantier>) => Promise<void>;
+  removeChantier: (id: string) => Promise<void>;
   // Véhicules (admin uniquement)
   loadVehicles: () => Promise<void>;
   addVehicle: (v: Partial<Vehicle>) => Promise<void>;
@@ -171,6 +180,7 @@ export const useAppStore = create<AppState>()(
       employees: [],
       leaves: [],
       loans: [],
+      chantiers: [],
       vehicles: [],
       materiels: [],
       scans: [],
@@ -191,6 +201,7 @@ export const useAppStore = create<AppState>()(
           employees: [],
           leaves: [],
           loans: [],
+          chantiers: [],
           vehicles: [],
           materiels: [],
           scans: [],
@@ -531,6 +542,30 @@ export const useAppStore = create<AppState>()(
         }
       },
 
+      // ─── Chantiers de déploiement ──────────────────────────────────────────
+      loadChantiers: async () => {
+        const chantiers = await fetchChantiers();
+        set({ chantiers });
+      },
+
+      addChantier: async (c) => {
+        const newChantier = await createChantier(c);
+        if (newChantier) {
+          set((s) => ({ chantiers: [newChantier, ...s.chantiers] }));
+          get().addNotification('Chantier créé', `${newChantier.nom} ajouté.`, 'ok');
+        }
+      },
+
+      editChantier: async (id, c) => {
+        await updateChantier(id, c);
+        set((s) => ({ chantiers: s.chantiers.map((x) => (x.id === id ? { ...x, ...c } : x)) }));
+      },
+
+      removeChantier: async (id) => {
+        await deleteChantier(id);
+        set((s) => ({ chantiers: s.chantiers.filter((x) => x.id !== id) }));
+      },
+
       // ─── Véhicules ────────────────────────────────────────────────────────────
       loadVehicles: async () => {
         const vehicles = await fetchVehicles();
@@ -629,6 +664,7 @@ export const useAppStore = create<AppState>()(
         employees: state.employees,
         leaves: state.leaves,
         loans: state.loans,
+        chantiers: state.chantiers,
         vehicles: state.vehicles,
         materiels: state.materiels,
       }),

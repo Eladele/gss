@@ -16,6 +16,7 @@ import {
   Wrench,
   Network,
   Wallet,
+  Construction,
   LogOut,
   Menu as MenuIcon,
   X
@@ -37,6 +38,7 @@ import VehiculesPage from '@/pages/VehiculesPage';
 import MaterielsPage from '@/pages/MaterielsPage';
 import ScansPage from '@/pages/ScansPage';
 import PretsPage from '@/pages/PretsPage';
+import DeploiementPage from '@/pages/DeploiementPage';
 
 type Page =
   | 'dashboard'
@@ -53,7 +55,8 @@ type Page =
   | 'vehicules'
   | 'materiels'
   | 'scans'
-  | 'prets';
+  | 'prets'
+  | 'deploiement';
 
 const NAV: Record<Role, { id: Page; label: string }[]> = {
   superviseur: [
@@ -63,6 +66,7 @@ const NAV: Record<Role, { id: Page; label: string }[]> = {
     { id: 'import-excel', label: 'Import Excel' },
     { id: 'equipes', label: 'Équipes' },
     { id: 'zones', label: 'Zones' },
+    { id: 'deploiement', label: 'Déploiement' },
     { id: 'notifications', label: 'Notifications' },
   ],
   chef: [
@@ -78,6 +82,7 @@ const NAV: Record<Role, { id: Page; label: string }[]> = {
     { id: 'import-excel', label: 'Import Excel' },
     { id: 'equipes', label: 'Équipes' },
     { id: 'zones', label: 'Zones' },
+    { id: 'deploiement', label: 'Déploiement' },
     { id: 'employes', label: 'Employés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'vehicules', label: 'Véhicules' },
@@ -95,6 +100,7 @@ const PAGE_TITLES: Record<Page, string> = {
   'import-excel': 'Import Excel',
   equipes: 'Gestion Équipes',
   zones: 'Gestion Zones',
+  deploiement: 'Chantiers de Déploiement',
   notifications: 'Notifications',
   profil: 'Mon Profil',
   statistiques: 'Statistiques',
@@ -113,6 +119,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   'import-excel': Upload,
   equipes: Users,
   zones: MapPin,
+  deploiement: Construction,
   notifications: Bell,
   profil: User,
   statistiques: BarChart3,
@@ -141,6 +148,7 @@ export default function AppLayout() {
     'import-excel': <ImportExcelPage />,
     equipes: <EquipesPage />,
     zones: <ZonesPage />,
+    deploiement: <DeploiementPage />,
     notifications: <NotificationsPage />,
     profil: <ProfilPage />,
     statistiques: <StatistiquesPage />,
