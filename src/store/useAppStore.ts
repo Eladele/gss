@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan } from '@/types';
 import type { ScanImportSnapshot } from '@/lib/supabaseService';
 import { SAMPLE_NOTIFICATIONS, ZONE_EQUIPE_MAP } from '@/data';
+import { errMsg } from '@/utils';
 import {
   fetchSituations,
   updateSituationStatus,
@@ -234,11 +235,11 @@ export const useAppStore = create<AppState>()(
             scanStatut: details?.scanStatut ?? null,
             closedBy: closedByName ?? null,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser
           // croire à un succès (ex: contrainte d'unicité violée, RLS...).
           set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
-          get().addNotification('Échec', err?.message || "Le statut n'a pas pu être enregistré", 'nok');
+          get().addNotification('Échec', errMsg(err) || "Le statut n'a pas pu être enregistré", 'nok');
           throw err;
         }
       },
@@ -255,9 +256,9 @@ export const useAppStore = create<AppState>()(
         try {
           await updateSituationStatus(id, 'non_ok', comment);
           get().addNotification('NON OK détecté', `FGP ${previous.fgp} — ${previous.zone} — ${comment}`, 'nok');
-        } catch (err: any) {
+        } catch (err: unknown) {
           set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
-          get().addNotification('Échec', err?.message || "Le statut n'a pas pu être enregistré", 'nok');
+          get().addNotification('Échec', errMsg(err) || "Le statut n'a pas pu être enregistré", 'nok');
           throw err;
         }
       },
@@ -290,8 +291,6 @@ export const useAppStore = create<AppState>()(
       },
 
       importSituations: async (rows, fileName) => {
-        const existing = new Set(get().situations.map((s) => s.fgp));
-        const newRows = rows.filter((r) => !existing.has(r.fgp));
         const importRecord = {
           fileName,
           date: new Date().toLocaleString('fr-FR'),
@@ -304,26 +303,28 @@ export const useAppStore = create<AppState>()(
           const savedRecord = await insertImportRecord(importRecord);
           const importId = savedRecord?.id;
 
-          const newRowsWithImportId = newRows.map((r) => ({
-            ...r,
-            importId,
-          }));
-
-          if (newRowsWithImportId.length > 0) {
-            await insertSituationsBulk(newRowsWithImportId);
+          // On upsert TOUTES les lignes (pas de pré-filtrage côté client par FGP seul —
+          // un même FGP peut légitimement avoir plusieurs situations dans le temps,
+          // ex: dérangements répétés). La déduplication réelle se fait en base via
+          // ON CONFLICT sur (fgp, type, motif, date_mise_en_service).
+          const rowsWithImportId = rows.map((r) => ({ ...r, importId }));
+          if (rowsWithImportId.length > 0) {
+            await insertSituationsBulk(rowsWithImportId);
           }
 
+          // Recharge l'état réel depuis la base plutôt que de fusionner localement :
+          // avec un upsert, certaines lignes mettent à jour des situations existantes
+          // au lieu d'en créer de nouvelles — impossible à déterminer fiablement côté client.
+          const situations = await fetchSituations();
+
           set((s) => ({
-            situations: [...s.situations, ...newRowsWithImportId],
-            // On utilise le VRAI id renvoyé par la base (pas un id local temporaire),
-            // sinon un "Supprimer" fait dans la foulée (sans refresh) cible le mauvais
-            // enregistrement et ne supprime rien côté base.
+            situations,
             importHistory: [savedRecord ?? { id: Date.now().toString(), ...importRecord }, ...s.importHistory],
           }));
-          get().addNotification('Import réussi', `${newRowsWithImportId.length} nouvelles situations importées`, 'import');
-        } catch (err: any) {
+          get().addNotification('Import réussi', `${rowsWithImportId.length} situations traitées (${fileName})`, 'import');
+        } catch (err: unknown) {
           console.error('importSituations failed:', err);
-          get().addNotification('Échec de l\'import', err?.message || 'Les situations n\'ont pas pu être enregistrées', 'nok');
+          get().addNotification("Échec de l'import", errMsg(err, "Les situations n'ont pas pu être enregistrées"), 'nok');
           throw err;
         }
       },
@@ -335,9 +336,9 @@ export const useAppStore = create<AppState>()(
             importHistory: s.importHistory.filter((h) => h.id !== id),
             situations: s.situations.filter((sit) => sit.importId !== id),
           }));
-        } catch (err: any) {
+        } catch (err: unknown) {
           console.error('removeImportRecord failed:', err);
-          get().addNotification('Suppression impossible', err?.message || "La ligne n'a pas pu être supprimée en base", 'nok');
+          get().addNotification('Suppression impossible', errMsg(err) || "La ligne n'a pas pu être supprimée en base", 'nok');
           throw err;
         }
       },
@@ -458,8 +459,8 @@ export const useAppStore = create<AppState>()(
             loans: s.loans.map((l) => (l.id === loanId ? { ...l, reste: newReste, statut: newReste <= 0 ? 'solde' : 'actif' } : l)),
           }));
           get().addNotification('Mensualité prélevée', `${montant} MRU déduits — reste ${newReste} MRU.`, 'ok');
-        } catch (err: any) {
-          get().addNotification('Échec', err?.message || 'Mensualité déjà enregistrée pour ce mois ?', 'nok');
+        } catch (err: unknown) {
+          get().addNotification('Échec', errMsg(err) || 'Mensualité déjà enregistrée pour ce mois ?', 'nok');
           throw err;
         }
       },
