@@ -29,7 +29,7 @@ export default function SituationsPage() {
   const user = useAppStore((s) => s.user)!;
   const markOK = useAppStore((s) => s.markOK);
   const markNonOK = useAppStore((s) => s.markNonOK);
-  const addUrgence = useAppStore((s) => s.addUrgence);
+  const addSituationManual = useAppStore((s) => s.addSituationManual);
   const { showToast } = useToast();
 
   const isAdmin = user.role === 'admin' || user.role === 'superviseur';
@@ -42,7 +42,7 @@ export default function SituationsPage() {
   // Par défaut, on n'affiche que l'essentiel : ce qui n'est pas encore OK, ou ce qui est
   // prévu aujourd'hui — pas les milliers de situations déjà closes des mois précédents.
   const [showEnCoursOnly, setShowEnCoursOnly] = useState(true);
-  const [urgOpen, setUrgOpen] = useState(false);
+  const [fgpOpen, setFgpOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
   const [nokId, setNokId] = useState('');
   const [nokInitialComment, setNokInitialComment] = useState('');
@@ -82,10 +82,11 @@ export default function SituationsPage() {
     });
     return map;
   }, [scans]);
-  const [urgZone, setUrgZone] = useState('');
-  const [urgType, setUrgType] = useState('DRG');
-  const [urgComment, setUrgComment] = useState('');
-  const [urgEquipe, setUrgEquipe] = useState('');
+  const [fgpValue, setFgpValue] = useState('');
+  const [fgpType, setFgpType] = useState('DRG');
+  const [fgpZone, setFgpZone] = useState('');
+  const [fgpMotif, setFgpMotif] = useState('');
+  const [fgpEquipe, setFgpEquipe] = useState('');
 
   const PAGE_SIZE = 25;
   const [page, setPage] = useState(1);
@@ -178,18 +179,22 @@ export default function SituationsPage() {
     }
   };
 
-  const submitUrgence = async () => {
-    if (!urgComment.trim()) {
-      showToast('Commentaire obligatoire', 'error');
+  const submitFgp = async () => {
+    if (!fgpValue.trim()) {
+      showToast('Le numéro FGP est obligatoire', 'error');
       return;
     }
-    const zone = urgZone || allZones[0];
-    // If equipe specified, override the zone-based auto-assignment
-    await addUrgence(zone, urgType, urgComment.trim(), urgEquipe || undefined);
-    setUrgOpen(false);
-    setUrgComment('');
-    setUrgEquipe('');
-    showToast(`Urgence créée → ${urgEquipe || 'auto-assignée'} `, 'warning');
+    if (!fgpType.trim()) {
+      showToast('Le type est obligatoire', 'error');
+      return;
+    }
+    const zone = fgpZone || allZones[0];
+    await addSituationManual(fgpValue.trim(), fgpType, zone, fgpMotif.trim(), fgpEquipe || undefined);
+    setFgpOpen(false);
+    setFgpValue('');
+    setFgpMotif('');
+    setFgpEquipe('');
+    showToast(`FGP ${fgpValue.trim()} créé → ${fgpEquipe || 'auto-assigné'} `, 'success');
   };
 
   return (
@@ -207,8 +212,8 @@ export default function SituationsPage() {
             {showEnCoursOnly ? "Voir tout l'historique" : 'Revenir à "en cours" seulement'}
           </Button>
           {isAdmin && (
-            <Button variant="warning" icon="" onClick={() => setUrgOpen(true)}>
-              Créer Urgence
+            <Button variant="outline" icon="" onClick={() => setFgpOpen(true)}>
+              Créer un FGP
             </Button>
           )}
         </div>
@@ -480,12 +485,31 @@ export default function SituationsPage() {
         )}
       </Card>
 
-      {/* ─── Créer Urgence Modal */}
-      <Modal open={urgOpen} onClose={() => setUrgOpen(false)} title=" Créer une Urgence">
+      {/* ─── Créer un FGP Modal */}
+      <Modal open={fgpOpen} onClose={() => setFgpOpen(false)} title="Créer un FGP">
         <div className="space-y-4">
           <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">FGP *</label>
+            <input
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+              value={fgpValue}
+              onChange={(e) => setFgpValue(e.target.value)}
+              placeholder="ex: 223344"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Type</label>
+            <Select className="w-full" value={fgpType} onChange={(e) => setFgpType(e.target.value)}>
+              {['DRG', 'CPL', 'TRL', 'CST', 'ANS', 'CLS', 'CMI', 'RLR'].map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1.5">Zone</label>
-            <Select className="w-full" value={urgZone || allZones[0]} onChange={(e) => setUrgZone(e.target.value)}>
+            <Select className="w-full" value={fgpZone || allZones[0]} onChange={(e) => setFgpZone(e.target.value)}>
               {allZones.map((z) => (
                 <option key={z} value={z}>
                   {z}
@@ -493,20 +517,12 @@ export default function SituationsPage() {
               ))}
             </Select>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Type</label>
-            <Select className="w-full" value={urgType} onChange={(e) => setUrgType(e.target.value)}>
-              <option value="DRG">DRG — Dérangement</option>
-              <option value="CPL">CPL — Installation</option>
-            </Select>
-          </div>
 
-          {/* NEW: Équipe assignment */}
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1.5">
               Affecter à l'équipe <span className="text-slate-300 font-normal">(optionnel — sinon auto par zone)</span>
             </label>
-            <Select className="w-full" value={urgEquipe} onChange={(e) => setUrgEquipe(e.target.value)}>
+            <Select className="w-full" value={fgpEquipe} onChange={(e) => setFgpEquipe(e.target.value)}>
               <option value="">Auto (par zone)</option>
               {equipes.map((e) => (
                 <option key={e.id} value={e.name}>
@@ -517,22 +533,19 @@ export default function SituationsPage() {
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Commentaire (FGP + Tel client + Problème)</label>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Motif (Tel client + Problème)</label>
             <Textarea
               rows={4}
-              value={urgComment}
-              onChange={(e) => setUrgComment(e.target.value)}
-              placeholder={'FGP: 223344\nClient: 46464646\nPas de signal fibre'}
+              value={fgpMotif}
+              onChange={(e) => setFgpMotif(e.target.value)}
+              placeholder={'Client: 46464646\nPas de signal fibre'}
             />
           </div>
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="outline" onClick={() => setUrgOpen(false)}>
+            <Button variant="outline" onClick={() => setFgpOpen(false)}>
               Annuler
             </Button>
-            <Button variant="danger" onClick={submitUrgence}>
-              {' '}
-              Créer Urgence
-            </Button>
+            <Button onClick={submitFgp}>Créer le FGP</Button>
           </div>
         </div>
       </Modal>

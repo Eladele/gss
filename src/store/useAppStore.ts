@@ -77,7 +77,7 @@ interface AppState {
     },
   ) => Promise<void>;
   markNonOK: (id: string, comment: string) => Promise<void>;
-  addUrgence: (zone: string, type: string, comment: string, equipe?: string) => Promise<void>;
+  addSituationManual: (fgp: string, type: string, zone: string, motif: string, equipe?: string) => Promise<void>;
   importSituations: (rows: Situation[], fileName: string) => Promise<void>;
   removeImportRecord: (id: string) => Promise<void>;
   reassign: (id: string, equipe: string) => void;
@@ -262,9 +262,8 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      addUrgence: async (zone, type, comment, equipeOverride) => {
-        const fgp = 'URG' + Date.now().toString().slice(-5);
-        // Use override if given, otherwise fall back to zone map
+      addSituationManual: async (fgp, type, zone, motif, equipeOverride) => {
+        // Résolution équipe : override fourni sinon déduit de la zone (comme à l'import)
         const zoneMap: Record<string, string> = {};
         get().equipes.forEach((e) =>
           (e.zones ?? []).forEach((z) => {
@@ -273,21 +272,20 @@ export const useAppStore = create<AppState>()(
         );
         const equipe = equipeOverride || ZONE_EQUIPE_MAP[zone] || zoneMap[zone] || '';
         const newSit: Situation = {
-          id: 'urg-' + Date.now(),
+          id: 'fgp-' + Date.now(),
           fgp,
-          type: type as any,
+          type: type as Situation['type'],
           zone,
           equipe,
-          motif: comment,
+          motif,
           dateDepo: new Date().toISOString().slice(0, 10),
           dateClt: '',
           delai: 0,
-          status: 'urgent',
+          status: 'pending',
           comment: '',
-          isUrgent: true,
         };
         set((s) => ({ situations: [newSit, ...s.situations] }));
-        get().addNotification('Nouvelle Urgence', `FGP ${fgp} — ${zone} — ${equipe || '?'}`, 'urgent');
+        get().addNotification('Nouveau FGP créé', `FGP ${fgp} — ${zone} — ${equipe || '?'}`, 'assign');
         await insertSituationsBulk([newSit]);
       },
 
