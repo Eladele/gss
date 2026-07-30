@@ -110,7 +110,11 @@ export default function StatistiquesPage() {
   const dansDelai = total - horsDelai;
   const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
   const today = todayStr();
-  const totalAujourdhui = scoped.filter((s) => (s.dateDepo || s.dateMessage) === today).length;
+  // "Aujourd'hui" inclut aussi tout ce qui est encore en cours (peu importe sa
+  // date de dépôt) — pas seulement les nouvelles situations du jour.
+  const totalAujourdhui = scoped.filter(
+    (s) => (s.dateDepo || s.dateMessage) === today || s.status === 'pending' || s.status === 'in_progress',
+  ).length;
   const weekStart = presetToRange('semaine').from!;
   const totalSemaine = scoped.filter((s) => (s.dateDepo || s.dateMessage || '') >= weekStart).length;
   const villesActives = new Set(
@@ -175,8 +179,8 @@ export default function StatistiquesPage() {
 
   const donutData = byVille.map((v) => ({ label: v.ville, value: v.total, color: VILLE_COLORS[v.ville] ?? '#546E7A' }));
 
-  const handleExport = () => {
-    exportStatsToExcel({
+  const handleExport = async () => {
+    await exportStatsToExcel({
       fileName: `stats_${nature}_${period.from ?? 'all'}_${period.to ?? 'all'}.xlsx`,
       byEquipe,
       byVille,
