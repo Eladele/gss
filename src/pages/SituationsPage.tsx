@@ -39,9 +39,10 @@ export default function SituationsPage() {
   const [fEquipe, setFEquipe] = useState('');
   const [fStatus, setFStatus] = useState('');
   const [fDate, setFDate] = useState('');
-  // Par défaut, on n'affiche que l'essentiel : ce qui n'est pas encore OK, ou ce qui est
-  // prévu aujourd'hui — pas les milliers de situations déjà closes des mois précédents.
-  const [showEnCoursOnly, setShowEnCoursOnly] = useState(true);
+  // Vue par défaut : seulement les situations pas encore décidées (en attente / en
+  // cours) — le bouton pour voir tout l'historique a été retiré ; l'historique
+  // reste accessible via les filtres Statut ou Date, qui lèvent cette restriction.
+  const showEnCoursOnly = true;
   const [fgpOpen, setFgpOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
   const [nokId, setNokId] = useState('');
@@ -208,9 +209,6 @@ export default function SituationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setShowEnCoursOnly(!showEnCoursOnly)}>
-            {showEnCoursOnly ? "Voir tout l'historique" : 'Revenir à "en cours" seulement'}
-          </Button>
           {isAdmin && (
             <Button variant="outline" icon="" onClick={() => setFgpOpen(true)}>
               Créer un FGP

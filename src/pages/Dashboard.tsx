@@ -1,5 +1,6 @@
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor, statusColors } from '@/utils';
+import { isHorsDelai } from '@/utils/stats';
 import { StatCard, Card, CardHeader, CardTitle, TypeBadge, StatusBadge, ZoneChip, EquipeTag, ProgressBar, Button } from '@/components/ui';
 
 type Page = string;
@@ -14,7 +15,9 @@ export default function Dashboard({ onNavigate }: { onNavigate: (p: any) => void
   const ok = situations.filter((s) => s.status === 'ok').length;
   const nok = situations.filter((s) => s.status === 'non_ok').length;
   const pending = situations.filter((s) => s.status === 'pending').length;
-  const urgent = situations.filter((s) => s.status === 'urgent').length;
+  // Situations non closes (en attente/en cours) et déjà hors délai — indicateur
+  // opérationnel bien plus utile qu'un compteur "Urgences" qu'on ne crée plus.
+  const horsDelai = situations.filter((s) => (s.status === 'pending' || s.status === 'in_progress') && isHorsDelai(s)).length;
 
   const today = new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -43,7 +46,7 @@ export default function Dashboard({ onNavigate }: { onNavigate: (p: any) => void
         <StatCard value={ok} label="OK" icon="" accent="#2E7D32" />
         <StatCard value={nok} label="NON OK" icon="" accent="#C62828" />
         <StatCard value={pending} label="En Attente" icon="" accent="#546E7A" />
-        <StatCard value={urgent} label="Urgences" icon="" accent="#E65100" />
+        <StatCard value={horsDelai} label="Hors Délai" icon="" accent="#E65100" />
       </div>
 
       {/* Equipe progress */}
