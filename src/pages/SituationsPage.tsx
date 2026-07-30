@@ -129,10 +129,15 @@ export default function SituationsPage() {
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
 
+  const [okMode, setOkMode] = useState<'close' | 'edit'>('close');
+  const editSituation = useAppStore((s) => s.editSituation);
+  const removeSituation = useAppStore((s) => s.removeSituation);
+
   const openOkSheet = (s: (typeof situations)[number]) => {
     const sc = scanByFgp.get(s.fgp);
     const defaultPoteau = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
     const today = new Date().toISOString().slice(0, 10);
+    setOkMode('close');
     setOkId(s.id);
     setOkFgp(s.fgp);
     setOkInitialValues({
@@ -147,21 +152,58 @@ export default function SituationsPage() {
     setOkOpen(true);
   };
 
+  // Modifier une situation SANS changer son statut (OK ou NON OK déjà décidé) —
+  // réutilise le même formulaire que la clôture, juste sans le forcer à 'ok'.
+  const openEditSheet = (s: (typeof situations)[number]) => {
+    const sc = scanByFgp.get(s.fgp);
+    const defaultPoteau = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+    setOkMode('edit');
+    setOkId(s.id);
+    setOkFgp(s.fgp);
+    setOkInitialValues({
+      poteau: defaultPoteau || 0,
+      equipe: s.equipe || '',
+      motif: s.motif || '',
+      dateClt: s.dateClt || '',
+      rxDbm: s.rxDbm ?? sc?.rxPower ?? '',
+      rangingM: s.rangingM ?? sc?.ranging ?? '',
+      scanStatut: s.scanStatut ?? sc?.result ?? 'NON SCANE',
+    });
+    setOkOpen(true);
+  };
+
   const handleOkConfirm = async (values: OKSheetValues) => {
+    const payload = {
+      poteau: values.poteau,
+      equipe: values.equipe,
+      motif: values.motif,
+      dateClt: values.dateClt,
+      rxDbm: values.rxDbm === '' ? undefined : values.rxDbm,
+      rangingM: values.rangingM === '' ? undefined : values.rangingM,
+      scanStatut: values.scanStatut,
+    };
     try {
-      await markOK(okId, {
-        poteau: values.poteau,
-        equipe: values.equipe,
-        motif: values.motif,
-        dateClt: values.dateClt,
-        rxDbm: values.rxDbm === '' ? undefined : values.rxDbm,
-        rangingM: values.rangingM === '' ? undefined : values.rangingM,
-        scanStatut: values.scanStatut,
-      });
-      setOkOpen(false);
-      showToast(`FGP ${okFgp} marqué OK `, 'success');
+      if (okMode === 'edit') {
+        await editSituation(okId, payload);
+        setOkOpen(false);
+        showToast(`FGP ${okFgp} modifié `, 'success');
+      } else {
+        await markOK(okId, payload);
+        setOkOpen(false);
+        showToast(`FGP ${okFgp} marqué OK `, 'success');
+      }
     } catch (err: unknown) {
       showToast("Échec — non enregistré : " + errMsg(err), 'error');
+    }
+  };
+
+  const handleDeleteSituation = async (id: string, fgp: string) => {
+    if (!confirm(`Supprimer définitivement la situation FGP ${fgp} ?\n\nCette action est irréversible.`)) return;
+    try {
+      await removeSituation(id);
+      showToast(`FGP ${fgp} supprimé`, 'success');
+    } catch (err: unknown) {
+      showToast('Échec — ' + errMsg(err), 'error');
     }
   };
   const handleMarkNOK = (id: string, fgp: string, existingComment = '') => {
@@ -453,6 +495,24 @@ export default function SituationsPage() {
                             NOK
                           </button>
                         )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => openEditSheet(s)}
+                            title="Modifier les détails"
+                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700"
+                          >
+                            Modifier
+                          </button>
+                        )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleDeleteSituation(s.id, s.fgp)}
+                            title="Supprimer"
+                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-500"
+                          >
+                            Supprimer
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -563,6 +623,7 @@ export default function SituationsPage() {
         fgp={okFgp}
         initialValues={okInitialValues}
         equipesOptions={equipes}
+        mode={okMode}
         onClose={() => setOkOpen(false)}
         onConfirm={handleOkConfirm}
       />

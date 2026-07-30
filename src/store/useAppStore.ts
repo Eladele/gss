@@ -8,6 +8,7 @@ import {
   fetchSituations,
   updateSituationStatus,
   insertSituationsBulk,
+  deleteSituation,
   insertImportRecord,
   deleteImportRecord,
   reassignSituationEquipe,
@@ -78,6 +79,19 @@ interface AppState {
     },
   ) => Promise<void>;
   markNonOK: (id: string, comment: string) => Promise<void>;
+  editSituation: (
+    id: string,
+    details?: {
+      poteau?: number;
+      equipe?: string;
+      motif?: string;
+      dateClt?: string;
+      rxDbm?: number;
+      rangingM?: number;
+      scanStatut?: 'SCANNE' | 'NON SCANE';
+    },
+  ) => Promise<void>;
+  removeSituation: (id: string) => Promise<void>;
   addSituationManual: (fgp: string, type: string, zone: string, motif: string, equipe?: string) => Promise<void>;
   importSituations: (rows: Situation[], fileName: string) => Promise<void>;
   removeImportRecord: (id: string) => Promise<void>;
@@ -240,6 +254,58 @@ export const useAppStore = create<AppState>()(
           // croire à un succès (ex: contrainte d'unicité violée, RLS...).
           set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
           get().addNotification('Échec', errMsg(err) || "Le statut n'a pas pu être enregistré", 'nok');
+          throw err;
+        }
+      },
+
+      // Comme markOK, mais préserve le statut actuel au lieu de forcer 'ok' —
+      // pour corriger les détails (motif, poteau, équipe, Rx, Ranging, statut
+      // réseau) d'une situation déjà clôturée (OK ou NON OK), sans rouvrir le
+      // dossier. Admin/superviseur uniquement (contrôlé côté page).
+      editSituation: async (id, details) => {
+        const previous = get().situations.find((s) => s.id === id);
+        if (!previous) return;
+        const newDateClt = details?.dateClt ?? previous.dateClt;
+        set((s) => ({
+          situations: s.situations.map((sit) =>
+            sit.id === id
+              ? {
+                  ...sit,
+                  dateClt: newDateClt,
+                  poteau: details?.poteau ?? sit.poteau,
+                  equipe: details?.equipe ?? sit.equipe,
+                  motif: details?.motif ?? sit.motif,
+                  rxDbm: details?.rxDbm ?? sit.rxDbm,
+                  rangingM: details?.rangingM ?? sit.rangingM,
+                  scanStatut: details?.scanStatut ?? sit.scanStatut,
+                }
+              : sit,
+          ),
+        }));
+        try {
+          await updateSituationStatus(id, previous.status, previous.comment ?? '', newDateClt, {
+            poteau: details?.poteau,
+            equipe: details?.equipe,
+            motif: details?.motif,
+            rxDbm: details?.rxDbm ?? null,
+            rangingM: details?.rangingM ?? null,
+            scanStatut: details?.scanStatut ?? null,
+          });
+        } catch (err: unknown) {
+          set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
+          get().addNotification('Échec', errMsg(err, "Les modifications n'ont pas pu être enregistrées"), 'nok');
+          throw err;
+        }
+      },
+
+      removeSituation: async (id) => {
+        const previous = get().situations.find((s) => s.id === id);
+        set((s) => ({ situations: s.situations.filter((sit) => sit.id !== id) }));
+        try {
+          await deleteSituation(id);
+        } catch (err: unknown) {
+          if (previous) set((s) => ({ situations: [...s.situations, previous] }));
+          get().addNotification('Échec', errMsg(err, "La situation n'a pas pu être supprimée"), 'nok');
           throw err;
         }
       },

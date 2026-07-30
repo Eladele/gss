@@ -196,6 +196,7 @@ export function OKSheet({
   fgp,
   initialValues,
   equipesOptions,
+  mode = 'close',
   onClose,
   onConfirm,
 }: {
@@ -203,6 +204,7 @@ export function OKSheet({
   fgp: string;
   initialValues: OKSheetValues;
   equipesOptions: { id: string; name: string }[];
+  mode?: 'close' | 'edit';
   onClose: () => void;
   onConfirm: (values: OKSheetValues) => void;
 }) {
@@ -220,7 +222,9 @@ export function OKSheet({
       <div className="fixed inset-0 z-40 bg-black/50" onClick={onClose} />
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl p-6 shadow-2xl animate-slide-up max-h-[90vh] overflow-y-auto">
         <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-4" />
-        <p className="font-bold text-green-700 text-lg mb-1">Clôturer OK — FGP {fgp}</p>
+        <p className={`font-bold text-lg mb-1 ${mode === 'edit' ? 'text-blue-700' : 'text-green-700'}`}>
+          {mode === 'edit' ? 'Modifier' : 'Clôturer OK'} — FGP {fgp}
+        </p>
         <p className="text-xs text-slate-500 mb-4">Les champs sont pré-remplis avec ce qui est déjà programmé — modifie si besoin.</p>
 
         <div className="space-y-3">
@@ -311,8 +315,8 @@ export function OKSheet({
           <Button variant="outline" size="lg" className="flex-1" onClick={onClose}>
             Annuler
           </Button>
-          <Button variant="success" size="lg" className="flex-1" onClick={() => onConfirm(values)}>
-            Confirmer OK
+          <Button variant={mode === 'edit' ? 'primary' : 'success'} size="lg" className="flex-1" onClick={() => onConfirm(values)}>
+            {mode === 'edit' ? 'Enregistrer les modifications' : 'Confirmer OK'}
           </Button>
         </div>
       </div>

@@ -1,10 +1,6 @@
 import { supabase } from './supabase';
 import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan } from '@/types';
 
-// Ligne brute Supabase (le projet n'utilise pas de types générés) — un seul point
-// `any` centralisé ici, réutilisé partout, au lieu d'un `any` dispersé sur chaque fonction.
-type Row = Record<string, any>;
-
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
 
 export async function fetchSituations(): Promise<Situation[]> {
@@ -32,7 +28,6 @@ export async function fetchSituations(): Promise<Situation[]> {
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- on retire volontairement `id` avant l'upsert
   const { id: _omit, ...payload } = toDbSituation(sit);
   const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_mise_en_service' });
   if (error) console.error('upsertSituation:', error);
@@ -53,7 +48,7 @@ export async function updateSituationStatus(
     closedBy?: string | null;
   },
 ): Promise<void> {
-  const payload: Row = { status, comment, updated_at: new Date().toISOString() };
+  const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
   if (dateClt) payload.date_mise_en_service = dateClt;
   if (extra) {
     if (extra.poteau !== undefined) payload.poteau = extra.poteau;
@@ -81,7 +76,6 @@ export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
     // avec "invalid input syntax for type uuid". On laisse Postgres générer le vrai UUID ;
     // le upsert se base sur `fgp` (onConflict) pour la déduplication, pas sur `id`.
     const chunk = rows.slice(i, i + CHUNK).map((r) => {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- on retire volontairement `id` avant l'upsert
       const { id: _omit, ...rest } = toDbSituation(r);
       return rest;
     });
@@ -97,6 +91,14 @@ export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
   // (colonne manquante, contrainte violée...) — on le signale au lieu de laisser croire à un succès.
   if (!insertedAny && rows.length > 0) {
     throw new Error(lastError ?? "Aucune situation n'a pu être importée (vérifiez le schéma de la table situations)");
+  }
+}
+
+export async function deleteSituation(id: string): Promise<void> {
+  const { error } = await supabase.from('situations').delete().eq('id', id);
+  if (error) {
+    console.error('deleteSituation:', error);
+    throw new Error(error.message);
   }
 }
 
@@ -146,7 +148,7 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
 }
 
 export async function updateEquipe(id: string, patch: Partial<Equipe>): Promise<void> {
-  const payload: Row = {};
+  const payload: Record<string, any> = {};
   if (patch.name !== undefined) payload.name = patch.name;
   if (patch.leader !== undefined) payload.leader_name = patch.leader;
   if (patch.color !== undefined) payload.color = patch.color;
@@ -200,7 +202,7 @@ export async function deleteImportRecord(id: string): Promise<void> {
 
 // ─── MAPPERS ─────────────────────────────────────────────────────────────────
 
-function mapSituation(row: Row): Situation {
+function mapSituation(row: any): Situation {
   return {
     id: row.id,
     fgp: row.fgp,
@@ -264,7 +266,7 @@ function normalizeVille(raw?: string | null): string {
   return raw!; // valeur déjà correcte / inconnue, on la laisse telle quelle
 }
 
-function mapEquipe(row: Row): Equipe {
+function mapEquipe(row: any): Equipe {
   return {
     id: row.id,
     name: row.name,
@@ -276,7 +278,7 @@ function mapEquipe(row: Row): Equipe {
   };
 }
 
-function mapEmployee(row: Row): Employee {
+function mapEmployee(row: any): Employee {
   return {
     id: row.id,
     mle: row.mle ?? '',
@@ -295,7 +297,7 @@ function mapEmployee(row: Row): Employee {
   };
 }
 
-function mapVehicle(row: Row): Vehicle {
+function mapVehicle(row: any): Vehicle {
   return {
     id: row.id,
     type: row.type,
@@ -309,7 +311,7 @@ function mapVehicle(row: Row): Vehicle {
   };
 }
 
-function mapMateriel(row: Row): Materiel {
+function mapMateriel(row: any): Materiel {
   return {
     id: row.id,
     code: row.code ?? '',
@@ -322,7 +324,7 @@ function mapMateriel(row: Row): Materiel {
   };
 }
 
-function mapLeave(row: Row): LeaveRecord {
+function mapLeave(row: any): LeaveRecord {
   return {
     id: row.id,
     employeeId: row.employee_id,
@@ -336,7 +338,7 @@ function mapLeave(row: Row): LeaveRecord {
   };
 }
 
-function mapImportRecord(row: Row): ImportRecord {
+function mapImportRecord(row: any): ImportRecord {
   return {
     id: row.id,
     fileName: row.file_name,
@@ -452,7 +454,7 @@ export async function deleteEmployee(id: string): Promise<void> {
 
 // ─── PRÊTS ─────────────────────────────────────────────────────────────────────
 
-function mapLoan(row: Row): Loan {
+function mapLoan(row: any): Loan {
   return {
     id: row.id,
     employeeId: row.employee_id,
@@ -530,7 +532,7 @@ export async function fetchLoanPayments(): Promise<{ id: string; loanId: string;
     console.error('fetchLoanPayments:', error);
     return [];
   }
-  return (data ?? []).map((r: Row) => ({ id: r.id, loanId: r.loan_id, month: r.month, montant: Number(r.montant) }));
+  return (data ?? []).map((r: any) => ({ id: r.id, loanId: r.loan_id, month: r.month, montant: Number(r.montant) }));
 }
 
 // ─── CONGÉS ────────────────────────────────────────────────────────────────────
@@ -617,7 +619,7 @@ export async function createVehicle(v: Partial<Vehicle>): Promise<Vehicle | null
 }
 
 export async function updateVehicle(id: string, v: Partial<Vehicle>): Promise<void> {
-  const payload: Row = {
+  const payload: Record<string, any> = {
     type: v.type,
     immatriculation: v.immatriculation,
     statut: v.statut,
@@ -687,7 +689,7 @@ export async function deleteMateriel(id: string): Promise<void> {
   if (error) console.error('deleteMateriel:', error);
 }
 
-function mapScan(row: Row): ScanRecord {
+function mapScan(row: any): ScanRecord {
   return {
     id: row.id,
     zone: row.zone ?? '',
@@ -803,7 +805,7 @@ export interface ScanImportSnapshot {
   } | null;
 }
 
-function mapScanSnapshot(row: Row): ScanImportSnapshot {
+function mapScanSnapshot(row: any): ScanImportSnapshot {
   return {
     id: row.id,
     importedAt: row.imported_at,
