@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { Card, CardHeader, Button, Modal, Select, Input, EmptyState, StatCard, ProgressBar, useToast } from '@/components/ui';
 import { errMsg } from '@/utils';
+import { parseAvancementExcel, parseKmlOrKmz, type AvancementParsed, type KmlParsed } from '@/utils/deploiementImport';
 import type { Chantier } from '@/types';
 
 function pct(fait: number, prevu: number): number {
@@ -120,6 +121,92 @@ export default function DeploiementPage() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
+  // ── Import Excel "Avancement de déploiement" et KML/KMZ (design réseau) ──
+  const excelInputRef = useRef<HTMLInputElement>(null);
+  const kmlInputRef = useRef<HTMLInputElement>(null);
+  const [importPreview, setImportPreview] = useState<
+    | { kind: 'excel'; data: AvancementParsed; zone: string; targetId: string }
+    | { kind: 'kml'; data: KmlParsed; zone: string; targetId: string }
+    | null
+  >(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleExcelFile = async (file: File) => {
+    try {
+      const data = await parseAvancementExcel(file);
+      const match = data.zone ? chantiers.find((c) => c.zone?.toUpperCase() === data.zone) : undefined;
+      setImportPreview({ kind: 'excel', data, zone: data.zone ?? '', targetId: match?.id ?? '__new__' });
+    } catch (err: unknown) {
+      showToast('Lecture impossible — ' + errMsg(err), 'error');
+    }
+  };
+
+  const handleKmlFile = async (file: File) => {
+    try {
+      const data = await parseKmlOrKmz(file);
+      const match = data.zone ? chantiers.find((c) => c.zone?.toUpperCase() === data.zone) : undefined;
+      setImportPreview({ kind: 'kml', data, zone: data.zone ?? '', targetId: match?.id ?? '__new__' });
+    } catch (err: unknown) {
+      showToast('Lecture impossible — ' + errMsg(err), 'error');
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importPreview) return;
+    if (!importPreview.zone.trim()) {
+      showToast('Le code de zone est obligatoire', 'error');
+      return;
+    }
+    setImporting(true);
+    try {
+      if (importPreview.kind === 'excel') {
+        const d = importPreview.data;
+        const patch: Partial<Chantier> = {
+          typeDeploiement: d.typeDeploiement,
+          poteauxPoses: d.poteaux,
+          tranchéePoseeM: d.tranchee,
+          blocageFait: d.blocage,
+          ouvertureFaite: d.ouverture,
+          closerMpoFait: d.closerMpo,
+          closerDisFait: d.closerDis,
+          xBoxPoses: d.xBox,
+          hubBoxPoses: d.hubBox,
+          subBoxPoses: d.subBox,
+          endBoxPoses: d.endBox,
+          cableMpoPoseM: d.cableMpo,
+          cableDistributionPoseM: d.cableDistribution,
+        };
+        if (importPreview.targetId === '__new__') {
+          await addChantier({ nom: `Zone ${importPreview.zone}`, zone: importPreview.zone, ...patch });
+        } else {
+          await editChantier(importPreview.targetId, { zone: importPreview.zone, ...patch });
+        }
+        showToast('Avancement importé', 'success');
+      } else {
+        const d = importPreview.data;
+        const patch: Partial<Chantier> = {
+          poteauxPrevus: d.poteauxPrevus,
+          xBoxPrevus: d.xBoxPrevus,
+          hubBoxPrevus: d.hubBoxPrevus,
+          subBoxPrevus: d.subBoxPrevus,
+          cableMpoPrevuM: d.cableMpoPrevuM,
+          cableDistributionPrevuM: d.cableDistributionPrevuM,
+        };
+        if (importPreview.targetId === '__new__') {
+          await addChantier({ nom: `Zone ${importPreview.zone}`, zone: importPreview.zone, ...patch });
+        } else {
+          await editChantier(importPreview.targetId, { zone: importPreview.zone, ...patch });
+        }
+        showToast('Cibles de design importées', 'success');
+      }
+      setImportPreview(null);
+    } catch (err: unknown) {
+      showToast('Échec — ' + errMsg(err), 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const filtered = useMemo(
     () =>
       chantiers.filter((c) => {
@@ -191,7 +278,35 @@ export default function DeploiementPage() {
           <h1 className="text-2xl font-black text-slate-900">Chantiers de déploiement</h1>
           <p className="text-slate-400 text-sm">Avancement réseau — poteaux (aérien) ou tranchée/blocage/ouverture (souterrain), boîtiers, câbles.</p>
         </div>
-        <Button onClick={openNew}>Nouveau chantier</Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            ref={excelInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.[0]) handleExcelFile(e.target.files[0]);
+              e.target.value = '';
+            }}
+          />
+          <Button variant="outline" onClick={() => excelInputRef.current?.click()}>
+            Importer avancement (Excel)
+          </Button>
+          <input
+            ref={kmlInputRef}
+            type="file"
+            accept=".kml,.kmz"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.[0]) handleKmlFile(e.target.files[0]);
+              e.target.value = '';
+            }}
+          />
+          <Button variant="outline" onClick={() => kmlInputRef.current?.click()}>
+            Importer design (KML/KMZ)
+          </Button>
+          <Button onClick={openNew}>Nouveau chantier</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -411,6 +526,85 @@ export default function DeploiementPage() {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      {/* ─── Aperçu / confirmation d'import (Excel avancement ou KML/KMZ design) ── */}
+      <Modal open={!!importPreview} onClose={() => setImportPreview(null)} title={importPreview?.kind === 'excel' ? 'Importer un avancement' : 'Importer un design réseau'}>
+        {importPreview && (
+          <div className="space-y-4">
+            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-2">
+              Valeurs lues automatiquement — vérifie-les avant de confirmer, la détection peut varier selon le fichier.
+            </p>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Code de zone *</label>
+              <Input value={importPreview.zone} onChange={(e) => setImportPreview((p) => (p ? { ...p, zone: e.target.value.toUpperCase() } : p))} placeholder="ex: CA3Z05" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Chantier cible</label>
+              <Select
+                className="w-full"
+                value={importPreview.targetId}
+                onChange={(e) => setImportPreview((p) => (p ? { ...p, targetId: e.target.value } : p))}
+              >
+                <option value="__new__">-- Créer un nouveau chantier --</option>
+                {chantiers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.nom} ({c.zone || 'sans zone'})
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            {importPreview.kind === 'excel' ? (
+              <>
+                <p className="text-xs font-bold text-slate-500 pt-1">
+                  Type détecté : {importPreview.data.typeDeploiement === 'aerien' ? 'Aérien' : 'Souterrain'} — valeurs "posées" (avancement réel)
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {importPreview.data.typeDeploiement === 'aerien' ? (
+                    <div>Poteaux : <strong>{importPreview.data.poteaux}</strong></div>
+                  ) : (
+                    <>
+                      <div>Tranchée : <strong>{importPreview.data.tranchee}m</strong></div>
+                      <div>Blocage : <strong>{importPreview.data.blocage}</strong></div>
+                      <div>Ouverture : <strong>{importPreview.data.ouverture}</strong></div>
+                      <div>Closer MPO : <strong>{importPreview.data.closerMpo}</strong></div>
+                      <div>Closer DIS : <strong>{importPreview.data.closerDis}</strong></div>
+                    </>
+                  )}
+                  <div>X-BOX : <strong>{importPreview.data.xBox}</strong></div>
+                  <div>HUB-BOX : <strong>{importPreview.data.hubBox}</strong></div>
+                  <div>SUB-BOX : <strong>{importPreview.data.subBox}</strong></div>
+                  <div>END-BOX : <strong>{importPreview.data.endBox}</strong></div>
+                  <div>Câble MPO : <strong>{importPreview.data.cableMpo}m</strong></div>
+                  <div>Câble Distribution : <strong>{importPreview.data.cableDistribution}m</strong></div>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-bold text-slate-500 pt-1">Cibles ("prévu") lues depuis le design</p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>Poteaux (hors drop cable) : <strong>{importPreview.data.poteauxPrevus}</strong></div>
+                  <div>X-BOX : <strong>{importPreview.data.xBoxPrevus}</strong></div>
+                  <div>HUB-BOX : <strong>{importPreview.data.hubBoxPrevus}</strong></div>
+                  <div>SUB-BOX (+ END-BOX) : <strong>{importPreview.data.subBoxPrevus}</strong></div>
+                  <div>Câble MPO : <strong>{importPreview.data.cableMpoPrevuM}m</strong></div>
+                  <div>Câble Distribution : <strong>{importPreview.data.cableDistributionPrevuM}m</strong></div>
+                </div>
+                <p className="text-[11px] text-amber-600">Le KML ne distingue pas toujours SUB-BOX et END-BOX — total combiné ici, à répartir manuellement si besoin.</p>
+              </>
+            )}
+
+            <div className="flex gap-3 justify-end pt-2">
+              <Button variant="outline" onClick={() => setImportPreview(null)}>
+                Annuler
+              </Button>
+              <Button onClick={confirmImport} disabled={importing}>
+                {importing ? '...' : 'Confirmer'}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );
