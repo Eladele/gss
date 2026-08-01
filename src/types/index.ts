@@ -211,3 +211,24 @@ export interface ScanRecord {
   changeType?: 'new' | 'existing'; // par rapport à l'import précédent (calculé et persisté à l'import)
   importedAt?: string;
 }
+
+export type TypeNoeudReseau = 'olt' | 'closure_mpo' | 'x_box' | 'closure_dis' | 'hub_box' | 'sp' | 'sub_box' | 'end_box';
+
+export interface NoeudReseau {
+  id: string;
+  zone: string;
+  type: TypeNoeudReseau;
+  nom: string;
+  sn?: string;
+  parentId?: string | null;
+  parentPort?: number; // port du parent auquel ce nœud est raccordé (pour le tableau "Port Connection Details")
+  cableSn?: string;
+  cableLongueurM?: number; // longueur de câble posé (bobine, arrondie)
+  cableDistanceReelleM?: number; // distance réelle mesurée (avant arrondi à la bobine)
+  nbPorts: number;
+  portsOccupes: number;
+  coordonnees?: string;
+  puissanceOptiqueDbm?: number;
+  notes?: string;
+  createdAt?: string;
+}

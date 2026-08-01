@@ -17,6 +17,10 @@ import {
   Network,
   Wallet,
   Construction,
+  ChevronDown,
+  Hammer,
+  GitBranch,
+  Briefcase,
   LogOut,
   Menu as MenuIcon,
   X
@@ -39,6 +43,8 @@ import MaterielsPage from '@/pages/MaterielsPage';
 import ScansPage from '@/pages/ScansPage';
 import PretsPage from '@/pages/PretsPage';
 import DeploiementPage from '@/pages/DeploiementPage';
+import MaintenancePage from '@/pages/MaintenancePage';
+import ReseauPage from '@/pages/ReseauPage';
 
 type Page =
   | 'dashboard'
@@ -56,17 +62,64 @@ type Page =
   | 'materiels'
   | 'scans'
   | 'prets'
-  | 'deploiement';
+  | 'deploiement'
+  | 'maintenance'
+  | 'reseau';
 
-const NAV: Record<Role, { id: Page; label: string }[]> = {
+type NavLeaf = { id: Page; label: string };
+type NavGroup = { group: string; label: string; children: NavLeaf[] };
+type NavItem = NavLeaf | NavGroup;
+const isGroup = (item: NavItem): item is NavGroup => 'children' in item;
+
+const DEPLOIEMENT_GROUP: NavGroup = {
+  group: 'deploiement-group',
+  label: 'Déploiement',
+  children: [
+    { id: 'deploiement', label: 'Chantiers' },
+    { id: 'reseau', label: 'Arborescence Réseau' },
+    { id: 'maintenance', label: 'Maintenance' },
+    { id: 'zones', label: 'Zones' },
+  ],
+};
+
+const RACCORDEMENT_GROUP_ADMIN: NavGroup = {
+  group: 'raccordement-group',
+  label: 'Raccordement',
+  children: [
+    { id: 'situations', label: 'Situations' },
+    { id: 'scans', label: 'Scan Réseau' },
+    { id: 'import-excel', label: 'Import Excel' },
+  ],
+};
+
+const RACCORDEMENT_GROUP_SUPERVISEUR: NavGroup = {
+  group: 'raccordement-group',
+  label: 'Raccordement',
+  children: [
+    { id: 'situations', label: 'Situations' },
+    { id: 'import-excel', label: 'Import Excel' },
+  ],
+};
+
+const RH_GROUP: NavGroup = {
+  group: 'rh-group',
+  label: 'RH',
+  children: [
+    { id: 'employes', label: 'Employés' },
+    { id: 'prets', label: 'Prêts' },
+    { id: 'equipes', label: 'Équipes' },
+    { id: 'materiels', label: 'Matériel' },
+    { id: 'vehicules', label: 'Véhicules' },
+  ],
+};
+
+const NAV: Record<Role, NavItem[]> = {
   superviseur: [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'situations', label: 'Situations' },
     { id: 'statistiques', label: 'Statistiques' },
-    { id: 'import-excel', label: 'Import Excel' },
+    RACCORDEMENT_GROUP_SUPERVISEUR,
     { id: 'equipes', label: 'Équipes' },
-    { id: 'zones', label: 'Zones' },
-    { id: 'deploiement', label: 'Déploiement' },
+    DEPLOIEMENT_GROUP,
     { id: 'notifications', label: 'Notifications' },
   ],
   chef: [
@@ -77,17 +130,10 @@ const NAV: Record<Role, { id: Page; label: string }[]> = {
   ],
   admin: [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'situations', label: 'Situations' },
     { id: 'statistiques', label: 'Statistiques' },
-    { id: 'import-excel', label: 'Import Excel' },
-    { id: 'equipes', label: 'Équipes' },
-    { id: 'zones', label: 'Zones' },
-    { id: 'deploiement', label: 'Déploiement' },
-    { id: 'employes', label: 'Employés' },
-    { id: 'prets', label: 'Prêts' },
-    { id: 'vehicules', label: 'Véhicules' },
-    { id: 'materiels', label: 'Matériel' },
-    { id: 'scans', label: 'Scans Réseau' },
+    RACCORDEMENT_GROUP_ADMIN,
+    DEPLOIEMENT_GROUP,
+    RH_GROUP,
     { id: 'notifications', label: 'Notifications' },
   ],
 };
@@ -101,6 +147,8 @@ const PAGE_TITLES: Record<Page, string> = {
   equipes: 'Gestion Équipes',
   zones: 'Gestion Zones',
   deploiement: 'Chantiers de Déploiement',
+  maintenance: 'Maintenance',
+  reseau: 'Arborescence Réseau',
   notifications: 'Notifications',
   profil: 'Mon Profil',
   statistiques: 'Statistiques',
@@ -120,6 +168,8 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   equipes: Users,
   zones: MapPin,
   deploiement: Construction,
+  maintenance: Hammer,
+  reseau: Network,
   notifications: Bell,
   profil: User,
   statistiques: BarChart3,
@@ -128,6 +178,12 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   vehicules: Car,
   materiels: Wrench,
   scans: Network,
+};
+
+const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
+  'deploiement-group': Construction,
+  'raccordement-group': GitBranch,
+  'rh-group': Briefcase,
 };
 
 export default function AppLayout() {
@@ -139,6 +195,14 @@ export default function AppLayout() {
   const defaultPage = user.role === 'chef' ? 'chef-situations' : 'dashboard';
   const [page, setPage] = useState<Page>(defaultPage);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const toggleGroup = (id: string) =>
+    setExpandedGroups((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const PageMap: Record<Page, React.ReactNode> = {
     dashboard: <Dashboard onNavigate={setPage} />,
@@ -149,6 +213,8 @@ export default function AppLayout() {
     equipes: <EquipesPage />,
     zones: <ZonesPage />,
     deploiement: <DeploiementPage />,
+    maintenance: <MaintenancePage />,
+    reseau: <ReseauPage />,
     notifications: <NotificationsPage />,
     profil: <ProfilPage />,
     statistiques: <StatistiquesPage />,
@@ -242,6 +308,43 @@ export default function AppLayout() {
 
         <nav className="p-4 flex-1 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
+            if (isGroup(item)) {
+              const isActiveGroup = item.children.some((c) => c.id === page);
+              const isOpen = expandedGroups.has(item.group) || isActiveGroup;
+              const GroupIcon = GROUP_ICONS[item.group] ?? Construction;
+              return (
+                <div key={item.group}>
+                  <button
+                    onClick={() => toggleGroup(item.group)}
+                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${isActiveGroup ? 'text-blue-700 font-semibold' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'}`}
+                  >
+                    <GroupIcon className={`w-5 h-5 ${isActiveGroup ? 'text-blue-600' : 'text-slate-400'}`} />
+                    {item.label}
+                    <ChevronDown className={`w-4 h-4 ml-auto transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isOpen && (
+                    <div className="ml-5 pl-3 border-l border-slate-100 space-y-1 mt-1 mb-1">
+                      {item.children.map((child) => {
+                        const Icon = PAGE_ICONS[child.id];
+                        return (
+                          <button
+                            key={child.id}
+                            onClick={() => {
+                              setPage(child.id);
+                              setMenuOpen(false);
+                            }}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all text-left ${page === child.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
+                          >
+                            {Icon && <Icon className={`w-5 h-5 ${page === child.id ? 'text-blue-600' : 'text-slate-400'}`} />}
+                            {child.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             const Icon = PAGE_ICONS[item.id];
             return (
               <button
@@ -288,6 +391,40 @@ export default function AppLayout() {
           <nav className="p-3 flex-1 space-y-0.5">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 py-2">Navigation</p>
             {navItems.map((item) => {
+              if (isGroup(item)) {
+                const isActiveGroup = item.children.some((c) => c.id === page);
+                const isOpen = expandedGroups.has(item.group) || isActiveGroup;
+                const GroupIcon = GROUP_ICONS[item.group] ?? Construction;
+                return (
+                  <div key={item.group}>
+                    <button
+                      onClick={() => toggleGroup(item.group)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left ${isActiveGroup ? 'text-blue-700 font-semibold' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'}`}
+                    >
+                      <GroupIcon className={`w-4 h-4 ${isActiveGroup ? 'text-blue-600' : 'text-slate-400'}`} />
+                      {item.label}
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOpen && (
+                      <div className="ml-4 pl-3 border-l border-slate-100 space-y-0.5 mt-0.5 mb-1">
+                        {item.children.map((child) => {
+                          const Icon = PAGE_ICONS[child.id];
+                          return (
+                            <button
+                              key={child.id}
+                              onClick={() => setPage(child.id)}
+                              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all text-left ${page === child.id ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}
+                            >
+                              {Icon && <Icon className={`w-4 h-4 ${page === child.id ? 'text-blue-600' : 'text-slate-400'}`} />}
+                              {child.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
               const Icon = PAGE_ICONS[item.id];
               return (
                 <button

@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier } from '@/types';
+import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier, NoeudReseau } from '@/types';
 
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
 
@@ -650,6 +650,76 @@ export async function deleteChantier(id: string): Promise<void> {
   const { error } = await supabase.from('chantiers').delete().eq('id', id);
   if (error) {
     console.error('deleteChantier:', error);
+    throw new Error(error.message);
+  }
+}
+
+// ─── ARBORESCENCE RÉSEAU (OLT/Closures/X-BOX/HUB-BOX/SUB-BOX/END-BOX) ──────────
+
+function mapNoeud(row: any): NoeudReseau {
+  return {
+    id: row.id,
+    zone: row.zone,
+    type: row.type,
+    nom: row.nom,
+    sn: row.sn ?? undefined,
+    parentId: row.parent_id ?? null,
+    parentPort: row.parent_port ?? undefined,
+    cableSn: row.cable_sn ?? undefined,
+    cableLongueurM: row.cable_longueur_m != null ? Number(row.cable_longueur_m) : undefined,
+    cableDistanceReelleM: row.cable_distance_reelle_m != null ? Number(row.cable_distance_reelle_m) : undefined,
+    nbPorts: row.nb_ports ?? 0,
+    portsOccupes: row.ports_occupes ?? 0,
+    coordonnees: row.coordonnees ?? undefined,
+    puissanceOptiqueDbm: row.puissance_optique_dbm != null ? Number(row.puissance_optique_dbm) : undefined,
+    notes: row.notes ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+export async function fetchReseauNoeuds(zone?: string): Promise<NoeudReseau[]> {
+  let query = supabase.from('reseau_noeuds').select('*').order('created_at', { ascending: true });
+  if (zone) query = query.eq('zone', zone);
+  const { data, error } = await query;
+  if (error) {
+    console.error('fetchReseauNoeuds:', error);
+    return [];
+  }
+  return (data ?? []).map(mapNoeud);
+}
+
+export async function createReseauNoeud(n: Partial<NoeudReseau>): Promise<NoeudReseau | null> {
+  const { data, error } = await supabase
+    .from('reseau_noeuds')
+    .insert({
+      zone: n.zone,
+      type: n.type,
+      nom: n.nom,
+      sn: n.sn || null,
+      parent_id: n.parentId || null,
+      parent_port: n.parentPort ?? null,
+      cable_sn: n.cableSn || null,
+      cable_longueur_m: n.cableLongueurM ?? null,
+      cable_distance_reelle_m: n.cableDistanceReelleM ?? null,
+      nb_ports: n.nbPorts ?? 8,
+      ports_occupes: n.portsOccupes ?? 0,
+      coordonnees: n.coordonnees || null,
+      puissance_optique_dbm: n.puissanceOptiqueDbm ?? null,
+      notes: n.notes || null,
+    })
+    .select()
+    .single();
+  if (error) {
+    console.error('createReseauNoeud:', error);
+    throw new Error(error.message);
+  }
+  return data ? mapNoeud(data) : null;
+}
+
+export async function deleteReseauNoeud(id: string): Promise<void> {
+  const { error } = await supabase.from('reseau_noeuds').delete().eq('id', id);
+  if (error) {
+    console.error('deleteReseauNoeud:', error);
     throw new Error(error.message);
   }
 }
