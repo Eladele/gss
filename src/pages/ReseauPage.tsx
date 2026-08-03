@@ -33,12 +33,16 @@ const BOX_TYPES: TypeNoeudReseau[] = ['olt', 'x_box', 'hub_box'];
 function ChainNode({
   node,
   selected,
+  childByPort,
   onSelect,
+  onSelectPort,
   onDelete,
 }: {
   node: NoeudReseau;
   selected: boolean;
+  childByPort: Map<number, NoeudReseau>;
   onSelect: (n: NoeudReseau) => void;
+  onSelectPort: (child: NoeudReseau) => void;
   onDelete: (n: NoeudReseau) => void;
 }) {
   const isBox = BOX_TYPES.includes(node.type);
@@ -64,18 +68,59 @@ function ChainNode({
         <div className="flex items-center justify-center w-9 h-9 rounded-full bg-blue-900/60 border border-blue-400 text-blue-300 text-base mx-auto mb-2">
           {TYPE_ICON[node.type]}
         </div>
-        {node.nbPorts > 0 && (
+        {node.type === 'hub_box' && node.nbPorts > 0 && (
           <div className="grid grid-cols-2 gap-1 mb-2">
-            {Array.from({ length: node.nbPorts }).map((_, i) => (
-              <div
-                key={i}
-                className={`h-4 rounded-full text-[8px] font-bold flex items-center justify-center ${
-                  i < node.portsOccupes ? 'bg-teal-400 text-slate-900' : 'bg-slate-700 text-slate-400'
-                }`}
-              >
-                {i + 1}
-              </div>
-            ))}
+            {Array.from({ length: node.nbPorts }).map((_, i) => {
+              const portNum = i + 1;
+              const child = childByPort.get(portNum);
+              return (
+                <button
+                  key={i}
+                  disabled={!child}
+                  title={child ? `Voir ${child.nom}` : 'Port libre'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (child) onSelectPort(child);
+                  }}
+                  className={`h-4 rounded-full text-[8px] font-bold flex items-center justify-center transition-transform ${
+                    child ? 'bg-teal-400 text-slate-900 hover:scale-110 cursor-pointer' : 'bg-slate-700 text-slate-400 cursor-default'
+                  }`}
+                >
+                  {portNum}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {node.type !== 'hub_box' && childByPort.size > 0 && (
+          <div className="grid grid-cols-2 gap-1 mb-2">
+            {Array.from(childByPort.entries())
+              .sort((a, b) => a[0] - b[0])
+              .map(([portNum, child]) => (
+                <button
+                  key={portNum}
+                  title={`Voir ${child.nom}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectPort(child);
+                  }}
+                  className="h-4 rounded-full text-[8px] font-bold flex items-center justify-center bg-teal-400 text-slate-900 hover:scale-110 cursor-pointer transition-transform"
+                >
+                  {portNum}
+                </button>
+              ))}
+          </div>
+        )}
+        {node.type === 'hub_box' && (
+          <div className="mb-2">
+            <div className="grid grid-cols-2 gap-1 mb-1">
+              {['V1', 'V2'].map((v) => (
+                <div key={v} className="h-4 rounded-full text-[8px] font-bold flex items-center justify-center bg-slate-700 text-slate-400">
+                  {v}
+                </div>
+              ))}
+            </div>
+            <div className="h-4 rounded text-[8px] font-bold flex items-center justify-center bg-slate-700 text-slate-400 w-1/2">S1</div>
           </div>
         )}
         <p className="text-center text-[11px] font-bold text-teal-200 truncate" title={node.nom}>
@@ -108,9 +153,20 @@ function ChainNode({
         >
           {TYPE_ICON[node.type]}
         </div>
-        <div className={`w-4 h-4 rounded-full border flex items-center justify-center text-[8px] font-bold ${selected ? 'bg-blue-500 border-blue-300 text-white' : 'bg-teal-500 border-teal-300 text-slate-900'}`}>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            const child = childByPort.get(1);
+            if (child) onSelectPort(child);
+          }}
+          disabled={!childByPort.get(1)}
+          title={childByPort.get(1) ? `Voir ${childByPort.get(1)!.nom}` : 'Rien de branché'}
+          className={`w-4 h-4 rounded-full border flex items-center justify-center text-[8px] font-bold ${
+            childByPort.get(1) ? 'hover:scale-125 cursor-pointer' : 'cursor-default opacity-60'
+          } ${selected ? 'bg-blue-500 border-blue-300 text-white' : 'bg-teal-500 border-teal-300 text-slate-900'}`}
+        >
           S
-        </div>
+        </button>
       </div>
       <p className="text-center text-[10px] font-bold text-teal-200 mt-1 truncate w-full" title={node.nom}>
         {node.nom}
@@ -120,14 +176,17 @@ function ChainNode({
 }
 
 function Connector({ node }: { node: NoeudReseau }) {
-  const label =
-    node.cableSn ||
-    (node.cableDistanceReelleM || node.cableLongueurM
-      ? `${node.cableDistanceReelleM ?? node.cableLongueurM}m`
-      : null);
+  const hasDistances = node.cableDistanceReelleM != null || node.cableLongueurM != null;
   return (
-    <div className="flex flex-col items-center justify-center shrink-0 w-14 -mt-4">
-      {label && <span className="text-[9px] text-teal-400 whitespace-nowrap mb-0.5 truncate max-w-[80px]">{label}</span>}
+    <div className="flex flex-col items-center justify-center shrink-0 w-16 -mt-4">
+      {node.cableSn && <span className="text-[9px] text-teal-400 whitespace-nowrap mb-0.5 truncate max-w-[90px]">{node.cableSn}</span>}
+      {hasDistances && (
+        <span className="text-[9px] text-teal-300 whitespace-nowrap leading-tight text-center mb-0.5">
+          {node.cableDistanceReelleM != null ? `${node.cableDistanceReelleM}m` : '—'}
+          <br />
+          {node.cableLongueurM != null ? `${node.cableLongueurM}m` : ''}
+        </span>
+      )}
       <div className="h-px w-full bg-teal-500/50" />
     </div>
   );
@@ -185,6 +244,33 @@ export default function ReseauPage() {
     () => (selected ? nodesForZone.filter((n) => n.parentId === selected.id).sort((a, b) => (a.parentPort ?? 0) - (b.parentPort ?? 0)) : []),
     [nodesForZone, selected],
   );
+
+  // Ports occupés d'un nœud → l'enfant qui y est branché (pour rendre chaque
+  // port cliquable et naviguer directement dessus, comme dans l'outil NCE).
+  // Quand on clique un port de HUB-BOX, on veut voir directement toute la
+  // chaîne (3 SUB-BOX + 1 END-BOX terminal), pas boîtier par boîtier — on
+  // déroule automatiquement tant que chaque nœud n'a qu'un seul enfant en
+  // cascade (SUB-BOX/END-BOX), et on sélectionne le dernier de la chaîne.
+  const selectChainEnd = (start: NoeudReseau) => {
+    let cur = start;
+    while (true) {
+      const children = nodesForZone.filter((n) => n.parentId === cur.id);
+      if (children.length === 1 && (children[0].type === 'sub_box' || children[0].type === 'end_box')) {
+        cur = children[0];
+      } else {
+        break;
+      }
+    }
+    setSelectedId(cur.id);
+  };
+
+  const childPortMap = (node: NoeudReseau): Map<number, NoeudReseau> => {
+    const map = new Map<number, NoeudReseau>();
+    nodesForZone.forEach((n) => {
+      if (n.parentId === node.id && n.parentPort != null) map.set(n.parentPort, n);
+    });
+    return map;
+  };
 
   // Chaîne des ancêtres, de la racine jusqu'au nœud sélectionné (façon "resource
   // chain" NCE — on affiche le fil parent → sélection, puis les enfants directs
@@ -282,23 +368,22 @@ export default function ReseauPage() {
           <EmptyState icon="" text="Aucun nœud enregistré pour cette zone" />
         ) : (
           <div className="bg-slate-900 p-8 overflow-x-auto">
+            {/* Seul le chemin racine → sélection s'affiche — les enfants d'un nœud
+                n'apparaissent qu'après un clic explicite sur le port qui y mène. */}
             <div className="flex items-center min-w-max">
               {ancestorChain.map((n, i) => (
                 <div key={n.id} className="flex items-center">
                   {i > 0 && <Connector node={n} />}
-                  <ChainNode node={n} selected={n.id === selected?.id} onSelect={(node) => setSelectedId(node.id)} onDelete={handleDelete} />
+                  <ChainNode
+                    node={n}
+                    selected={n.id === selected?.id}
+                    childByPort={childPortMap(n)}
+                    onSelect={(node) => setSelectedId(node.id)}
+                    onSelectPort={(child) => selectChainEnd(child)}
+                    onDelete={handleDelete}
+                  />
                 </div>
               ))}
-              {selectedChildren.length > 0 && (
-                <div className="flex flex-col gap-3 ml-2">
-                  {selectedChildren.map((child) => (
-                    <div key={child.id} className="flex items-center">
-                      <Connector node={child} />
-                      <ChainNode node={child} selected={false} onSelect={(node) => setSelectedId(node.id)} onDelete={handleDelete} />
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         )}
