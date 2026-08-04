@@ -232,10 +232,13 @@ function buildVirementSheet(
   }
   rTotal.getCell(montantCol).numFmt = MONTANT_FMT;
 
-  // "Par le débit..." et "En chiffres :" pointent maintenant vers la ligne TOTAL,
-  // pour rester cohérents si un montant est modifié après export.
-  rCompte.getCell(7).value = { formula: `${montantColLetter}${rTotal.number}` };
-  rChiffres.getCell(6).value = { formula: `${montantColLetter}${rTotal.number}` };
+  // "Par le débit..." et "En chiffres :" affichent le total directement (nombre,
+  // pas une formule) : ExcelJS n'évalue jamais les formules lui-même, et un
+  // lecteur/aperçu sans moteur de calcul affiche "#######" au lieu du résultat
+  // tant que rien ne l'a recalculé. La ligne TOTAL du tableau garde elle sa
+  // vraie formule SUM (utile là : elle doit se recalculer si un montant change).
+  rCompte.getCell(7).value = total;
+  rChiffres.getCell(6).value = total;
 
   ws.addRow([]);
   const rBlank2 = ws.addRow([]);
@@ -267,24 +270,16 @@ function downloadWorkbook(buffer: ArrayBuffer, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
-/**
- * Exporte, pour un mois donné, la liste des employés QUI NE SONT PAS EN CONGÉ,
- * au format des "Ordres de virement" GSS (logo, en-tête, tableau, total,
- * signature), avec une mise en page soignée — un onglet par banque, plus un
- * onglet récapitulatif.
- *
- * Règle congé GSS : un employé dont le congé DÉMARRE le mois suivant voit son
- * salaire de CE mois DOUBLÉ ; un employé dont le congé DÉMARRE ce mois-ci est
- * EXCLU du virement (déjà payé en double le mois précédent).
- */
-export async function exportEmployesPresentsExcel(opts: {
-  month: string; // "YYYY-MM"
+/** Calcule la liste des employés présents (hors congé) pour un mois donné,
+ * avec salaire doublé/prêt déduit déjà appliqués — logique partagée entre
+ * l'export "un seul fichier" et l'export "un fichier par feuille". */
+function computePresentEmployees(opts: {
+  month: string;
   employees: Employee[];
   leaves: LeaveRecord[];
-  loans?: Loan[]; // prêts en cours — la mensualité active est déduite automatiquement
-  ordreBase?: string; // ex: "020/DG/GSS/2026" — incrémenté automatiquement par banque
-  dateStr?: string; // ex: "17/07/2026" — défaut : aujourd'hui
-  fileName?: string;
+  loans?: Loan[];
+  ordreBase?: string;
+  dateStr?: string;
 }) {
   const { month, employees, leaves, loans = [] } = opts;
   const [y, m] = month.split('-').map(Number);
@@ -328,22 +323,17 @@ export async function exportEmployesPresentsExcel(opts: {
     (a, b) => BANQUES_ORDER.indexOf(a) - BANQUES_ORDER.indexOf(b),
   );
 
-  const workbook = new ExcelJS.Workbook();
-  const logoImageId = workbook.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+  return { present, motifMois, dateStr, ordreBase, banquesPresentes };
+}
 
-  banquesPresentes.forEach((banque, idx) => {
-    const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
-    buildVirementSheet(workbook, logoImageId, {
-      sheetName: banque,
-      banque,
-      employees: rows,
-      ordreNum: nextOrdre(ordreBase, idx),
-      dateStr,
-      motifMois,
-    });
-  });
-
-  // ── Onglet récapitulatif — même style (en-tête coloré, bandes alternées) ──
+/** Construit l'onglet récapitulatif (même style : en-tête coloré, bandes
+ * alternées) dans le workbook donné — réutilisé par les deux modes d'export. */
+function buildRecapSheet(
+  workbook: ExcelJS.Workbook,
+  logoImageId: number,
+  present: (Employee & { conge_double?: boolean; pret_deduit?: number; pret_reste_apres?: number })[],
+  motifMois: string,
+) {
   const wsAll = workbook.addWorksheet(`Récap ${motifMois}`.slice(0, 31), { views: [{ showGridLines: false }] });
   wsAll.columns = [
     { width: 7 }, { width: 8 }, { width: 30 }, { width: 16 }, { width: 12 },
@@ -401,7 +391,94 @@ export async function exportEmployesPresentsExcel(opts: {
     fitToHeight: 1,
     margins: { left: 0.4, right: 0.4, top: 0.4, bottom: 0.4, header: 0.5, footer: 0.5 },
   };
+}
+
+/**
+ * Exporte, pour un mois donné, la liste des employés QUI NE SONT PAS EN CONGÉ,
+ * au format des "Ordres de virement" GSS (logo, en-tête, tableau, total,
+ * signature), avec une mise en page soignée — un onglet par banque, plus un
+ * onglet récapitulatif. TOUT dans UN SEUL fichier .xlsx (plusieurs onglets).
+ *
+ * Règle congé GSS : un employé dont le congé DÉMARRE le mois suivant voit son
+ * salaire de CE mois DOUBLÉ ; un employé dont le congé DÉMARRE ce mois-ci est
+ * EXCLU du virement (déjà payé en double le mois précédent).
+ */
+export async function exportEmployesPresentsExcel(opts: {
+  month: string; // "YYYY-MM"
+  employees: Employee[];
+  leaves: LeaveRecord[];
+  loans?: Loan[]; // prêts en cours — la mensualité active est déduite automatiquement
+  ordreBase?: string; // ex: "020/DG/GSS/2026" — incrémenté automatiquement par banque
+  dateStr?: string; // ex: "17/07/2026" — défaut : aujourd'hui
+  fileName?: string;
+}) {
+  const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
+
+  const workbook = new ExcelJS.Workbook();
+  const logoImageId = workbook.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+
+  banquesPresentes.forEach((banque, idx) => {
+    const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
+    buildVirementSheet(workbook, logoImageId, {
+      sheetName: banque,
+      banque,
+      employees: rows,
+      ordreNum: nextOrdre(ordreBase, idx),
+      dateStr,
+      motifMois,
+    });
+  });
+
+  buildRecapSheet(workbook, logoImageId, present, motifMois);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  downloadWorkbook(buffer as ArrayBuffer, opts.fileName ?? `Ordre_virement_${month}.xlsx`);
+  downloadWorkbook(buffer as ArrayBuffer, opts.fileName ?? `Ordre_virement_${opts.month}.xlsx`);
+}
+
+/**
+ * Même contenu que `exportEmployesPresentsExcel`, mais chaque feuille (BPM,
+ * Caisse, SGM, Récap) est téléchargée comme un **fichier .xlsx séparé** au
+ * lieu d'onglets dans un seul classeur — pratique pour envoyer à chaque
+ * banque son propre fichier sans les autres onglets.
+ *
+ * Déclenche plusieurs téléchargements à la suite (un par banque présente +
+ * un pour le récap) ; certains navigateurs demandent une autorisation la
+ * première fois qu'une page déclenche plusieurs téléchargements d'un coup.
+ */
+export async function exportEmployesPresentsExcelSepares(opts: {
+  month: string; // "YYYY-MM"
+  employees: Employee[];
+  leaves: LeaveRecord[];
+  loans?: Loan[];
+  ordreBase?: string;
+  dateStr?: string;
+  filePrefix?: string; // défaut : "Ordre_virement"
+}) {
+  const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
+  const prefix = opts.filePrefix ?? 'Ordre_virement';
+
+  for (let idx = 0; idx < banquesPresentes.length; idx++) {
+    const banque = banquesPresentes[idx];
+    const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
+
+    const wb = new ExcelJS.Workbook();
+    const logoId = wb.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+    buildVirementSheet(wb, logoId, {
+      sheetName: banque,
+      banque,
+      employees: rows,
+      ordreNum: nextOrdre(ordreBase, idx),
+      dateStr,
+      motifMois,
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    downloadWorkbook(buf as ArrayBuffer, `${prefix}_${banque}_${opts.month}.xlsx`);
+  }
+
+  // Fichier séparé pour le récapitulatif
+  const wbRecap = new ExcelJS.Workbook();
+  const logoIdRecap = wbRecap.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+  buildRecapSheet(wbRecap, logoIdRecap, present, motifMois);
+  const bufRecap = await wbRecap.xlsx.writeBuffer();
+  downloadWorkbook(bufRecap as ArrayBuffer, `${prefix}_Recap_${opts.month}.xlsx`);
 }
