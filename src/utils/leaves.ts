@@ -33,11 +33,16 @@ const MEDIUM: Partial<ExcelJS.Border> = { style: 'medium', color: { argb: COLOR.
 
 const MONTANT_FMT = '#,##0.00';
 
-/** Format bancaire compact — retire tout espace du RIB/numéro de compte, quelle
- * que soit la façon dont il a été saisi (le système bancaire travaille sur la
- * chaîne compacte de chiffres, les espaces ne sont qu'une convention d'affichage). */
-function cleanRib(rib?: string): string {
-  return (rib || '').replace(/\s+/g, '');
+/** Format d'affichage bancaire — remet les espaces comme sur les documents
+ * imprimés/officiels : banque(5) + guichet(5) + compte(11) + clé(2), ex.
+ * "00012 00001 00000072286 18". Le RIB reste stocké sans espace en base
+ * (format compact) ; cette fonction ne change que l'affichage à l'export.
+ * Les numéros qui ne font pas 23 chiffres (ex: simple n° de compte BPM) sont
+ * laissés inchangés. */
+function formatRib(rib?: string): string {
+  const digits = (rib || '').replace(/\s+/g, '');
+  if (digits.length !== 23) return digits;
+  return `${digits.slice(0, 5)} ${digits.slice(5, 10)} ${digits.slice(10, 21)} ${digits.slice(21, 23)}`;
 }
 
 /** Incrémente le numéro d'ordre (ex: "018/DG/GSS/2026" -> "019/DG/GSS/2026") */
@@ -187,8 +192,8 @@ function buildVirementSheet(
 
   employees.forEach((e, i) => {
     const row = isBpm
-      ? ['', i + 1, e.mle, e.name, banque, cleanRib(e.rib), '', '', e.montantSheet]
-      : ['', i + 1, e.mle, e.name, banque, cleanRib(e.rib), e.montantSheet];
+      ? ['', i + 1, e.mle, e.name, banque, formatRib(e.rib), '', '', e.montantSheet]
+      : ['', i + 1, e.mle, e.name, banque, formatRib(e.rib), e.montantSheet];
     const r = ws.addRow(row);
     r.height = 18;
     const banded = i % 2 === 1;
@@ -370,7 +375,7 @@ export async function exportEmployesPresentsExcel(opts: {
       e.ville || '',
       e.equipeNom || '',
       e.banque || 'Caisse',
-      cleanRib(e.rib),
+      formatRib(e.rib),
       e.montant ?? undefined,
       remarques.join(' · '),
     ]);
