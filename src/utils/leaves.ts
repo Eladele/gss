@@ -142,11 +142,11 @@ function buildVirementSheet(
   rDest.getCell(3).alignment = { horizontal: 'center' };
   ws.mergeCells(rDest.number, 3, rDest.number, isBpm ? 9 : 8);
 
-  const rCompte = ws.addRow(['', '', SOCIETE.compte, undefined, undefined, undefined, total, 'MRU']);
+  const rCompte = ws.addRow(['', '', SOCIETE.compte, undefined, undefined, total, 'MRU']);
   rCompte.getCell(3).font = { name: 'Times New Roman', size: 13 };
+  rCompte.getCell(6).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
+  rCompte.getCell(6).numFmt = MONTANT_FMT;
   rCompte.getCell(7).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
-  rCompte.getCell(7).numFmt = MONTANT_FMT;
-  rCompte.getCell(8).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
 
   const rChiffres = ws.addRow(['', '', 'En chiffres : ', undefined, undefined, total, 'MRU']);
   rChiffres.getCell(3).font = { name: 'Times New Roman', size: 13 };
@@ -237,7 +237,7 @@ function buildVirementSheet(
   // lecteur/aperçu sans moteur de calcul affiche "#######" au lieu du résultat
   // tant que rien ne l'a recalculé. La ligne TOTAL du tableau garde elle sa
   // vraie formule SUM (utile là : elle doit se recalculer si un montant change).
-  rCompte.getCell(7).value = total;
+  rCompte.getCell(6).value = total;
   rChiffres.getCell(6).value = total;
 
   ws.addRow([]);
@@ -411,13 +411,20 @@ export async function exportEmployesPresentsExcel(opts: {
   ordreBase?: string; // ex: "020/DG/GSS/2026" — incrémenté automatiquement par banque
   dateStr?: string; // ex: "17/07/2026" — défaut : aujourd'hui
   fileName?: string;
+  /** Feuilles à inclure, ex: ['BPM', 'SGM', 'Récap']. Non fourni ou vide = toutes
+   * les banques présentes + le récap (comportement par défaut, inchangé). */
+  feuilles?: string[];
 }) {
   const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
+
+  const feuillesVoulues = opts.feuilles && opts.feuilles.length > 0 ? opts.feuilles : [...banquesPresentes, 'Récap'];
+  const banquesAExporter = banquesPresentes.filter((b) => feuillesVoulues.includes(b));
+  const inclureRecap = feuillesVoulues.includes('Récap');
 
   const workbook = new ExcelJS.Workbook();
   const logoImageId = workbook.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
 
-  banquesPresentes.forEach((banque, idx) => {
+  banquesAExporter.forEach((banque, idx) => {
     const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
     buildVirementSheet(workbook, logoImageId, {
       sheetName: banque,
@@ -429,7 +436,9 @@ export async function exportEmployesPresentsExcel(opts: {
     });
   });
 
-  buildRecapSheet(workbook, logoImageId, present, motifMois);
+  if (inclureRecap) buildRecapSheet(workbook, logoImageId, present, motifMois);
+
+  if (workbook.worksheets.length === 0) return; // rien de sélectionné, rien à générer
 
   const buffer = await workbook.xlsx.writeBuffer();
   downloadWorkbook(buffer as ArrayBuffer, opts.fileName ?? `Ordre_virement_${opts.month}.xlsx`);
@@ -453,12 +462,19 @@ export async function exportEmployesPresentsExcelSepares(opts: {
   ordreBase?: string;
   dateStr?: string;
   filePrefix?: string; // défaut : "Ordre_virement"
+  /** Feuilles à inclure, ex: ['BPM', 'SGM', 'Récap']. Non fourni ou vide = toutes
+   * les banques présentes + le récap (comportement par défaut, inchangé). */
+  feuilles?: string[];
 }) {
   const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
   const prefix = opts.filePrefix ?? 'Ordre_virement';
 
-  for (let idx = 0; idx < banquesPresentes.length; idx++) {
-    const banque = banquesPresentes[idx];
+  const feuillesVoulues = opts.feuilles && opts.feuilles.length > 0 ? opts.feuilles : [...banquesPresentes, 'Récap'];
+  const banquesAExporter = banquesPresentes.filter((b) => feuillesVoulues.includes(b));
+  const inclureRecap = feuillesVoulues.includes('Récap');
+
+  for (let idx = 0; idx < banquesAExporter.length; idx++) {
+    const banque = banquesAExporter[idx];
     const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
 
     const wb = new ExcelJS.Workbook();
@@ -475,10 +491,11 @@ export async function exportEmployesPresentsExcelSepares(opts: {
     downloadWorkbook(buf as ArrayBuffer, `${prefix}_${banque}_${opts.month}.xlsx`);
   }
 
-  // Fichier séparé pour le récapitulatif
-  const wbRecap = new ExcelJS.Workbook();
-  const logoIdRecap = wbRecap.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
-  buildRecapSheet(wbRecap, logoIdRecap, present, motifMois);
-  const bufRecap = await wbRecap.xlsx.writeBuffer();
-  downloadWorkbook(bufRecap as ArrayBuffer, `${prefix}_Recap_${opts.month}.xlsx`);
+  if (inclureRecap) {
+    const wbRecap = new ExcelJS.Workbook();
+    const logoIdRecap = wbRecap.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+    buildRecapSheet(wbRecap, logoIdRecap, present, motifMois);
+    const bufRecap = await wbRecap.xlsx.writeBuffer();
+    downloadWorkbook(bufRecap as ArrayBuffer, `${prefix}_Recap_${opts.month}.xlsx`);
+  }
 }

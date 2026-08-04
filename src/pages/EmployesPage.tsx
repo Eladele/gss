@@ -73,6 +73,12 @@ export default function EmployesPage() {
   const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [exportOrdre, setExportOrdre] = useState('020/DG/GSS/2026');
   const [congeFilterMonth, setCongeFilterMonth] = useState('');
+  // Feuilles cochées pour l'export — toutes cochées par défaut (BPM/Caisse/SGM
+  // détectées dynamiquement selon les banques réellement utilisées + Récap).
+  const FEUILLES_DISPONIBLES = ['BPM', 'Caisse', 'SGM', 'Récap'];
+  const [feuillesSelectionnees, setFeuillesSelectionnees] = useState<string[]>(FEUILLES_DISPONIBLES);
+  const toggleFeuille = (f: string) =>
+    setFeuillesSelectionnees((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]));
 
   const villes = useMemo(() => [...new Set(employees.map((e) => e.ville).filter(Boolean))].sort() as string[], [employees]);
 
@@ -162,7 +168,11 @@ export default function EmployesPage() {
   };
 
   const handleExportPresents = async () => {
-    await exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, loans, ordreBase: exportOrdre });
+    if (feuillesSelectionnees.length === 0) {
+      showToast('Sélectionne au moins une feuille à exporter', 'error');
+      return;
+    }
+    await exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, loans, ordreBase: exportOrdre, feuilles: feuillesSelectionnees });
     showToast('Fichier Excel des employés présents généré ', 'success');
   };
 
@@ -319,7 +329,7 @@ export default function EmployesPage() {
         <CardHeader>
           <div className="flex items-center justify-between w-full flex-wrap gap-2">
             <CardTitle> Congés enregistrés</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Input type="month" value={exportMonth} onChange={(e) => setExportMonth(e.target.value)} className="w-auto" />
               <Input
                 value={exportOrdre}
@@ -333,6 +343,15 @@ export default function EmployesPage() {
             </div>
           </div>
         </CardHeader>
+        <div className="px-5 pb-2 flex items-center gap-3 flex-wrap">
+          <span className="text-[11px] font-semibold text-slate-500">Feuilles à exporter :</span>
+          {FEUILLES_DISPONIBLES.map((f) => (
+            <label key={f} className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+              <input type="checkbox" checked={feuillesSelectionnees.includes(f)} onChange={() => toggleFeuille(f)} className="accent-blue-600" />
+              {f}
+            </label>
+          ))}
+        </div>
         <p className="px-5 -mt-2 pb-1 text-[11px] text-slate-400">
           Génère un fichier Excel au format "Ordre de virement" GSS (en-tête, motif, tableau, total, signature) — un onglet par banque (BPM,
           Caisse, SGM), pour les employés qui ne sont PAS en congé sur le mois sélectionné.
