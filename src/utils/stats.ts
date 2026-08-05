@@ -91,6 +91,139 @@ export function isHorsDelai(s: Situation): boolean {
   return calcDelai(s) > delaiThresholdFor(s);
 }
 
+// ─── Classification fine à 3 tranches (Moins24H / Dans délai / Hors délai) ─────
+// Utilisée pour les rapports "% dans les délais" par ville/type (façon Huawei/
+// Mauritel) : distingue les situations réglées "très vite" (même jour ouvré,
+// calcDelai===0) de celles simplement "dans les délais" (au-delà mais sous le
+// seuil). Pour DRG (seuil déjà à 24h/1j), il n'y a pas de place pour une tranche
+// "Moins24H" distincte de "Dans délai" — le rapport DRG reste donc binaire
+// (voir statsByVille, inchangé) ; cette fonction sert aux types Installation/CST.
+export type DelaiBucket = 'moins24h' | 'dans' | 'hors';
+
+export function delaiBucket(s: Situation): DelaiBucket {
+  const d = calcDelai(s);
+  const threshold = delaiThresholdFor(s);
+  if (d > threshold) return 'hors';
+  if (s.type !== 'DRG' && d === 0) return 'moins24h';
+  return 'dans';
+}
+
+export interface VilleTypeDelaiRow {
+  ville: string;
+  type: string; // 'TOTAL' ou code de type (CLS, RLR, TRL, CMI, CST...)
+  total: number;
+  moins24h: number;
+  dansDelai: number;
+  horsDelai: number;
+  pctDansDelai: number; // (moins24h + dansDelai) / total * 100 — "% TLID"
+}
+
+// Détail par ville, avec une ligne TOTAL et — si plusieurs types sont présents
+// dans cette ville — une ligne par type (CLS, RLR, TRL, CMI...). Pour un rapport
+// mono-type (ex: CST seul), il n'y a que la ligne TOTAL par ville, comme sur le
+// modèle de référence.
+export function statsDelaiDetailleParVilleEtType(situations: Situation[], equipes: Equipe[], typesInclus: string[]): VilleTypeDelaiRow[] {
+  const filtered = situations.filter((s) => typesInclus.includes(s.type));
+  const byVille: Record<string, Situation[]> = {};
+  filtered.forEach((s) => {
+    const v = villeForEquipe(s.equipe, equipes);
+    (byVille[v] ??= []).push(s);
+  });
+
+  const buildRow = (ville: string, type: string, items: Situation[]): VilleTypeDelaiRow => {
+    let moins24h = 0,
+      dans = 0,
+      hors = 0;
+    items.forEach((s) => {
+      const b = delaiBucket(s);
+      if (b === 'moins24h') moins24h++;
+      else if (b === 'dans') dans++;
+      else hors++;
+    });
+    const total = items.length;
+    return {
+      ville,
+      type,
+      total,
+      moins24h,
+      dansDelai: dans,
+      horsDelai: hors,
+      pctDansDelai: total ? Math.round(((moins24h + dans) / total) * 1000) / 10 : 0,
+    };
+  };
+
+  const rows: VilleTypeDelaiRow[] = [];
+  Object.entries(byVille).forEach(([ville, list]) => {
+    rows.push(buildRow(ville, 'TOTAL', list));
+    const byType: Record<string, Situation[]> = {};
+    list.forEach((s) => (byType[s.type] ??= []).push(s));
+    if (Object.keys(byType).length > 1) {
+      Object.entries(byType)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .forEach(([type, items]) => rows.push(buildRow(ville, type, items)));
+    }
+  });
+  return rows.sort((a, b) => a.ville.localeCompare(b.ville) || (a.type === 'TOTAL' ? -1 : b.type === 'TOTAL' ? 1 : a.type.localeCompare(b.type)));
+}
+
+// ─── Backlog du jour, par ancienneté (façon "MES du J" / "DRG Relevés du J") ───
+// Interprétation retenue (à ajuster si besoin) :
+//  - "Résolu aujourd'hui"  = situations déjà traitées (OK/NON OK) dont la date de
+//     traitement (updatedAt) tombe le jour de référence.
+//  - "Moins2J / Moins7J / Plus7J" = situations ENCORE en attente (pending/in_progress),
+//     réparties par ancienneté réelle (calcDelai) : <2j / 2 à 7j / >7j.
+//  - "Somme instance" = total encore en attente (somme des 3 tranches ci-dessus).
+//  - "Somme totale" ("Somme MI" / "Somme DR" sur le modèle) = Résolu aujourd'hui + Somme instance.
+//  - "% réalisation" = Résolu aujourd'hui / Somme totale.
+export interface BacklogRow {
+  nature: 'installation' | 'DRG';
+  resoluAujourdhui: number;
+  moins2j: number;
+  moins7j: number;
+  plus7j: number;
+  sommeInstance: number;
+  sommeTotal: number;
+  pctRealisation: number;
+}
+
+export function statsBacklogParAnciennete(situations: Situation[], dateRef?: string): BacklogRow[] {
+  const ref = dateRef ?? new Date().toISOString().slice(0, 10);
+
+  const buildRow = (nature: 'installation' | 'DRG', list: Situation[]): BacklogRow => {
+    const resoluAujourdhui = list.filter((s) => {
+      const resolved = s.status === 'ok' || s.status === 'non_ok';
+      return resolved && (s.updatedAt || '').slice(0, 10) === ref;
+    }).length;
+
+    const pending = list.filter((s) => s.status === 'pending' || s.status === 'in_progress');
+    let moins2j = 0,
+      moins7j = 0,
+      plus7j = 0;
+    pending.forEach((s) => {
+      const d = calcDelai(s);
+      if (d < 2) moins2j++;
+      else if (d <= 7) moins7j++;
+      else plus7j++;
+    });
+    const sommeInstance = moins2j + moins7j + plus7j;
+    const sommeTotal = resoluAujourdhui + sommeInstance;
+    return {
+      nature,
+      resoluAujourdhui,
+      moins2j,
+      moins7j,
+      plus7j,
+      sommeInstance,
+      sommeTotal,
+      pctRealisation: sommeTotal ? Math.round((resoluAujourdhui / sommeTotal) * 1000) / 10 : 0,
+    };
+  };
+
+  const installList = situations.filter((s) => MERGED_TYPES.includes(s.type));
+  const drgList = situations.filter((s) => s.type === 'DRG');
+  return [buildRow('installation', installList), buildRow('DRG', drgList)];
+}
+
 export function villeForEquipe(equipeName: string, equipes: Equipe[]): string {
   const eq = equipes.find((e) => e.name.toLowerCase() === equipeName?.toLowerCase());
   return eq?.ville ?? 'Nouakchott';

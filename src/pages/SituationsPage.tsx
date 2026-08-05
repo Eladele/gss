@@ -92,6 +92,50 @@ export default function SituationsPage() {
   const PAGE_SIZE = 25;
   const [page, setPage] = useState(1);
 
+  // Tri cliquable — clic une fois = décroissant, reclic = croissant, 3ᵉ clic = retour
+  // à l'ordre naturel (celui du store). sortBy est le libellé exact de l'en-tête.
+  const [sortBy, setSortBy] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const toggleSort = (col: string) => {
+    if (sortBy !== col) {
+      setSortBy(col);
+      setSortDir('desc');
+    } else if (sortDir === 'desc') {
+      setSortDir('asc');
+    } else {
+      setSortBy(null);
+    }
+  };
+
+  // Un "getter" de valeur comparable par en-tête — couvre toutes les colonnes du
+  // tableau (sauf Actions, non triable). Les colonnes réseau (Réseau, ONU Install
+  // Time, Port ID, ONU ID, SN/MAC, Rx, Ranging) lisent le scan correspondant via
+  // scanByFgp, comme les cellules elles-mêmes.
+  const SORT_GETTERS: Record<string, (s: (typeof situations)[number]) => string | number> = {
+    FGP: (s) => s.fgp,
+    Type: (s) => s.type,
+    'Date Message': (s) => s.dateMessage || '',
+    'Service Dest.': (s) => s.serviceDestination || '',
+    Zone: (s) => s.zone || '',
+    'Date Dépôt': (s) => s.dateDepo || '',
+    'Date Mise en Service': (s) => s.dateClt || '',
+    Motif: (s) => s.motif || '',
+    Poteau: (s) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)),
+    Équipe: (s) => s.equipe || '',
+    Délai: (s) => (s.dateDepo || s.dateMessage ? calcDelai(s) : -1),
+    Conformité: (s) => (s.dateDepo || s.dateMessage ? (isHorsDelai(s) ? 1 : 0) : -1),
+    Réseau: (s) => scanByFgp.get(normalizeKey(s.fgp))?.rxPower ?? -999,
+    'ONU Install Time': (s) => scanByFgp.get(normalizeKey(s.fgp))?.timeAddedToNms || '',
+    'Port ID': (s) => scanByFgp.get(normalizeKey(s.fgp))?.portId ?? -1,
+    'ONU ID': (s) => scanByFgp.get(normalizeKey(s.fgp))?.onuId ?? -1,
+    'SN/MAC': (s) => scanByFgp.get(normalizeKey(s.fgp))?.snMac || '',
+    'Rx (dBm)': (s) => scanByFgp.get(normalizeKey(s.fgp))?.rxPower ?? -999,
+    'Ranging (m)': (s) => scanByFgp.get(normalizeKey(s.fgp))?.ranging ?? -999,
+    Remarque: (s) => scanByFgp.get(normalizeKey(s.fgp))?.remarque || '',
+    'Clôturé par': (s) => s.closedBy || '',
+    Statut: (s) => s.status || '',
+  };
+
   const filtered = useMemo(
     () =>
       situations.filter((s) => {
@@ -116,6 +160,20 @@ export default function SituationsPage() {
   // statut/date explicite) — vue simplifiée pour aller à l'essentiel au quotidien.
   const isEnCoursView = showEnCoursOnly && !fStatus && !fDate;
 
+  const sorted = useMemo(() => {
+    if (!sortBy || !SORT_GETTERS[sortBy]) return filtered;
+    const getter = SORT_GETTERS[sortBy];
+    const list = filtered.slice();
+    list.sort((a, b) => {
+      const va = getter(a);
+      const vb = getter(b);
+      const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb), undefined, { numeric: true });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, sortBy, sortDir, scanByFgp]);
+
   // Remise à la page 1 quand un filtre change — ajustée PENDANT le rendu (pattern
   // recommandé par React) plutôt que dans un useEffect, qui provoquerait un rendu
   // supplémentaire inutile ("Calling setState synchronously within an effect").
@@ -126,8 +184,8 @@ export default function SituationsPage() {
     setPage(1);
   }
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const paginated = useMemo(() => sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [sorted, page]);
 
   const [okMode, setOkMode] = useState<'close' | 'edit'>('close');
   const editSituation = useAppStore((s) => s.editSituation);
@@ -342,11 +400,25 @@ export default function SituationsPage() {
                         'Statut',
                         'Actions',
                       ]
-                  ).map((h) => (
-                    <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
+                  ).map((h) => {
+                    const sortable = h !== 'Actions';
+                    return (
+                      <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
+                        {sortable ? (
+                          <button
+                            onClick={() => toggleSort(h)}
+                            className={`flex items-center gap-1 hover:text-slate-600 ${sortBy === h ? 'text-blue-600' : ''}`}
+                            title="Trier"
+                          >
+                            {h}
+                            <span className="text-[10px]">{sortBy === h ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}</span>
+                          </button>
+                        ) : (
+                          h
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>

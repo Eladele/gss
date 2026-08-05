@@ -11,6 +11,8 @@ import {
   MERGED_TYPES,
   isHorsDelai,
   countPoteaux,
+  statsDelaiDetailleParVilleEtType,
+  statsBacklogParAnciennete,
   type PeriodFilter,
 } from '@/utils/stats';
 import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
@@ -178,6 +180,49 @@ export default function StatistiquesPage() {
   );
 
   const donutData = byVille.map((v) => ({ label: v.ville, value: v.total, color: VILLE_COLORS[v.ville] ?? '#546E7A' }));
+
+  // ── Nouveaux rapports détaillés (façon relevés Huawei/Mauritel) ──────────
+  // Ceux-ci ignorent volontairement le toggle Installation/Dérangement (nature) —
+  // ils montrent Installation, CST et DRG côte à côte, indépendamment du filtre —
+  // mais respectent période/équipe/ville comme le reste de la page.
+  const scopedAll = useMemo(
+    () =>
+      situations.filter((s) => {
+        if (!inPeriod(s.dateDepo || s.dateMessage || '', period)) return false;
+        if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
+        if (fVille) {
+          const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
+          if ((eq?.ville ?? 'Nouakchott') !== fVille) return false;
+        }
+        return true;
+      }),
+    [situations, period, fEquipe, fVille, equipes],
+  );
+
+  const INSTALLATION_TYPES_SANS_CST = useMemo(() => MERGED_TYPES.filter((t) => t !== 'CST'), []);
+  const installDetail = useMemo(
+    () => statsDelaiDetailleParVilleEtType(scopedAll, equipes, INSTALLATION_TYPES_SANS_CST),
+    [scopedAll, equipes, INSTALLATION_TYPES_SANS_CST],
+  );
+  const cstDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['CST']), [scopedAll, equipes]);
+  const drgVilleDetail = useMemo(() => statsByVille(scopedAll.filter((s) => s.type === 'DRG'), equipes), [scopedAll, equipes]);
+
+  // Backlog "du jour" — snapshot indépendant de la période choisie (un backlog en
+  // attente depuis +7j a forcément une date de dépôt hors d'une période "cette
+  // semaine", donc on ne filtre ici que par équipe/ville, pas par période.
+  const scopedForBacklog = useMemo(
+    () =>
+      situations.filter((s) => {
+        if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
+        if (fVille) {
+          const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
+          if ((eq?.ville ?? 'Nouakchott') !== fVille) return false;
+        }
+        return true;
+      }),
+    [situations, fEquipe, fVille, equipes],
+  );
+  const backlogRows = useMemo(() => statsBacklogParAnciennete(scopedForBacklog), [scopedForBacklog]);
 
   const handleExport = async () => {
     await exportStatsToExcel({
@@ -512,6 +557,165 @@ export default function StatistiquesPage() {
                 </tr>
               ))}
               {byVille.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* ═══ Nouveaux rapports détaillés (façon relevés Huawei/Mauritel) ═══ */}
+
+      {/* Backlog du jour — installations et DRG en attente, par ancienneté */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Backlog du jour — par ancienneté</CardTitle>
+        </CardHeader>
+        <p className="px-5 -mt-1 pb-2 text-[11px] text-slate-400">
+          "Résolu aujourd'hui" = traité (OK/NON OK) le jour même. Le reste = encore en attente, réparti par ancienneté. Indépendant du
+          filtre de période ci-dessus (c'est un instantané "à date").
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Nature', 'Résolu aujourd\'hui', 'Moins de 2J', 'Moins de 7J', 'Plus de 7J', 'Somme instance', 'Somme totale', '% réalisation'].map(
+                  (h) => (
+                    <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                      {h}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {backlogRows.map((r) => (
+                <tr key={r.nature} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.nature === 'installation' ? 'Installation' : 'DRG'}</td>
+                  <td className="px-3 py-2 font-bold text-green-700">{r.resoluAujourdhui}</td>
+                  <td className="px-3 py-2">{r.moins2j}</td>
+                  <td className="px-3 py-2">{r.moins7j}</td>
+                  <td className="px-3 py-2 text-red-700">{r.plus7j}</td>
+                  <td className="px-3 py-2 font-semibold">{r.sommeInstance}</td>
+                  <td className="px-3 py-2 font-semibold">{r.sommeTotal}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctRealisation}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* % Installation dans les délais — par ville et type (CLS, RLR, TRL, CMI...) */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Installation dans les délais — par ville et type</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Type', 'Total', 'Moins24H', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {installDetail.map((r) => (
+                <tr key={`${r.ville}-${r.type}`} className={`border-b border-slate-50 ${r.type === 'TOTAL' ? 'bg-blue-50/40' : ''}`}>
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.type === 'TOTAL' ? r.ville : ''}</td>
+                  <td className={`px-3 py-2 ${r.type === 'TOTAL' ? 'font-bold text-blue-700' : 'text-slate-500 pl-6'}`}>{r.type}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-blue-600">{r.moins24h}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctDansDelai}%</td>
+                </tr>
+              ))}
+              {installDetail.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* % CST dans les délais — par ville */}
+      <Card>
+        <CardHeader>
+          <CardTitle> CST dans les délais — par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Moins24H', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {cstDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-blue-600">{r.moins24h}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctDansDelai}%</td>
+                </tr>
+              ))}
+              {cstDetail.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Relevés DRG dans les délais — par ville (binaire : DRG a déjà un seuil de 24h, pas de tranche "Moins24H" distincte) */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Relevés DRG dans les délais — par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {drgVilleDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctConformite}%</td>
+                </tr>
+              ))}
+              {drgVilleDetail.length === 0 && (
                 <tr>
                   <td colSpan={5}>
                     <EmptyState icon="" text="Aucune donnée" />
