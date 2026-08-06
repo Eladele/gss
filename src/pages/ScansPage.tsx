@@ -134,7 +134,7 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
   const cZone = col(['ZONE']);
   const cStt = col(['STT']);
   const cResult = col(['RESULT']);
-  const cScanTime = col(['SCAN TIME']);
+  const cScanTime = col(['SCAN TIME', 'DATE SCAN']);
   const cPort = col(['PORT ID']);
   const cOnuId = col(['ONU ID']);
   const cOnuName = col(['ONU NAME']);
@@ -143,7 +143,7 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
   const cAdded = col(['TIME ADDED']);
   const cRx = col(['RX OPTICAL', 'RX POWER']);
   const cRanging = col(['RANGING']);
-  const cRemarque = col(['REMARQUE']);
+  const cRemarque = col(['REMARQUE', 'ETAT']);
 
   const toIso = (v: unknown) => (v instanceof Date ? v.toISOString() : v ? String(v) : undefined);
   const toNum = (v: unknown) => (v === null || v === undefined || v === '' || v === '--' ? null : isNaN(Number(v)) ? null : Number(v));
@@ -156,7 +156,9 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
       zone: cZone >= 0 ? String(row[cZone] ?? '').trim() : '',
       stt: cStt >= 0 ? String(row[cStt] ?? '').trim() : '',
       result:
-        cResult >= 0 && /SCANNE$/i.test(String(row[cResult] ?? '')) && !/NON/i.test(String(row[cResult] ?? ''))
+        // Accepte "SCANNE" (format 1) et "SCAN" (format 2, colonne RESULTA) comme
+        // équivalents — "NON SCANNE"/"NON SCAN" restent explicitement exclus.
+        cResult >= 0 && /SCAN(NE)?$/i.test(String(row[cResult] ?? '')) && !/NON/i.test(String(row[cResult] ?? ''))
           ? 'SCANNE'
           : 'NON SCANE',
       scanTime: cScanTime >= 0 ? toIso(row[cScanTime]) : undefined,
@@ -183,6 +185,7 @@ export default function ScansPage() {
   const loadScanHistory = useAppStore((s) => s.loadScanHistory);
   const recordScanSnapshot = useAppStore((s) => s.recordScanSnapshot);
   const removeScanSnapshot = useAppStore((s) => s.removeScanSnapshot);
+  const clearAllScans = useAppStore((s) => s.clearAllScans);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
@@ -436,12 +439,16 @@ export default function ScansPage() {
                     <td className="px-3 py-2 text-right">
                       <button
                         onClick={() => {
-                          if (
-                            confirm(
-                              "Supprimer cette ligne de l'historique ?\n\nATTENTION : ça retire seulement cette ligne du tableau ci-dessus. Les données réelles de scan (utilisées pour la comparaison automatique) ne sont PAS supprimées et restent inchangées.",
-                            )
-                          ) {
+                          // Seule la ligne la PLUS RÉCENTE correspond encore à des données
+                          // réelles dans `scans` (chaque import remplace entièrement la
+                          // table — les anciens imports n'ont donc déjà plus rien à vider).
+                          const isLatest = scanHistory[0]?.id === h.id;
+                          const message = isLatest
+                            ? "Supprimer cette ligne de l'historique ?\n\nATTENTION : c'est l'import le plus récent — ça va AUSSI vider les données réseau actuelles (table scans), puisqu'elles correspondent à cet import. L'app affichera 0 ONU scanné tant qu'un nouveau fichier n'est pas réimporté."
+                            : "Supprimer cette ligne de l'historique ?\n\nÇa retire seulement cette ligne du tableau ci-dessus. Les données réelles de cet ancien import n'existent déjà plus (remplacées par un import plus récent) — rien d'autre à supprimer.";
+                          if (confirm(message)) {
                             removeScanSnapshot(h.id);
+                            if (isLatest) clearAllScans();
                           }
                         }}
                         className="text-red-600 hover:underline text-xs font-semibold"

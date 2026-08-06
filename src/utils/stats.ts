@@ -30,6 +30,59 @@ export const PUBLIC_HOLIDAYS: string[] = [
   '2026-05-28', // Aid al-Adha (2e jour)
   '2026-06-16', // Nouvel An musulman (approx.)
   '2026-08-25', // Mawlid (approx.)
+
+  // 2027 — dates fixes
+  '2027-01-01',
+  '2027-05-01',
+  '2027-05-25',
+  '2027-11-28',
+  // 2027 — fêtes musulmanes (sources concordantes, encore approx. — observation de la lune)
+  '2027-03-10', // Aid al-Fitr
+  '2027-03-11', // Aid al-Fitr (2e jour)
+  '2027-05-17', // Aid al-Adha
+  '2027-05-18', // Aid al-Adha (2e jour)
+  '2027-06-06', // Nouvel An musulman
+  '2027-08-15', // Mawlid
+
+  // 2028 — dates fixes
+  '2028-01-01',
+  '2028-05-01',
+  '2028-05-25',
+  '2028-11-28',
+  // 2028 — fêtes musulmanes (approx.)
+  '2028-02-27', // Aid al-Fitr
+  '2028-02-28', // Aid al-Fitr (2e jour)
+  '2028-05-05', // Aid al-Adha
+  '2028-05-06', // Aid al-Adha (2e jour)
+  '2028-05-25', // Nouvel An musulman (tombe le même jour que la Journée de l'Afrique en 2028)
+  '2028-08-03', // Mawlid
+
+  // 2029 — dates fixes
+  '2029-01-01',
+  '2029-05-01',
+  '2029-05-25',
+  '2029-11-28',
+  // 2029 — fêtes musulmanes (approx., extrapolées — écart d'environ 11j/an à confirmer)
+  '2029-02-15', // Aid al-Fitr
+  '2029-02-16', // Aid al-Fitr (2e jour)
+  '2029-04-24', // Aid al-Adha
+  '2029-04-25', // Aid al-Adha (2e jour)
+  '2029-05-14', // Nouvel An musulman (approx.)
+  '2029-07-23', // Mawlid (approx.)
+
+  // 2030 — dates fixes
+  '2030-01-01',
+  '2030-05-01',
+  '2030-05-25',
+  '2030-11-28',
+  // 2030 — fêtes musulmanes : PUREMENT EXTRAPOLÉES (aucune source officielle publiée
+  // aussi loin) — à vérifier/corriger dès que le calendrier officiel 2030 sort.
+  '2030-02-04', // Aid al-Fitr (approx.)
+  '2030-02-05', // Aid al-Fitr (2e jour)
+  '2030-04-13', // Aid al-Adha (approx.)
+  '2030-04-14', // Aid al-Adha (2e jour)
+  '2030-05-03', // Nouvel An musulman (approx.)
+  '2030-07-12', // Mawlid (approx.)
 ];
 const HOLIDAY_SET = new Set(PUBLIC_HOLIDAYS);
 
@@ -53,15 +106,26 @@ function workingDaysBetween(startMs: number, endMs: number): number {
 }
 
 // Calcule le délai réel d'une situation (en jours ouvrés, hors dimanche/fériés) :
-// dateDepo → date de mise à jour (updatedAt) si elle est traitée (OK / NON OK),
-// sinon dateDepo → maintenant (délai toujours "en cours").
+// dateDepo (ou dateMessage à défaut) → fin, où la fin est déterminée dans cet ordre
+// de priorité :
+//   1. dateClt ("Date Mise en Service") si elle est renseignée — c'est la vraie
+//      date terrain, la plus fidèle à la réalité, indépendamment du moment où
+//      quelqu'un a cliqué "OK" dans l'app.
+//   2. sinon, updatedAt si la situation est traitée (OK / NON OK) — date de
+//      clôture dans l'app, utilisée seulement quand aucune date terrain n'existe.
+//   3. sinon, maintenant (délai toujours "en cours").
 export function calcDelai(s: Situation): number {
   const startRaw = s.dateDepo || s.dateMessage;
   if (!startRaw) return s.delai ?? 0;
   const start = new Date(startRaw).getTime();
   if (Number.isNaN(start)) return s.delai ?? 0;
   const resolved = s.status === 'ok' || s.status === 'non_ok';
-  const end = resolved && s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now();
+  const cltMs = s.dateClt ? new Date(s.dateClt).getTime() : NaN;
+  const end = !Number.isNaN(cltMs)
+    ? cltMs
+    : resolved && s.updatedAt
+      ? new Date(s.updatedAt).getTime()
+      : Date.now();
   return workingDaysBetween(start, end);
 }
 
