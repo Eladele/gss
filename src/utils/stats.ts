@@ -152,6 +152,10 @@ export function isHorsDelai(s: Situation): boolean {
   // qu'affiche la page Situations — plutôt que sur la valeur brute importée du fichier.
   // S'applique automatiquement à toutes les données, y compris déjà importées, puisque
   // c'est un calcul en direct à partir des dates, pas une valeur figée.
+  // NON OK = issue documentée (motif/comment), pas un "retard" — jamais compté comme
+  // hors délai (ni comme dans délai — voir les fonctions statsByX qui l'excluent
+  // aussi du total ; ici on ne fait qu'éviter de le compter comme non-conforme).
+  if (s.status === 'non_ok') return false;
   return calcDelai(s) > delaiThresholdFor(s);
 }
 
@@ -187,7 +191,7 @@ export interface VilleTypeDelaiRow {
 // mono-type (ex: CST seul), il n'y a que la ligne TOTAL par ville, comme sur le
 // modèle de référence.
 export function statsDelaiDetailleParVilleEtType(situations: Situation[], equipes: Equipe[], typesInclus: string[]): VilleTypeDelaiRow[] {
-  const filtered = situations.filter((s) => typesInclus.includes(s.type));
+  const filtered = situations.filter((s) => typesInclus.includes(s.type) && s.status !== 'non_ok');
   const byVille: Record<string, Situation[]> = {};
   filtered.forEach((s) => {
     const v = villeForEquipe(s.equipe, equipes);
@@ -314,10 +318,53 @@ export interface EquipeStat {
   pctConformite: number;
 }
 
+// ─── NON OK : motivé (avec commentaire de justification) vs sans motif ──────
+// Les NON OK sont exclus des stats de délai (statsByVille/statsByType/statsBy
+// Equipe/statsDelaiDetailleParVilleEtType, voir plus haut) car ce n'est pas un
+// "retard" mais une issue documentée. On les compte ici séparément, pour
+// distinguer ceux qui ont bien un commentaire de justification ("motivé") de
+// ceux qui n'en ont pas ("sans motif" — à relancer/compléter).
+export interface NonOkRow {
+  ville: string;
+  total: number;
+  motive: number;
+  sansMotif: number;
+  pctMotive: number;
+}
+
+export function statsNonOk(situations: Situation[], equipes: Equipe[], nature?: SituationNature): NonOkRow[] {
+  const byVille: Record<string, Situation[]> = {};
+  situations
+    .filter((s) => !nature || (s.nature ?? 'installation') === nature)
+    .filter((s) => s.status === 'non_ok')
+    .forEach((s) => {
+      const v = villeForEquipe(s.equipe, equipes);
+      (byVille[v] ??= []).push(s);
+    });
+
+  return Object.entries(byVille)
+    .map(([ville, list]) => {
+      const motive = list.filter((s) => !!s.comment?.trim()).length;
+      const total = list.length;
+      return {
+        ville,
+        total,
+        motive,
+        sansMotif: total - motive,
+        pctMotive: total ? Math.round((motive / total) * 1000) / 10 : 0,
+      };
+    })
+    .sort((a, b) => b.total - a.total);
+}
+
 export function statsByEquipe(situations: Situation[], equipes: Equipe[], nature?: SituationNature): EquipeStat[] {
   const byEquipe: Record<string, Situation[]> = {};
   situations
     .filter((s) => !nature || (s.nature ?? 'installation') === nature)
+    // NON OK = issue documentée (motif/comment), pas un cas de "retard" — exclu du
+    // calcul de conformité délai (ni compliant ni non-compliant, catégorie à part,
+    // voir statsNonOk).
+    .filter((s) => s.status !== 'non_ok')
     .forEach((s) => {
       const key = s.equipe || ' Non affectée';
       (byEquipe[key] ??= []).push(s);
@@ -350,6 +397,7 @@ export function statsByVille(situations: Situation[], equipes: Equipe[], nature?
   const byVille: Record<string, Situation[]> = {};
   situations
     .filter((s) => !nature || (s.nature ?? 'installation') === nature)
+    .filter((s) => s.status !== 'non_ok') // voir commentaire dans statsByEquipe
     .forEach((s) => {
       const v = villeForEquipe(s.equipe, equipes);
       (byVille[v] ??= []).push(s);
@@ -387,6 +435,7 @@ export function statsByType(situations: Situation[], nature?: SituationNature): 
   const byType: Record<string, Situation[]> = {};
   situations
     .filter((s) => !nature || (s.nature ?? 'installation') === nature)
+    .filter((s) => s.status !== 'non_ok') // voir commentaire dans statsByEquipe
     .forEach((s) => {
       const key = MERGED_TYPES.includes(s.type) ? MERGED_TYPE_LABEL : s.type;
       (byType[key] ??= []).push(s);

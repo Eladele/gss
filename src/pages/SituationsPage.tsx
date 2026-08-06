@@ -127,7 +127,8 @@ export default function SituationsPage() {
     Poteau: (s) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)),
     Équipe: (s) => s.equipe || '',
     Délai: (s) => (s.dateDepo || s.dateMessage ? calcDelai(s) : -1),
-    Conformité: (s) => (s.dateDepo || s.dateMessage ? (isHorsDelai(s) ? 1 : 0) : -1),
+    Conformité: (s) =>
+      s.status === 'non_ok' ? 0 : s.dateDepo || s.dateMessage ? (isHorsDelai(s) ? 2 : 1) : 0,
     Réseau: (s) => scanByFgp.get(normalizeKey(s.fgp))?.rxPower ?? -999,
     'ONU Install Time': (s) => scanByFgp.get(normalizeKey(s.fgp))?.timeAddedToNms || '',
     'Port ID': (s) => scanByFgp.get(normalizeKey(s.fgp))?.portId ?? -1,
@@ -502,14 +503,16 @@ export default function SituationsPage() {
                     )}
                     {!isEnCoursView && (
                     <td className="px-3 py-3 text-xs text-center">
-                      {!(s.status === 'non_ok' && MERGED_TYPES.includes(s.type)) && (s.dateDepo || s.dateMessage) ? (
+                      {s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
                         <span
                           className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
                         >
                           {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
                         </span>
                       ) : (
-                        '—'
+                        <span className="text-slate-300" title={s.status === 'non_ok' ? 'NON OK — hors délai/dans délai non applicable' : undefined}>
+                          --
+                        </span>
                       )}
                     </td>
                     )}

@@ -13,6 +13,7 @@ import {
   countPoteaux,
   statsDelaiDetailleParVilleEtType,
   statsBacklogParAnciennete,
+  statsNonOk,
   type PeriodFilter,
 } from '@/utils/stats';
 import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
@@ -226,6 +227,8 @@ export default function StatistiquesPage() {
     [situations, fEquipe, fVille, equipes],
   );
   const backlogRows = useMemo(() => statsBacklogParAnciennete(scopedForBacklog), [scopedForBacklog]);
+
+  const nonOkDetail = useMemo(() => statsNonOk(scopedAll, equipes), [scopedAll, equipes]);
 
   const handleExport = async () => {
     await exportStatsToExcel({
@@ -728,6 +731,48 @@ export default function StatistiquesPage() {
                 <tr>
                   <td colSpan={5}>
                     <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* NON OK — motivé (commentaire de justification renseigné) vs sans motif */}
+      <Card>
+        <CardHeader>
+          <CardTitle> NON OK — motivé vs sans motif</CardTitle>
+        </CardHeader>
+        <p className="px-5 -mt-1 pb-2 text-[11px] text-slate-400">
+          Les NON OK ne sont plus comptés dans "hors délai" ci-dessus (c'est une issue documentée, pas un retard) — on les détaille ici à
+          part : combien ont un commentaire de justification renseigné, et combien n'en ont pas (à compléter).
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total NON OK', 'Motivé', 'Sans motif', '% motivé'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {nonOkDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-green-700">{r.motive}</td>
+                  <td className="px-3 py-2 text-red-700">{r.sansMotif}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctMotive}%</td>
+                </tr>
+              ))}
+              {nonOkDetail.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState icon="" text="Aucun NON OK sur cette période" />
                   </td>
                 </tr>
               )}
