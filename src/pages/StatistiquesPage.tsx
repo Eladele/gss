@@ -64,13 +64,16 @@ const WEEKDAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 export default function StatistiquesPage() {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
+  const user = useAppStore((s) => s.user)!;
 
   const [nature, setNature] = useState<NatureFilter>('installation');
   const [preset, setPreset] = useState<PeriodPreset>('tout');
   const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
   const [customTo, setCustomTo] = useState(todayStr());
   const [fEquipe, setFEquipe] = useState('');
-  const [fVille, setFVille] = useState('');
+  // Ville verrouillée sur le villeScope de l'utilisateur si défini (ex: superviseur
+  // régional) — non modifiable dans ce cas, voir le Select plus bas (disabled).
+  const [fVille, setFVille] = useState(user.villeScope ?? '');
   const [delaiDetail, setDelaiDetail] = useState<'dans' | 'hors' | null>(null);
   const [repeatsOpen, setRepeatsOpen] = useState(false);
 
@@ -296,7 +299,13 @@ export default function StatistiquesPage() {
                 </option>
               ))}
             </Select>
-            <Select value={fVille} onChange={(e) => setFVille(e.target.value)} style={{ width: 'auto' }}>
+            <Select
+              value={fVille}
+              onChange={(e) => setFVille(e.target.value)}
+              style={{ width: 'auto' }}
+              disabled={!!user.villeScope}
+              title={user.villeScope ? `Restreint à ${user.villeScope}` : undefined}
+            >
               <option value="">Toutes villes</option>
               {villes.map((v) => (
                 <option key={v} value={v}>

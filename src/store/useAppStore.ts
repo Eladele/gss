@@ -34,6 +34,7 @@ import {
   updateMateriel,
   deleteMateriel,
   fetchScans,
+  fetchScansByImportId,
   bulkInsertScans,
   clearScans,
   deleteScan,
@@ -148,11 +149,12 @@ interface AppState {
   editMateriel: (id: string, m: Partial<Materiel>) => Promise<void>;
   removeMateriel: (id: string) => Promise<void>;
   // Scans réseau (admin uniquement)
-  loadScans: () => Promise<void>;
-  importScans: (rows: Partial<ScanRecord>[], replace?: boolean) => Promise<number>;
+  loadScans: () => Promise<void>; // charge l'état ACTUEL (dernier import) uniquement
+  loadScansForImport: (importId: string) => Promise<ScanRecord[]>; // charge un import passé précis (lecture seule, ne remplace pas `scans`)
+  importScans: (rows: Partial<ScanRecord>[], importId: string) => Promise<number>;
   removeScan: (id: string) => Promise<void>;
   loadScanHistory: () => Promise<void>;
-  removeScanSnapshot: (id: string) => Promise<void>;
+  removeScanSnapshot: (id: string) => Promise<void>; // supprime aussi les scans rattachés à cet import (cascade)
   clearAllScans: () => Promise<void>;
   recordScanSnapshot: (stats: {
     total: number;
@@ -172,7 +174,7 @@ interface AppState {
       signalDegrade: number;
       signalAmeliore: number;
     } | null;
-  }) => Promise<void>;
+  }) => Promise<string | null>; // renvoie l'id du nouvel import créé
 }
 
 export const useAppStore = create<AppState>()(
@@ -643,13 +645,20 @@ export const useAppStore = create<AppState>()(
 
       // ─── Scans réseau (ONU/OLT) ─────────────────────────────────────────────────
       loadScans: async () => {
-        const scans = await fetchScans();
+        const scans = await fetchScans(); // état actuel = dernier import uniquement
         set({ scans });
       },
 
-      importScans: async (rows, replace = true) => {
-        if (replace) await clearScans();
-        const inserted = await bulkInsertScans(rows);
+      // Charge un import passé précis, SANS toucher à `scans` (l'état "actuel" affiché
+      // partout ailleurs dans l'app reste inchangé) — pour la vue "historique" de la page Scans.
+      loadScansForImport: async (importId) => {
+        return fetchScansByImportId(importId);
+      },
+
+      importScans: async (rows, importId) => {
+        // Ne vide plus la table : chaque import s'ajoute aux précédents, tagué avec
+        // son propre importId, pour conserver l'historique complet.
+        const inserted = await bulkInsertScans(rows, importId);
         await get().loadScans();
         get().addNotification('Scan réseau importé', `${inserted} lignes importées.`, 'import');
         return inserted;
@@ -666,8 +675,13 @@ export const useAppStore = create<AppState>()(
       },
 
       removeScanSnapshot: async (id) => {
+        // Supprime aussi les scans de cet import (cascade, voir supabaseService) — si
+        // c'était l'import actuel, `scans` doit être rechargé (il pointera désormais
+        // sur le nouvel import le plus récent, ou restera vide s'il n'y en a plus).
+        const wasCurrent = get().scans.some((s) => s.importId === id);
         await deleteScanImportSnapshot(id);
         set((s) => ({ scanHistory: s.scanHistory.filter((h) => h.id !== id) }));
+        if (wasCurrent) await get().loadScans();
       },
 
       clearAllScans: async () => {
@@ -676,8 +690,9 @@ export const useAppStore = create<AppState>()(
       },
 
       recordScanSnapshot: async (stats) => {
-        await insertScanImportSnapshot(stats);
+        const newId = await insertScanImportSnapshot(stats);
         await get().loadScanHistory();
+        return newId;
       },
     }),
     {

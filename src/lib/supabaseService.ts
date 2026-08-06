@@ -896,21 +896,36 @@ function mapScan(row: any): ScanRecord {
     remarque: row.remarque ?? '',
     changeType: row.change_type === 'new' ? 'new' : row.change_type === 'existing' ? 'existing' : undefined,
     importedAt: row.imported_at,
+    importId: row.import_id ?? undefined,
   };
 }
 
 // ─── SCANS RÉSEAU (ONU/OLT) ────────────────────────────────────────────────────
 
 // Supabase limite les SELECT à 1000 lignes par requête : on paginate.
-export async function fetchScans(): Promise<ScanRecord[]> {
+// Récupère l'id du dernier import (le plus récent scan_import_history) — sert
+// de référence pour "l'état actuel" du réseau (par défaut, dans toute l'app).
+export async function fetchLatestImportId(): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('scan_import_history')
+    .select('id')
+    .order('imported_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error('fetchLatestImportId:', error);
+    return null;
+  }
+  return data?.id ?? null;
+}
+
+async function fetchScansPaginated(filterImportId?: string | null): Promise<ScanRecord[]> {
   const all: ScanRecord[] = [];
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('scan_results')
-      .select('*')
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
+    let query = supabase.from('scan_results').select('*').order('id', { ascending: true }).range(from, from + PAGE - 1);
+    if (filterImportId) query = query.eq('import_id', filterImportId);
+    const { data, error } = await query;
     if (error) {
       console.error('fetchScans:', error);
       break;
@@ -922,8 +937,25 @@ export async function fetchScans(): Promise<ScanRecord[]> {
   return all;
 }
 
-// Insertion en lots (le fichier source peut contenir 10 000+ lignes)
-export async function bulkInsertScans(rows: Partial<ScanRecord>[]): Promise<number> {
+// Charge les scans de "l'état actuel" (dernier import uniquement) — c'est ce
+// qu'utilisent les cartes/filtres de la page Scans et la correspondance
+// FGP ↔ scan sur la page Situations. Ne renvoie rien si aucun import n'existe.
+export async function fetchScans(): Promise<ScanRecord[]> {
+  const latestId = await fetchLatestImportId();
+  if (!latestId) return [];
+  return fetchScansPaginated(latestId);
+}
+
+// Charge les scans d'un import précis (n'importe quelle date passée) — pour la
+// fonctionnalité "voir un import passé" de la page Scans.
+export async function fetchScansByImportId(importId: string): Promise<ScanRecord[]> {
+  return fetchScansPaginated(importId);
+}
+
+// Insertion en lots (le fichier source peut contenir 10 000+ lignes), taguée
+// avec l'import auquel ces lignes appartiennent — ne remplace plus rien,
+// s'ajoute aux imports précédents pour conserver l'historique complet.
+export async function bulkInsertScans(rows: Partial<ScanRecord>[], importId: string): Promise<number> {
   const CHUNK = 500;
   let inserted = 0;
   let lastError: string | null = null;
@@ -943,6 +975,7 @@ export async function bulkInsertScans(rows: Partial<ScanRecord>[]): Promise<numb
       ranging: r.ranging ?? null,
       remarque: r.remarque ?? null,
       change_type: r.changeType ?? null,
+      import_id: importId,
     }));
     const { error, count } = await supabase.from('scan_results').insert(chunk, { count: 'exact' });
     if (error) {
@@ -960,9 +993,20 @@ export async function bulkInsertScans(rows: Partial<ScanRecord>[]): Promise<numb
   return inserted;
 }
 
+// Vide TOUT l'historique des scans (tous les imports confondus) — action admin
+// destructrice, distincte de la suppression d'un seul import (voir
+// deleteScansByImportId ci-dessous).
 export async function clearScans(): Promise<void> {
   const { error } = await supabase.from('scan_results').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   if (error) console.error('clearScans:', error);
+}
+
+// Supprime uniquement les lignes d'un import précis — utilisé quand on retire
+// une ligne de l'historique (scan_import_history), pour que les données brutes
+// correspondantes disparaissent aussi, sans toucher aux autres imports.
+export async function deleteScansByImportId(importId: string): Promise<void> {
+  const { error } = await supabase.from('scan_results').delete().eq('import_id', importId);
+  if (error) console.error('deleteScansByImportId:', error);
 }
 
 export async function deleteScan(id: string): Promise<void> {
@@ -1048,7 +1092,7 @@ export async function insertScanImportSnapshot(stats: {
     signalDegrade: number;
     signalAmeliore: number;
   } | null;
-}): Promise<void> {
+}): Promise<string | null> {
   const denom = stats.total - (stats.resilies ?? 0);
   const pctScanne = denom ? Math.round((stats.scanne / denom) * 1000) / 10 : 0;
 
@@ -1074,17 +1118,27 @@ export async function insertScanImportSnapshot(stats: {
   };
 
   // 1ère tentative : payload complet (avec les colonnes diff_*)
-  const { error } = await supabase.from('scan_import_history').insert(fullPayload);
+  const { data, error } = await supabase.from('scan_import_history').insert(fullPayload).select('id').single();
   if (error) {
     // Colonnes diff_* probablement absentes côté base (migration pas encore exécutée) —
     // on réessaie avec les colonnes de base uniquement, sans bloquer l'import.
     console.warn('insertScanImportSnapshot: colonnes diff_* indisponibles, repli sur le payload de base', error.message);
-    const { error: error2 } = await supabase.from('scan_import_history').insert(basePayload);
-    if (error2) console.error('insertScanImportSnapshot (repli):', error2);
+    const { data: data2, error: error2 } = await supabase.from('scan_import_history').insert(basePayload).select('id').single();
+    if (error2) {
+      console.error('insertScanImportSnapshot (repli):', error2);
+      return null;
+    }
+    return data2?.id ?? null;
   }
+  return data?.id ?? null;
 }
 
 export async function deleteScanImportSnapshot(id: string): Promise<void> {
+  // Supprime aussi les lignes de scan_results rattachées à cet import — la
+  // contrainte ON DELETE CASCADE de la migration le fait déjà normalement,
+  // mais on le fait explicitement ici pour rester robuste même si la
+  // contrainte n'a pas encore été appliquée côté base.
+  await deleteScansByImportId(id);
   const { error } = await supabase.from('scan_import_history').delete().eq('id', id);
   if (error) console.error('deleteScanImportSnapshot:', error);
 }
@@ -1095,7 +1149,7 @@ export async function loginWithCredentials(name: string, password: string): Prom
   // Lookup profile by name + password (simple approach, no Supabase Auth)
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, name, role, team_id, password_hash')
+    .select('id, name, role, team_id, password_hash, ville_scope')
     .ilike('name', name.trim())
     .single();
   if (error || !data) return null;
@@ -1114,6 +1168,8 @@ export async function loginWithCredentials(name: string, password: string): Prom
     admin: '#6A1B9A',
     superviseur: '#1565C0',
     chef: '#2E7D32',
+    rh: '#C2185B',
+    consultation: '#546E7A',
   };
   return {
     id: data.id,
@@ -1123,5 +1179,6 @@ export async function loginWithCredentials(name: string, password: string): Prom
     teamName: teamName,
     avatar: data.name[0].toUpperCase(),
     color: COLORS[data.role] ?? '#546E7A',
+    villeScope: data.ville_scope ?? undefined,
   };
 }

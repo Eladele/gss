@@ -136,6 +136,23 @@ const NAV: Record<Role, NavItem[]> = {
     RH_GROUP,
     { id: 'notifications', label: 'Notifications' },
   ],
+  // Comptable / RH (ex: Betoul) — uniquement Employés et Prêts, rien d'opérationnel
+  // (pas de Situations, Réseau, Déploiement).
+  rh: [
+    { id: 'employes', label: 'Employés' },
+    { id: 'prets', label: 'Prêts' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'profil', label: 'Profil' },
+  ],
+  // Partenaire externe en lecture seule (ex: Moov Mauritel) — Dashboard,
+  // Statistiques et Situations, mais sans aucun bouton d'action (voir le garde
+  // "lecture seule" dans SituationsPage.tsx) — pas de RH, pas de Réseau.
+  consultation: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'statistiques', label: 'Statistiques' },
+    { id: 'situations', label: 'Situations' },
+    { id: 'profil', label: 'Profil' },
+  ],
 };
 
 const PAGE_TITLES: Record<Page, string> = {
@@ -186,13 +203,25 @@ const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
   'rh-group': Briefcase,
 };
 
+// Liste à plat des pages autorisées pour un rôle (déplie les groupes) — sert au
+// garde-fou de rendu (pas seulement caché dans le menu) et au calcul de la
+// page par défaut à l'ouverture de session.
+function allowedPages(role: Role): Page[] {
+  const pages: Page[] = [];
+  NAV[role].forEach((item) => {
+    if (isGroup(item)) pages.push(...item.children.map((c) => c.id));
+    else pages.push(item.id);
+  });
+  return pages;
+}
+
 export default function AppLayout() {
   const user = useAppStore((s) => s.user)!;
   const notifications = useAppStore((s) => s.notifications);
   const logout = useAppStore((s) => s.logout);
   const unread = notifications.filter((n) => !n.read).length;
   const navItems = NAV[user.role];
-  const defaultPage = user.role === 'chef' ? 'chef-situations' : 'dashboard';
+  const defaultPage = allowedPages(user.role)[0] ?? 'profil';
   const [page, setPage] = useState<Page>(defaultPage);
   const [menuOpen, setMenuOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -455,7 +484,9 @@ export default function AppLayout() {
         </aside>
 
         {/* Content */}
-        <main className="flex-1 p-4 md:p-6 pb-24 md:pb-6 min-w-0">{PageMap[page]}</main>
+        <main className="flex-1 p-4 md:p-6 pb-24 md:pb-6 min-w-0">
+          {allowedPages(user.role).includes(page) ? PageMap[page] : PageMap[defaultPage]}
+        </main>
       </div>
 
       {/* Mobile bottom nav */}

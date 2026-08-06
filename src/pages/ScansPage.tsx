@@ -185,7 +185,6 @@ export default function ScansPage() {
   const loadScanHistory = useAppStore((s) => s.loadScanHistory);
   const recordScanSnapshot = useAppStore((s) => s.recordScanSnapshot);
   const removeScanSnapshot = useAppStore((s) => s.removeScanSnapshot);
-  const clearAllScans = useAppStore((s) => s.clearAllScans);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
@@ -278,16 +277,15 @@ export default function ScansPage() {
       const computedDiff = computeDiffAndTag(previousScans, rows);
       setComparedTotals({ previous: previousScans.length, current: rows.length });
 
-      const count = await importScans(rows, true);
-      setDiff(computedDiff);
-
       // Snapshot pour le suivi semaine par semaine (% scanné hors résiliés, signal, + diff)
+      // — créé AVANT l'insertion des scans, pour obtenir l'id d'import à leur associer
+      // (conserve l'historique complet au lieu de remplacer la table à chaque import).
       const newExcellent = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'excellent').length;
       const newMoyen = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'moyen').length;
       const newDegrade = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'degrade').length;
       const newScanne = rows.filter((r) => r.result === 'SCANNE').length;
       const newResilies = rows.filter(isResilie).length;
-      await recordScanSnapshot({
+      const newImportId = await recordScanSnapshot({
         total: rows.length,
         scanne: newScanne,
         nonScanne: rows.length - newScanne,
@@ -297,8 +295,12 @@ export default function ScansPage() {
         resilies: newResilies,
         diff: computedDiff,
       });
+      if (!newImportId) throw new Error("Échec de la création de l'entrée d'historique — import annulé");
 
-      showToast(`${count} lignes importées (table remplacée)`, 'success');
+      const count = await importScans(rows, newImportId);
+      setDiff(computedDiff);
+
+      showToast(`${count} lignes importées (historique conservé)`, 'success');
     } catch (err: any) {
       // Échec réel de l'import (ex: colonne manquante côté base, ou fichier illisible) — on
       // l'affiche au lieu de laisser croire à un succès alors que la table peut être vide.
@@ -439,16 +441,12 @@ export default function ScansPage() {
                     <td className="px-3 py-2 text-right">
                       <button
                         onClick={() => {
-                          // Seule la ligne la PLUS RÉCENTE correspond encore à des données
-                          // réelles dans `scans` (chaque import remplace entièrement la
-                          // table — les anciens imports n'ont donc déjà plus rien à vider).
-                          const isLatest = scanHistory[0]?.id === h.id;
-                          const message = isLatest
-                            ? "Supprimer cette ligne de l'historique ?\n\nATTENTION : c'est l'import le plus récent — ça va AUSSI vider les données réseau actuelles (table scans), puisqu'elles correspondent à cet import. L'app affichera 0 ONU scanné tant qu'un nouveau fichier n'est pas réimporté."
-                            : "Supprimer cette ligne de l'historique ?\n\nÇa retire seulement cette ligne du tableau ci-dessus. Les données réelles de cet ancien import n'existent déjà plus (remplacées par un import plus récent) — rien d'autre à supprimer.";
-                          if (confirm(message)) {
+                          if (
+                            confirm(
+                              "Supprimer cet import ?\n\nÇa retire la ligne d'historique ET les données de scan de cet import précis (elles sont conservées séparément par import maintenant). Les autres imports ne sont pas affectés.",
+                            )
+                          ) {
                             removeScanSnapshot(h.id);
-                            if (isLatest) clearAllScans();
                           }
                         }}
                         className="text-red-600 hover:underline text-xs font-semibold"

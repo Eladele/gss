@@ -33,6 +33,10 @@ export default function SituationsPage() {
   const { showToast } = useToast();
 
   const isAdmin = user.role === 'admin' || user.role === 'superviseur';
+  // Lecture seule pour le rôle "consultation" (partenaire externe, ex: Moov Mauritel) —
+  // aucune action possible (OK, NOK, Modifier, Supprimer, Créer un FGP), même si la
+  // page reste visible.
+  const canAct = user.role !== 'consultation';
 
   const [search, setSearch] = useState('');
   const [fType, setFType] = useState('');
@@ -136,9 +140,20 @@ export default function SituationsPage() {
     Statut: (s) => s.status || '',
   };
 
+  // Filtre ville STRICT — si l'utilisateur a un villeScope (ex: superviseur
+  // régional cantonné à une seule ville), il ne voit QUE les situations dont
+  // l'équipe est rattachée à cette ville, quoi qu'il configure dans les filtres
+  // ci-dessous. Appliqué en premier, avant tout filtre UI.
+  const villeScope = user.villeScope;
+  const equipeVille = (equipeName?: string) => {
+    if (!equipeName) return undefined;
+    return equipes.find((e) => e.name.toLowerCase() === equipeName.toLowerCase())?.ville;
+  };
+
   const filtered = useMemo(
     () =>
       situations.filter((s) => {
+        if (villeScope && equipeVille(s.equipe) !== villeScope) return false;
         if (search && !s.fgp.includes(search) && !s.zone.toLowerCase().includes(search.toLowerCase())) return false;
         if (fType === '__installation__' && !MERGED_TYPES.includes(s.type)) return false;
         else if (fType === '__derangement__' && s.type !== 'DRG') return false;
@@ -153,7 +168,8 @@ export default function SituationsPage() {
         }
         return true;
       }),
-    [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly, villeScope, equipes],
   );
 
   // Colonnes réduites tant qu'on est dans la vue "en cours" par défaut (sans filtre
@@ -309,7 +325,7 @@ export default function SituationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {isAdmin && (
+          {isAdmin && canAct && (
             <Button variant="outline" icon="" onClick={() => setFgpOpen(true)}>
               Créer un FGP
             </Button>
@@ -548,6 +564,9 @@ export default function SituationsPage() {
                       <StatusBadge status={s.status} />
                     </td>
                     <td className="px-3 py-3">
+                      {!canAct ? (
+                        <span className="text-xs text-slate-300 italic">Lecture seule</span>
+                      ) : (
                       <div className="flex gap-2 flex-wrap items-center">
                         {s.status !== 'ok' && (
                           <button
@@ -586,6 +605,7 @@ export default function SituationsPage() {
                           </button>
                         )}
                       </div>
+                      )}
                     </td>
                   </tr>
                   );

@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'superviseur' | 'chef';
+export type Role = 'admin' | 'superviseur' | 'chef' | 'rh' | 'consultation';
 export type SituationStatus = 'pending' | 'in_progress' | 'ok' | 'non_ok' | 'urgent';
 export type SituationType = 'CPL' | 'DRG' | 'TRL' | 'CST' | 'ANS' | 'CLS' | 'CMI' | 'RLR';
 // Nature d'une situation : installation (mise en service) ou dérangement (SAV / panne)
@@ -16,6 +16,9 @@ export interface User {
   teamName: string | null;
   avatar: string;
   color: string;
+  // Restreint STRICTEMENT cet utilisateur à une seule ville (ex: superviseur
+  // régional) — non défini = pas de restriction géographique.
+  villeScope?: Ville;
 }
 
 export interface Equipe {
@@ -210,6 +213,7 @@ export interface ScanRecord {
   remarque?: string; // Suspendu, Résilié...
   changeType?: 'new' | 'existing'; // par rapport à l'import précédent (calculé et persisté à l'import)
   importedAt?: string;
+  importId?: string; // rattache cette ligne à son import (scan_import_history.id)
 }
 
 export type TypeNoeudReseau = 'olt' | 'closure_mpo' | 'x_box' | 'closure_dis' | 'hub_box' | 'sp' | 'sub_box' | 'end_box';
