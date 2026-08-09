@@ -163,8 +163,13 @@ export default function ImportExcelPage() {
 
           const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
           const dateMessage = useDateMessage ? parseDate(row[colDateMessage]) : '';
-          // Colonne DATE DEPOT ignorée quand le fichier a une colonne DATE MESSAGE dédiée
-          const dateDepo = useDateMessage ? '' : parseDate(colDate >= 0 ? row[colDate] : null);
+          // Les deux colonnes existent souvent en même temps dans les vrais fichiers GSS,
+          // avec des dates RÉELLEMENT différentes (vérifié : jusqu'à 69% des lignes sur
+          // certains fichiers) — on lit donc chacune indépendamment plutôt que de recopier
+          // dateMessage dans dateDepo. dateDepo ne retombe sur dateMessage qu'en dernier
+          // recours, si le fichier n'a vraiment aucune colonne de date de dépôt.
+          const dateDepoFromCol = parseDate(colDate >= 0 ? row[colDate] : null);
+          const dateDepo = dateDepoFromCol || dateMessage;
 
           // ── Statut : si le fichier a une colonne STATUT/STATUS explicite, on la respecte
           // (normalisée : OK/NON OK/NO OK/NOK/ENCOURS quelle que soit la casse), sinon on

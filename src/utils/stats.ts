@@ -115,7 +115,12 @@ function workingDaysBetween(startMs: number, endMs: number): number {
 //      clôture dans l'app, utilisée seulement quand aucune date terrain n'existe.
 //   3. sinon, maintenant (délai toujours "en cours").
 export function calcDelai(s: Situation): number {
-  const startRaw = s.dateDepo || s.dateMessage;
+  // Point de départ : dateMessage en priorité — vérifié contre le champ "delait"
+  // fourni par Huawei dans les fichiers sources (93% de correspondance exacte
+  // en partant de dateMessage, contre 69% en partant de dateDepo) : c'est
+  // dateMessage que Huawei utilise pour calculer son propre délai officiel.
+  // dateDepo ne sert de repli que si dateMessage est vraiment absent.
+  const startRaw = s.dateMessage || s.dateDepo;
   if (!startRaw) return s.delai ?? 0;
   const start = new Date(startRaw).getTime();
   if (Number.isNaN(start)) return s.delai ?? 0;
@@ -191,7 +196,11 @@ export interface VilleTypeDelaiRow {
 // mono-type (ex: CST seul), il n'y a que la ligne TOTAL par ville, comme sur le
 // modèle de référence.
 export function statsDelaiDetailleParVilleEtType(situations: Situation[], equipes: Equipe[], typesInclus: string[]): VilleTypeDelaiRow[] {
-  const filtered = situations.filter((s) => typesInclus.includes(s.type) && s.status !== 'non_ok');
+  // Uniquement les situations résolues avec succès (OK) — exclut aussi bien les
+  // NON OK (issue documentée, pas un retard) que les en attente/en cours (pas
+  // encore résolues) : cette table mesure la performance sur du déjà traité,
+  // pas le backlog en cours.
+  const filtered = situations.filter((s) => typesInclus.includes(s.type) && s.status === 'ok');
   const byVille: Record<string, Situation[]> = {};
   filtered.forEach((s) => {
     const v = villeForEquipe(s.equipe, equipes);
@@ -517,6 +526,13 @@ export async function exportStatsToExcel(opts: {
   byType: TypeStat[];
   repeats: ClientRepeat[];
   situations?: Situation[];
+  // Nouvelles feuilles — mêmes données que ce qu'affiche la page Statistiques
+  // (voir StatistiquesPage.tsx), pour que l'export ne se désynchronise plus.
+  installDetail?: VilleTypeDelaiRow[];
+  cstDetail?: VilleTypeDelaiRow[];
+  drgVilleDetail?: VilleStat[];
+  nonOkDetail?: NonOkRow[];
+  backlogRows?: BacklogRow[];
 }) {
   const workbook = new ExcelJS.Workbook();
 
@@ -557,27 +573,119 @@ export async function exportStatsToExcel(opts: {
     })),
   );
 
-  // Liste détaillée des FGP concernés — mêmes colonnes que le fichier d'import original
-  if (opts.situations) {
+  // Détail Installation par ville et type (CLS/RLR/TRL/CMI), avec la tranche
+  // Moins24H — même contenu que le tableau de la page.
+  if (opts.installDetail) {
     addSheetFromObjects(
       workbook,
-      'Détail FGP',
-      opts.situations.map((s) => ({
-        'DETE MESSAGE': s.dateMessage || '',
-        TYPE: s.type,
-        FGP: s.fgp,
-        'Service Destination': s.serviceDestination || '',
-        ZONE: s.zone,
-        'DETE DEPOT': s.dateDepo || '',
-        'DATE MISE EN SERVICE': s.dateClt || '',
-        Actions: s.status === 'ok' ? 'ok' : s.status === 'non_ok' ? 'no ok' : s.status,
-        status: s.status === 'ok' ? 'ok' : s.status === 'non_ok' ? 'no ok' : s.status,
-        motif: s.motif || 'sans motif',
-        équipe: s.equipe,
-        NbreJourDélaisInst: s.delai,
-        ConformitéDélais: s.conformite === 'HorsDelais' ? 'HorsDélais' : s.conformite === 'TLID' ? 'TLID' : '',
+      'Installation détail',
+      opts.installDetail.map((r) => ({
+        Ville: r.type === 'TOTAL' ? r.ville : '',
+        Type: r.type,
+        Total: r.total,
+        Moins24H: r.moins24h,
+        'Dans délai': r.dansDelai,
+        'Hors délai': r.horsDelai,
+        '% TLID': r.pctDansDelai,
       })),
     );
+  }
+
+  // Détail CST par ville, avec la tranche Moins24H
+  if (opts.cstDetail) {
+    addSheetFromObjects(
+      workbook,
+      'CST détail',
+      opts.cstDetail.map((r) => ({
+        Ville: r.ville,
+        Total: r.total,
+        Moins24H: r.moins24h,
+        'Dans délai': r.dansDelai,
+        'Hors délai': r.horsDelai,
+        '% TLID': r.pctDansDelai,
+      })),
+    );
+  }
+
+  // Relevés DRG par ville (binaire — DRG n'a pas de tranche Moins24H, son seuil
+  // est déjà 24h, voir stats.ts)
+  if (opts.drgVilleDetail) {
+    addSheetFromObjects(
+      workbook,
+      'DRG par ville',
+      opts.drgVilleDetail.map((r) => ({
+        Ville: r.ville,
+        Total: r.total,
+        'Dans délai': r.dansDelai,
+        'Hors délai': r.horsDelai,
+        '% TLID': r.pctConformite,
+      })),
+    );
+  }
+
+  // NON OK — motivé (commentaire renseigné) vs sans motif, par ville
+  if (opts.nonOkDetail) {
+    addSheetFromObjects(
+      workbook,
+      'NON OK',
+      opts.nonOkDetail.map((r) => ({
+        Ville: r.ville,
+        'Total NON OK': r.total,
+        Motivé: r.motive,
+        'Sans motif': r.sansMotif,
+        '% motivé': r.pctMotive,
+      })),
+    );
+  }
+
+  // Backlog du jour — installations et DRG en attente, par ancienneté
+  if (opts.backlogRows) {
+    addSheetFromObjects(
+      workbook,
+      'Backlog',
+      opts.backlogRows.map((r) => ({
+        Nature: r.nature === 'installation' ? 'Installation' : 'DRG',
+        "Résolu aujourd'hui": r.resoluAujourdhui,
+        'Moins de 2J': r.moins2j,
+        'Moins de 7J': r.moins7j,
+        'Plus de 7J': r.plus7j,
+        'Somme instance': r.sommeInstance,
+        'Somme totale': r.sommeTotal,
+        '% réalisation': r.pctRealisation,
+      })),
+    );
+  }
+
+  // Liste détaillée des FGP — séparée en 2 feuilles (Installation / DRG), mêmes
+  // colonnes que le fichier d'import original. NbreJourDélaisInst et
+  // ConformitéDélais sont calculés EN DIRECT (calcDelai/isHorsDelai) plutôt que
+  // de relire les champs bruts s.delai/s.conformite — ces derniers ne sont
+  // presque jamais renseignés à l'import, ce qui faisait afficher 0/vide sur
+  // toutes les lignes. Un NON OK affiche "--" (pas applicable), cohérent avec
+  // le badge de la page Situations.
+  if (opts.situations) {
+    const toRow = (s: Situation) => ({
+      'DETE MESSAGE': s.dateMessage || '',
+      TYPE: s.type,
+      FGP: s.fgp,
+      'Service Destination': s.serviceDestination || '',
+      ZONE: s.zone,
+      'DETE DEPOT': s.dateDepo || '',
+      'DATE MISE EN SERVICE': s.dateClt || '',
+      Actions: s.status === 'ok' ? 'ok' : s.status === 'non_ok' ? 'no ok' : s.status,
+      status: s.status === 'ok' ? 'ok' : s.status === 'non_ok' ? 'no ok' : s.status,
+      motif: s.motif || 'sans motif',
+      équipe: s.equipe,
+      poteau: s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif),
+      NbreJourDélaisInst: s.dateDepo || s.dateMessage ? calcDelai(s) : '',
+      ConformitéDélais: s.status === 'non_ok' ? '--' : s.dateDepo || s.dateMessage ? (isHorsDelai(s) ? 'HorsDélais' : 'TLID') : '',
+    });
+
+    const installationRows = opts.situations.filter((s) => s.type !== 'DRG').map(toRow);
+    const drgRows = opts.situations.filter((s) => s.type === 'DRG').map(toRow);
+
+    if (installationRows.length > 0) addSheetFromObjects(workbook, 'Détail Installation', installationRows);
+    if (drgRows.length > 0) addSheetFromObjects(workbook, 'Détail DRG', drgRows);
   }
 
   addSheetFromObjects(

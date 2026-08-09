@@ -40,6 +40,10 @@ function firstOfMonthStr() {
 
 type PeriodPreset = 'tout' | 'jour' | 'semaine' | 'mois' | 'custom';
 
+const MOIS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+// 2025 à l'année en cours + 1 — large marge sans devoir maintenir la liste à la main.
+const ANNEES_SELECT = Array.from({ length: new Date().getFullYear() - 2025 + 2 }, (_, i) => 2025 + i);
+
 function presetToRange(preset: PeriodPreset): PeriodFilter {
   const now = new Date();
   if (preset === 'tout') return {};
@@ -68,7 +72,7 @@ export default function StatistiquesPage() {
   const user = useAppStore((s) => s.user)!;
 
   const [nature, setNature] = useState<NatureFilter>('installation');
-  const [preset, setPreset] = useState<PeriodPreset>('tout');
+  const [preset, setPreset] = useState<PeriodPreset>('mois'); // affiche le mois en cours par défaut
   const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
   const [customTo, setCustomTo] = useState(todayStr());
   const [fEquipe, setFEquipe] = useState('');
@@ -86,10 +90,11 @@ export default function StatistiquesPage() {
     () =>
       situations.filter((s) => {
         if (!matchesNature(s, nature)) return false;
-        // Fichiers "installation" (DATE MESSAGE) laissent dateDepo vide par design —
-        // on filtre sur la date pertinente disponible (dateDepo, sinon dateMessage),
-        // sinon toutes ces situations étaient exclues de la période choisie.
-        if (!inPeriod(s.dateDepo || s.dateMessage || '', period)) return false;
+        // DATE MISE EN SERVICE en priorité — on filtre par le mois où le travail a
+        // réellement été terminé, pas par le mois où la demande a été reçue. Une
+        // situation encore en attente (pas de DATE MISE EN SERVICE) retombe sur
+        // DATE MESSAGE, sinon elle disparaîtrait de tous les filtres par période.
+        if (!inPeriod(s.dateClt || s.dateMessage || s.dateDepo || '', period)) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fVille) {
           const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
@@ -104,7 +109,7 @@ export default function StatistiquesPage() {
   const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
   const byType = useMemo(() => statsByType(scoped), [scoped]);
   const repeats = useMemo(
-    () => repeatDerangementByClient(situations.filter((s) => inPeriod(s.dateDepo || s.dateMessage || '', period))),
+    () => repeatDerangementByClient(situations.filter((s) => inPeriod(s.dateClt || s.dateMessage || s.dateDepo || '', period))),
     [situations, period],
   );
 
@@ -119,10 +124,10 @@ export default function StatistiquesPage() {
   // "Aujourd'hui" inclut aussi tout ce qui est encore en cours (peu importe sa
   // date de dépôt) — pas seulement les nouvelles situations du jour.
   const totalAujourdhui = scoped.filter(
-    (s) => (s.dateDepo || s.dateMessage) === today || s.status === 'pending' || s.status === 'in_progress',
+    (s) => (s.dateClt || s.dateMessage || s.dateDepo) === today || s.status === 'pending' || s.status === 'in_progress',
   ).length;
   const weekStart = presetToRange('semaine').from!;
-  const totalSemaine = scoped.filter((s) => (s.dateDepo || s.dateMessage || '') >= weekStart).length;
+  const totalSemaine = scoped.filter((s) => (s.dateClt || s.dateMessage || s.dateDepo || '') >= weekStart).length;
   const villesActives = new Set(
     scoped.map((s) => {
       const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
@@ -149,7 +154,7 @@ export default function StatistiquesPage() {
     situations
       .filter((s) => matchesNature(s, nature))
       .forEach((s) => {
-        const d = s.dateDepo || s.dateMessage;
+        const d = s.dateClt || s.dateMessage || s.dateDepo;
         if (d) byDay[d] = (byDay[d] ?? 0) + 1;
       });
     return days.map((d) => ({ label: d.slice(8, 10) + '/' + d.slice(5, 7), value: byDay[d] ?? 0 }));
@@ -159,7 +164,7 @@ export default function StatistiquesPage() {
   const weekdayData = useMemo(() => {
     const counts = [0, 0, 0, 0, 0, 0, 0];
     scoped.forEach((s) => {
-      const d = s.dateDepo || s.dateMessage;
+      const d = s.dateClt || s.dateMessage || s.dateDepo;
       if (d) counts[new Date(d).getDay()]++;
     });
     return WEEKDAYS.map((label, i) => ({ label, value: counts[i] }));
@@ -192,7 +197,7 @@ export default function StatistiquesPage() {
   const scopedAll = useMemo(
     () =>
       situations.filter((s) => {
-        if (!inPeriod(s.dateDepo || s.dateMessage || '', period)) return false;
+        if (!inPeriod(s.dateClt || s.dateMessage || s.dateDepo || '', period)) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
         if (fVille) {
           const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
@@ -238,6 +243,11 @@ export default function StatistiquesPage() {
       byType,
       repeats,
       situations: scoped,
+      installDetail,
+      cstDetail,
+      drgVilleDetail,
+      nonOkDetail,
+      backlogRows,
     });
   };
 
@@ -275,23 +285,44 @@ export default function StatistiquesPage() {
               <option value="jour">Aujourd'hui</option>
               <option value="semaine">Cette semaine</option>
               <option value="mois">Ce mois</option>
-              <option value="custom">Période personnalisée</option>
+              <option value="custom">Par mois</option>
             </Select>
             {preset === 'custom' && (
               <>
-                <input
-                  type="date"
-                  value={customFrom}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                />
-                <span className="text-slate-400 text-sm">→</span>
-                <input
-                  type="date"
-                  value={customTo}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  className="border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                />
+                <Select
+                  value={String(Number(customFrom.slice(5, 7)))}
+                  onChange={(e) => {
+                    const year = customFrom.slice(0, 4);
+                    const month = e.target.value.padStart(2, '0');
+                    const lastDay = new Date(Number(year), Number(month), 0).getDate();
+                    setCustomFrom(`${year}-${month}-01`);
+                    setCustomTo(`${year}-${month}-${String(lastDay).padStart(2, '0')}`);
+                  }}
+                  style={{ width: 'auto' }}
+                >
+                  {MOIS_FR.map((label, i) => (
+                    <option key={i} value={i + 1}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={customFrom.slice(0, 4)}
+                  onChange={(e) => {
+                    const year = e.target.value;
+                    const month = customFrom.slice(5, 7);
+                    const lastDay = new Date(Number(year), Number(month), 0).getDate();
+                    setCustomFrom(`${year}-${month}-01`);
+                    setCustomTo(`${year}-${month}-${String(lastDay).padStart(2, '0')}`);
+                  }}
+                  style={{ width: 'auto' }}
+                >
+                  {ANNEES_SELECT.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </Select>
               </>
             )}
             <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} style={{ width: 'auto' }}>
