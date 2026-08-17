@@ -131,6 +131,7 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
       .toUpperCase(),
   );
   const col = (keywords: string[]) => header.findIndex((h) => keywords.some((k) => h.includes(k)));
+<<<<<<< HEAD
   // Colonne exacte uniquement (évite qu'un en-tête "SCAN" fasse aussi matcher
   // "DATE SCAN" / "SCAN TIME" via un simple .includes()).
   const colExact = (name: string) => header.findIndex((h) => h === name);
@@ -139,6 +140,11 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
   // Formats connus pour la colonne résultat : "RESULT"/"RESULTA" (contient le mot),
   // ou un en-tête exactement "SCAN" (observé dans certains exports GSS).
   const cResult = colExact('SCAN') >= 0 ? colExact('SCAN') : col(['RESULT']);
+=======
+  const cZone = col(['ZONE']);
+  const cStt = col(['STT']);
+  const cResult = col(['RESULT']);
+>>>>>>> 6148dd0842835c664a9635bcc0c282b8165a8062
   const cScanTime = col(['SCAN TIME', 'DATE SCAN']);
   const cPort = col(['PORT ID']);
   const cOnuId = col(['ONU ID']);
@@ -148,7 +154,11 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
   const cAdded = col(['TIME ADDED']);
   const cRx = col(['RX OPTICAL', 'RX POWER']);
   const cRanging = col(['RANGING']);
+<<<<<<< HEAD
   const cRemarque = col(['REMARQUE', 'ETAT', 'COMMENTAIRE']);
+=======
+  const cRemarque = col(['REMARQUE', 'ETAT']);
+>>>>>>> 6148dd0842835c664a9635bcc0c282b8165a8062
 
   const toIso = (v: unknown) => (v instanceof Date ? v.toISOString() : v ? String(v) : undefined);
   const toNum = (v: unknown) => (v === null || v === undefined || v === '' || v === '--' ? null : isNaN(Number(v)) ? null : Number(v));

@@ -131,6 +131,7 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
     return null;
   }
 
+<<<<<<< HEAD
   // Create profile for the leader via Edge Function (service_role) —
   // the client no longer inserts into `profiles` directly, and each leader
   // gets a random temporary password instead of the old fixed 'chef2026'.
@@ -143,6 +144,18 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
     } else if (fnData?.tempPassword) {
       // eslint-disable-next-line no-alert
       alert(`Compte créé pour ${equipe.leader}.\nMot de passe temporaire : ${fnData.tempPassword}\n(à communiquer une seule fois — non récupérable ensuite)`);
+=======
+  // Create profile for the leader
+  if (equipe.leader) {
+    const { error: profileError } = await supabase.from('profiles').insert({
+      name: equipe.leader,
+      role: 'chef',
+      team_id: newTeam.id,
+      password_hash: 'chef2026', // default password
+    });
+    if (profileError) {
+      console.error('createEquipe profile error:', profileError);
+>>>>>>> 6148dd0842835c664a9635bcc0c282b8165a8062
     }
   }
 
@@ -1148,6 +1161,7 @@ export async function deleteScanImportSnapshot(id: string): Promise<void> {
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 export async function loginWithCredentials(name: string, password: string): Promise<User | null> {
+<<<<<<< HEAD
   // Auth passe désormais par une Edge Function (service_role) — le mot de
   // passe n'est plus jamais lu ni comparé côté client / clé anon.
   const { data, error } = await supabase.functions.invoke('login', {
@@ -1155,4 +1169,41 @@ export async function loginWithCredentials(name: string, password: string): Prom
   });
   if (error || !data?.user) return null;
   return data.user as User;
+=======
+  // Lookup profile by name + password (simple approach, no Supabase Auth)
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name, role, team_id, password_hash, ville_scope')
+    .ilike('name', name.trim())
+    .single();
+  if (error || !data) return null;
+
+  // Simple password check (stored as plain text for now; upgrade to bcrypt via Edge Function later)
+  if (data.password_hash && data.password_hash !== password) return null;
+
+  // Map to app User
+  let teamName: string | null = null;
+  if (data.team_id) {
+    const { data: team } = await supabase.from('teams').select('name').eq('id', data.team_id).single();
+    teamName = team?.name ?? null;
+  }
+
+  const COLORS: Record<string, string> = {
+    admin: '#6A1B9A',
+    superviseur: '#1565C0',
+    chef: '#2E7D32',
+    rh: '#C2185B',
+    consultation: '#546E7A',
+  };
+  return {
+    id: data.id,
+    name: data.name,
+    role: data.role,
+    teamId: data.team_id ?? null,
+    teamName: teamName,
+    avatar: data.name[0].toUpperCase(),
+    color: COLORS[data.role] ?? '#546E7A',
+    villeScope: data.ville_scope ?? undefined,
+  };
+>>>>>>> 6148dd0842835c664a9635bcc0c282b8165a8062
 }
