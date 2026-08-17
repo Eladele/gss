@@ -1,0 +1,578 @@
+import { useRef, useState, useMemo } from 'react';
+import ExcelJS from 'exceljs';
+import { useAppStore } from '@/store/useAppStore';
+import { ZONE_EQUIPE_MAP } from '@/data';
+import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, EmptyState } from '@/components/ui';
+import { useToast } from '@/components/ui';
+import { errMsg } from '@/utils';
+import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
+import type { Situation, SituationNature } from '@/types';
+
+type NatureFilter = 'mixed' | SituationNature;
+
+// Types reconnus par l'app (installation + dérangement). Tout type hors de cette liste
+// part en quarantaine plutôt que d'être importé silencieusement.
+const KNOWN_TYPES = ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST', 'ANS', 'DRG'];
+
+// Normalise le statut quelle que soit la casse/variante saisie dans le fichier :
+// "OK"/"ok" → ok · "NON OK"/"NO OK"/"NOK" → non_ok · "ENCOURS"/"EN COURS" → in_progress.
+function normalizeStatusRaw(raw: string): Situation['status'] | null {
+  const v = raw.trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!v) return null;
+  if (v === 'OK') return 'ok';
+  if (v === 'NON OK' || v === 'NO OK' || v === 'NOK') return 'non_ok';
+  if (v === 'ENCOURS' || v === 'EN COURS') return 'in_progress';
+  return null; // valeur non reconnue — traitée comme absente (repli sur la date)
+}
+
+// Un FGP plausible est un nombre entier de 3 à 7 chiffres. Un FGP hors de cette plage
+// (souvent une date Excel mal convertie, ex: 45255) est suspect et part en quarantaine.
+// Un FGP plausible est un nombre entier de 3 à 10 chiffres (certaines catégories comme
+// ANS utilisent un numéro à 8 chiffres comme FGP — c'est légitime chez vous, pas une erreur).
+function isPlausibleFgp(fgp: string): boolean {
+  return /^\d{1,8}$/.test(fgp.trim());
+}
+
+interface RejectedRow {
+  row: Record<string, any>;
+  reason: string;
+}
+
+// Types considérés "installation" pour la détection automatique en mode mixte
+function detectNature(type: string): SituationNature {
+  return type === 'DRG' ? 'derangement' : 'installation';
+}
+
+export default function ImportExcelPage() {
+  const importSituations = useAppStore((s) => s.importSituations);
+  const importHistory = useAppStore((s) => s.importHistory);
+  const removeImportRecord = useAppStore((s) => s.removeImportRecord);
+  const equipes = useAppStore((s) => s.equipes);
+  const { showToast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [preview, setPreview] = useState<Situation[]>([]);
+  const [fileName, setFileName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [nature, setNature] = useState<NatureFilter>('mixed');
+  const [rejectedRows, setRejectedRows] = useState<RejectedRow[]>([]);
+
+  // ── Carte dynamique zone → équipe (Supabase en priorité, fallback statique) ──
+  const zoneEquipeMap = useMemo(() => {
+    const map: Record<string, string> = { ...ZONE_EQUIPE_MAP }; // fallback statique
+    equipes.forEach((eq) => {
+      (eq.zones ?? []).forEach((z) => {
+        if (z) map[z.trim().toUpperCase()] = eq.name;
+      });
+    });
+    return map;
+  }, [equipes]);
+
+  // Résout l'équipe à partir de la zone (insensible à la casse)
+  const resolveEquipe = (zone: string, equipeFromFile: string): string => {
+    if (equipeFromFile && equipeFromFile !== 'undefined' && equipeFromFile !== 'NaN') return equipeFromFile.trim();
+    const key = zone.trim().toUpperCase();
+    return zoneEquipeMap[key] ?? zoneEquipeMap[zone] ?? '';
+  };
+
+  const parseFile = async (file: File) => {
+    setLoading(true);
+    setFileName(file.name);
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer);
+      const ws = workbook.worksheets[0];
+      // Reconstruit un tableau 2D [ligne][colonne] équivalent à
+      // XLSX.utils.sheet_to_json(ws, { header: 1 }) — le reste du code
+      // (recherche de colonnes par en-tête, etc.) n'a pas besoin de changer.
+      const data: unknown[][] = [];
+      ws.eachRow({ includeEmpty: true }, (row) => {
+        const values = row.values as unknown[]; // 1-indexé par ExcelJS (index 0 = undefined)
+        data.push(values.slice(1));
+      });
+      if (data.length < 2) {
+        showToast('Fichier vide ou invalide', 'error');
+        setLoading(false);
+        return;
+      }
+
+        const header = data[0].map((h: unknown) =>
+          String(h ?? '')
+            .trim()
+            .toUpperCase(),
+        );
+        const col = (keywords: string[]) => header.findIndex((h: string) => keywords.some((k) => h.includes(k)));
+
+        // Tolère les fichiers GSS réels (ex: "DETE DEPOT" au lieu de "DATE DEPOT")
+        const colDate = col(['DATE DEP', 'DATE_DEP', 'DATEDEPO', 'DETE DEP', 'DEPOT']);
+        const colDateMessage = col(['DATE MESSAGE', 'DETE MESSAGE']);
+        const colServiceDest = col(['SERVICE DESTINATION']);
+        const colType = col(['TYPE']);
+        const colFgp = col(['FGP']);
+        const colZone = col(['ZONE']);
+        const colMotif = col(['MOTIF']);
+        const colEquipe = col(['EQUIPE', 'ÉQUIPE']);
+        const colDateClt = col(['DATE CLT', 'DATE_CLT', 'DATECLT', 'MISE EN SERVICE', 'DATE CLOTURE']);
+        const colDelai = col(['DELAI', 'DÉLAI', 'NBREJOUR']);
+        const colConf = col(['CONFORMITÉ', 'CONFORMITE']);
+        const colStatus = col(['STATUT', 'STATUS']);
+        const colPoteau = col(['POTEAU']);
+        // Fichiers "installation" (type INSTALLATION_JUIN.xlsx) : une colonne DATE MESSAGE
+        // est présente ⇒ elle sert de référence pour le délai, et la colonne DATE DEPOT
+        // du fichier n'est volontairement PAS stockée (elle fait doublon / cause des soucis
+        // de stockage).
+        const useDateMessage = colDateMessage >= 0;
+
+        const rows: (Situation & { _hasDelai?: boolean })[] = [];
+        const rejected: RejectedRow[] = [];
+        for (let i = 1; i < data.length; i++) {
+          const row = data[i];
+          if (!row || !row[colFgp] || !row[colType]) continue;
+          const fgp = String(row[colFgp]).trim();
+          const type = String(row[colType] ?? '').trim();
+          const zone = String(row[colZone] ?? '').trim();
+          const motif = String(row[colMotif] ?? '').trim();
+          const equipeFromFile = colEquipe >= 0 ? String(row[colEquipe] ?? '').trim() : '';
+          const serviceDestination = colServiceDest >= 0 ? String(row[colServiceDest] ?? '').trim() : '';
+
+          // ── Quarantaine : type non reconnu ou FGP invraisemblable (ex: date Excel mal
+          // convertie) — ces lignes ne sont PAS importées, mais listées pour correction.
+          if (!KNOWN_TYPES.includes(type.toUpperCase())) {
+            rejected.push({ row: { FGP: fgp, TYPE: type, ZONE: zone, Motif: motif }, reason: `Type "${type}" non reconnu` });
+            continue;
+          }
+          if (!isPlausibleFgp(fgp)) {
+            rejected.push({ row: { FGP: fgp, TYPE: type, ZONE: zone, Motif: motif }, reason: `FGP "${fgp}" invraisemblable (probable date Excel)` });
+            continue;
+          }
+
+          // ── Auto-distribution : résolution zone → équipe via Supabase ──
+          const equipe = resolveEquipe(zone, equipeFromFile);
+
+          const parseDate = (val: unknown) => {
+            if (!val) return '';
+            if (val instanceof Date) return val.toISOString().slice(0, 10);
+            return String(val).slice(0, 10);
+          };
+
+          const delaiCellRaw = colDelai >= 0 ? row[colDelai] : null;
+          const hasDelai = delaiCellRaw !== null && delaiCellRaw !== undefined && String(delaiCellRaw).trim() !== '';
+          const delaiImporte = hasDelai ? parseFloat(String(delaiCellRaw)) || 0 : 0;
+          const confRaw = colConf >= 0 ? String(row[colConf] ?? '').trim() : '';
+
+          const dateClt = parseDate(colDateClt >= 0 ? row[colDateClt] : null);
+          const dateMessage = useDateMessage ? parseDate(row[colDateMessage]) : '';
+          // Les deux colonnes existent souvent en même temps dans les vrais fichiers GSS,
+          // avec des dates RÉELLEMENT différentes (vérifié : jusqu'à 69% des lignes sur
+          // certains fichiers) — on lit donc chacune indépendamment plutôt que de recopier
+          // dateMessage dans dateDepo. dateDepo ne retombe sur dateMessage qu'en dernier
+          // recours, si le fichier n'a vraiment aucune colonne de date de dépôt.
+          const dateDepoFromCol = parseDate(colDate >= 0 ? row[colDate] : null);
+          const dateDepo = dateDepoFromCol || dateMessage;
+
+          // ── Statut : si le fichier a une colonne STATUT/STATUS explicite, on la respecte
+          // (normalisée : OK/NON OK/NO OK/NOK/ENCOURS quelle que soit la casse), sinon on
+          // déduit automatiquement depuis DATE MISE EN SERVICE.
+          const statusRaw = colStatus >= 0 ? String(row[colStatus] ?? '').trim() : '';
+          const statusFromFile = normalizeStatusRaw(statusRaw);
+          const status: Situation['status'] = statusFromFile ?? (dateClt ? 'ok' : 'non_ok');
+          const motifVide = !motif || /^sans\s*motif$/i.test(motif);
+
+          // ── Incohérence date/statut : date de mise en service remplie mais statut ≠ OK
+          // (ou l'inverse) — on importe quand même (ne bloque jamais l'agent terrain),
+          // mais on le signale visiblement dans le commentaire pour vérification.
+          const dateStatusMismatch = (dateClt && status !== 'ok') || (!dateClt && status === 'ok');
+
+          // ── Poteau : colonne dédiée si présente, sinon on essaie de l'extraire du motif
+          // (ex: "+1poteau", "+2POTEAU" — motifs historiques avant l'ajout de la colonne).
+          let poteau = 0;
+          if (colPoteau >= 0) {
+            const raw = row[colPoteau];
+            poteau = raw !== null && raw !== undefined && String(raw).trim() !== '' ? parseInt(String(raw), 10) || 0 : 0;
+          } else {
+            const m = motif.match(/(\d+)\s*poteau/i);
+            poteau = m ? parseInt(m[1], 10) : /poteau/i.test(motif) ? 1 : 0;
+          }
+          // ── Délai : recalculé à l'affichage via calcDelai (date_message → date de clôture) ;
+          // on garde ici le délai importé comme repli, et on fige `updatedAt` sur la date de
+          // mise en service pour que le calcul automatique retombe sur la bonne valeur historique.
+          const delai = delaiImporte;
+          // ── Conformité : uniquement figée si le fichier la donne explicitement, OU si la
+          // situation est déjà résolue (OK) avec un délai connu. Sinon (NON OK, en attente,
+          // sans info explicite), on NE FIGE RIEN — les statistiques utiliseront le calcul
+          // en direct (calcDelai / isHorsDelai) qui reflète le vrai statut "en cours".
+          let conformite: Situation['conformite'] = undefined;
+          if (confRaw) {
+            conformite = /hors/i.test(confRaw) ? 'HorsDelais' : 'TLID';
+          } else if (status === 'ok' && hasDelai) {
+            conformite = delai > 2 ? 'HorsDelais' : 'TLID';
+          }
+
+          rows.push({
+            id: `imp-${i}-${Date.now()}`,
+            fgp,
+            zone,
+            motif,
+            equipe,
+            type: type as Situation['type'],
+            nature: nature === 'mixed' ? detectNature(type) : nature,
+            conformite,
+            dateDepo,
+            dateMessage,
+            serviceDestination,
+            dateClt,
+            delai,
+            status,
+            comment: dateStatusMismatch
+              ? `⚠ incohérence date/statut${motifVide ? '' : ` ${motif}`}`
+              : motifVide
+                ? ''
+                : `${motif}`,
+            // On fige `updatedAt` sur la date de mise en service dès qu'elle est fournie,
+            // peu importe le statut — pour les DRG NON OK avec une vraie date de clôture
+            // dans le fichier, le délai doit s'arrêter à cette date, pas continuer jusqu'à
+            // aujourd'hui.
+            updatedAt: dateClt ? new Date(dateClt).toISOString() : undefined,
+           _hasDelai: hasDelai,
+            poteau,
+          });
+        }
+
+        // ── Déduplication par FGP + TYPE + MOTIF + DATE MISE EN SERVICE — pour toutes les
+        // lignes, y compris DRG. Nécessaire car la base rejette l'upsert si deux lignes du
+        // même lot ont exactement la même clé de conflit ("ON CONFLICT DO UPDATE command
+        // cannot affect row a second time") — donc même les vrais doublons DRG doivent être
+        // fusionnés ici. Un même FGP+TYPE peut légitimement avoir plusieurs lignes actives
+        // en même temps chez vous (différents motifs/dates de passage) — on ne fusionne donc
+        // QUE les lignes strictement identiques sur ces 4 champs, tout le reste est conservé.
+        const bestByKey = new Map<string, Situation & { _hasDelai?: boolean }>();
+        for (const r of rows) {
+          const key = `${r.fgp}|${r.type}|${r.motif}|${r.dateClt}`;
+          const existing = bestByKey.get(key);
+          if (!existing) {
+            bestByKey.set(key, r);
+            continue;
+          }
+          // Doublon exact : on garde la ligne au message le plus récent
+          if ((r.dateMessage || '') >= (existing.dateMessage || '')) bestByKey.set(key, r);
+        }
+        const dedupedRows = Array.from(bestByKey.values());
+        const duplicatesCount = rows.length - dedupedRows.length;
+
+        setPreview(dedupedRows);
+        setRejectedRows(rejected);
+        const assigned = dedupedRows.filter((r) => r.equipe).length;
+        const unassigned = dedupedRows.length - assigned;
+        const autoOk = dedupedRows.filter((r) => r.status === 'ok').length;
+        showToast(
+          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}${rejected.length > 0 ? ` · ${rejected.length} lignes rejetées (type/FGP invalide, voir ci-dessous)` : ''}`,
+          rejected.length > 0 ? 'warning' : unassigned === 0 ? 'success' : 'warning',
+        );
+        setLoading(false);
+      } catch (err: unknown) {
+        showToast('Erreur lecture: ' + errMsg(err), 'error');
+        setLoading(false);
+      }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) parseFile(file);
+    else showToast('Format invalide. Utiliser .xlsx ou .xls', 'error');
+  };
+
+  const [importing, setImporting] = useState(false);
+
+  const confirmImport = async () => {
+    const assigned = preview.filter((r) => r.equipe).length;
+    const unassigned = preview.length - assigned;
+    setImporting(true);
+    try {
+      await importSituations(preview, fileName);
+      setPreview([]);
+      setRejectedRows([]);
+      setFileName('');
+      showToast(
+        ` ${preview.length} situations importées — ${assigned} distribuées automatiquement${
+          unassigned > 0 ? ` · ${unassigned} sans équipe (vérifier les zones)` : ''
+        }`,
+        unassigned > 0 ? 'warning' : 'success',
+      );
+    } catch (err: unknown) {
+      // On garde la preview affichée pour permettre de réessayer, au lieu de laisser
+      // croire à un succès alors que rien n'a été enregistré en base.
+      showToast("Échec de l'import : " + errMsg(err, 'vérifiez le schéma de la base'), 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Stats de la preview
+  const previewStats = useMemo(() => {
+    const byEquipe: Record<string, number> = {};
+    preview.forEach((r) => {
+      const key = r.equipe || ' Non affectée';
+      byEquipe[key] = (byEquipe[key] ?? 0) + 1;
+    });
+    return byEquipe;
+  }, [preview]);
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <div>
+        <h1 className="text-2xl font-black text-slate-900">Import Programme Excel</h1>
+        <p className="text-slate-400 text-sm mt-0.5">
+          Formats acceptés : DATE DEPOT·TYPE·FGP·ZONE·MOTIF·EQUIPE — ou fichiers "installation" (DATE MESSAGE·TYPE·FGP·SERVICE
+          DESTINATION·ZONE·DATE MISE EN SERVICE·MOTIF·DÉLAI·CONFORMITÉ)
+        </p>
+      </div>
+
+      {/* Nature de l'import : installation, dérangement, ou les deux (détection auto par type) */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs font-semibold text-slate-500">Nature du fichier :</span>
+        <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+          {(['mixed', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
+            <button
+              key={n}
+              onClick={() => setNature(n)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {n === 'mixed' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
+            </button>
+          ))}
+        </div>
+        {nature === 'mixed' && (
+          <span className="text-[11px] text-slate-400">
+            Nature détectée automatiquement par type : CPL/TRL/CMI/CLS/RLR/CST/ANS → Installation, DRG → Dérangement
+          </span>
+        )}
+      </div>
+
+      {/* Upload zone */}
+      <Card className="p-6">
+        <div
+          className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all ${dragging ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-blue-50/50'}`}
+          onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+        >
+          <div className="text-5xl mb-3">{loading ? '' : ''}</div>
+          <p className="text-slate-600 font-medium">
+            {loading ? (
+              'Lecture en cours...'
+            ) : (
+              <>
+                <strong className="text-blue-700">Cliquer ou glisser</strong> votre fichier Excel ici
+              </>
+            )}
+          </p>
+          <p className="text-slate-400 text-sm mt-1">Formats: .xlsx, .xls</p>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files?.[0]) parseFile(e.target.files[0]);
+            }}
+          />
+        </div>
+
+        {/* Lignes rejetées (quarantaine) */}
+        {rejectedRows.length > 0 && (
+          <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-bold text-red-700">
+                {rejectedRows.length} ligne(s) rejetée(s) — non importées, à corriger dans le fichier source
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  const workbook = new ExcelJS.Workbook();
+                  addSheetFromObjects(
+                    workbook,
+                    'Rejetées',
+                    rejectedRows.map((r) => ({ ...r.row, Motif_rejet: r.reason })),
+                  );
+                  const buffer = await workbook.xlsx.writeBuffer();
+                  downloadWorkbookBuffer(buffer as ArrayBuffer, `lignes_rejetees_${fileName || 'import'}.xlsx`);
+                }}
+              >
+                Télécharger les lignes rejetées
+              </Button>
+            </div>
+            <div className="mt-2 max-h-40 overflow-y-auto text-xs text-red-600 space-y-1">
+              {rejectedRows.slice(0, 20).map((r, i) => (
+                <div key={i}>
+                  FGP {r.row.FGP} ({r.row.TYPE}) — {r.reason}
+                </div>
+              ))}
+              {rejectedRows.length > 20 && <div>... et {rejectedRows.length - 20} autres (voir le fichier téléchargé)</div>}
+            </div>
+          </div>
+        )}
+
+        {/* Preview */}
+        {preview.length > 0 && (
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
+              <div>
+                <span className="font-semibold text-slate-700">{preview.length} lignes détectées</span>
+                <span className="text-slate-400 text-sm ml-2">— {fileName}</span>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPreview([]);
+                    setRejectedRows([]);
+                    setFileName('');
+                  }}
+                >
+                  Annuler
+                </Button>
+                <Button variant="success" size="sm" onClick={confirmImport} disabled={importing}>
+                  {importing ? 'Import en cours...' : 'Confirmer Import'}
+                </Button>
+              </div>
+            </div>
+
+            {/* ── Résumé de distribution par équipe ── */}
+            <div className="mb-3 p-3 bg-blue-50 border border-blue-100 rounded-xl">
+              <p className="text-xs font-bold text-blue-700 mb-2"> Distribution automatique par équipe</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(previewStats).map(([eq, count]) => (
+                  <span
+                    key={eq}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                      eq.startsWith('') ? 'bg-orange-100 text-orange-700' : 'bg-white border border-blue-200 text-blue-800'
+                    }`}
+                  >
+                    <span>{eq}</span>
+                    <span className="bg-blue-600 text-white px-1.5 py-0.5 rounded-full text-[10px] font-bold">{count}</span>
+                  </span>
+                ))}
+              </div>
+              {previewStats[' Non affectée'] && (
+                <p className="text-xs text-orange-600 mt-2">
+                  {previewStats[' Non affectée']} situation(s) sans équipe — zones non reconnues
+                </p>
+              )}
+            </div>
+            <div className="border border-slate-200 rounded-xl overflow-hidden max-h-72 overflow-y-auto scrollbar-hide">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    {['#', 'Date Message', 'Type', 'FGP', 'Service Dest.', 'Zone', 'Date Mise en Service', 'Motif', 'Délai', 'Statut'].map(
+                      (h) => (
+                        <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">
+                          {h}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.slice(0, 100).map((row, i) => (
+                    <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50/50">
+                      <td className="px-3 py-2 text-slate-400 text-xs">{i + 1}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{row.dateMessage || '—'}</td>
+                      <td className="px-3 py-2">
+                        <TypeBadge type={row.type} />
+                      </td>
+                      <td className="px-3 py-2 font-bold text-slate-800">{row.fgp}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{row.serviceDestination || '—'}</td>
+                      <td className="px-3 py-2">
+                        <ZoneChip zone={row.zone} />
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{row.dateClt || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400 max-w-24 truncate">{row.motif || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-center">{row.delai}j</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${row.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                        >
+                          {row.status === 'ok' ? 'OK' : 'NON OK'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {preview.length > 100 && (
+                    <tr>
+                      <td colSpan={10} className="text-center py-3 text-slate-400 text-xs">
+                        ... et {preview.length - 100} lignes supplémentaires
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* History */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Historique des Imports</CardTitle>
+        </CardHeader>
+        {importHistory.length === 0 ? (
+          <EmptyState icon="" text="Aucun import récent" />
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Fichier</th>
+                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Date</th>
+                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Lignes</th>
+                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Par</th>
+                <th className="text-right px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {importHistory.map((h) => (
+                <tr key={h.id} className="border-b border-slate-50">
+                  <td className="px-4 py-3 font-medium text-slate-700"> {h.fileName}</td>
+                  <td className="px-4 py-3 text-slate-400 text-xs">{h.date}</td>
+                  <td className="px-4 py-3">
+                    <strong>{h.count}</strong> lignes
+                  </td>
+                  <td className="px-4 py-3">
+                    <EquipeTag name={h.by} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => {
+                        if (
+                          confirm(
+                            "Supprimer cet import ?\n\nATTENTION : ça supprime aussi TOUTES les situations créées par cet import (suppression en cascade), pas seulement la ligne d'historique. Cette action est irréversible.\n\nNote : les imports faits avant la mise en place de ce lien ne sont pas concernés (seule la ligne d'historique sera retirée dans ce cas).",
+                          )
+                        ) {
+                          removeImportRecord(h.id).catch((err: unknown) => {
+                            showToast('Suppression échouée : ' + errMsg(err), 'error');
+                          });
+                        }
+                      }}
+                      className="text-red-600 hover:underline text-xs font-semibold"
+                    >
+                      Supprimer
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}

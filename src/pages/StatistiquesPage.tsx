@@ -1,0 +1,816 @@
+import { useMemo, useState } from 'react';
+import { useAppStore } from '@/store/useAppStore';
+import { getEquipeColor } from '@/utils';
+import {
+  statsByEquipe,
+  statsByVille,
+  statsByType,
+  repeatDerangementByClient,
+  inPeriod,
+  exportStatsToExcel,
+  MERGED_TYPES,
+  isHorsDelai,
+  countPoteaux,
+  statsDelaiDetailleParVilleEtType,
+  statsBacklogParAnciennete,
+  statsNonOk,
+  type PeriodFilter,
+} from '@/utils/stats';
+import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
+import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
+import type { SituationNature } from '@/types';
+
+type NatureFilter = 'all' | SituationNature;
+
+// Classification fiable par TYPE (le champ `nature` importé n'est pas toujours cohérent) :
+// Installation = CPL/TRL/CMI/CLS/RLR/CST/ANS · Dérangement = DRG
+function matchesNature(s: { type: string }, nature: NatureFilter): boolean {
+  if (nature === 'all') return true;
+  if (nature === 'derangement') return s.type === 'DRG';
+  return MERGED_TYPES.includes(s.type);
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+function firstOfMonthStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+type PeriodPreset = 'tout' | 'jour' | 'semaine' | 'mois' | 'custom';
+
+const MOIS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+// 2025 à l'année en cours + 1 — large marge sans devoir maintenir la liste à la main.
+const ANNEES_SELECT = Array.from({ length: new Date().getFullYear() - 2025 + 2 }, (_, i) => 2025 + i);
+
+function presetToRange(preset: PeriodPreset): PeriodFilter {
+  const now = new Date();
+  if (preset === 'tout') return {};
+  if (preset === 'jour') return { from: todayStr(), to: todayStr() };
+  if (preset === 'semaine') {
+    const day = (now.getDay() + 6) % 7; // lundi = 0
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - day);
+    return { from: monday.toISOString().slice(0, 10), to: todayStr() };
+  }
+  if (preset === 'mois') return { from: firstOfMonthStr(), to: todayStr() };
+  return {};
+}
+
+const VILLE_COLORS: Record<string, string> = {
+  Nouakchott: '#1565C0',
+  Kaédi: '#E9A93B',
+  Rosso: '#2E7D32',
+  Nouadhibou: '#00838F',
+};
+const WEEKDAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+
+export default function StatistiquesPage() {
+  const situations = useAppStore((s) => s.situations);
+  const equipes = useAppStore((s) => s.equipes);
+  const user = useAppStore((s) => s.user)!;
+
+  const [nature, setNature] = useState<NatureFilter>('installation');
+  const [preset, setPreset] = useState<PeriodPreset>('mois'); // affiche le mois en cours par défaut
+  const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
+  const [customTo, setCustomTo] = useState(todayStr());
+  const [fEquipe, setFEquipe] = useState('');
+  // Ville verrouillée sur le villeScope de l'utilisateur si défini (ex: superviseur
+  // régional) — non modifiable dans ce cas, voir le Select plus bas (disabled).
+  const [fVille, setFVille] = useState(user.villeScope ?? '');
+  const [delaiDetail, setDelaiDetail] = useState<'dans' | 'hors' | null>(null);
+  const [repeatsOpen, setRepeatsOpen] = useState(false);
+
+  const period: PeriodFilter = preset === 'custom' ? { from: customFrom, to: customTo } : presetToRange(preset);
+
+  const villes = useMemo(() => [...new Set(equipes.map((e) => e.ville ?? 'Nouakchott'))].sort(), [equipes]);
+
+  const scoped = useMemo(
+    () =>
+      situations.filter((s) => {
+        if (!matchesNature(s, nature)) return false;
+        // DATE MISE EN SERVICE en priorité — on filtre par le mois où le travail a
+        // réellement été terminé, pas par le mois où la demande a été reçue. Une
+        // situation encore en attente (pas de DATE MISE EN SERVICE) retombe sur
+        // DATE MESSAGE, sinon elle disparaîtrait de tous les filtres par période.
+        if (!inPeriod(s.dateClt || s.dateMessage || s.dateDepo || '', period)) return false;
+        if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
+        if (fVille) {
+          const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
+          if ((eq?.ville ?? 'Nouakchott') !== fVille) return false;
+        }
+        return true;
+      }),
+    [situations, nature, period, fEquipe, fVille, equipes],
+  );
+
+  const byEquipe = useMemo(() => statsByEquipe(scoped, equipes), [scoped, equipes]);
+  const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
+  const byType = useMemo(() => statsByType(scoped), [scoped]);
+  const repeats = useMemo(
+    () => repeatDerangementByClient(situations.filter((s) => inPeriod(s.dateClt || s.dateMessage || s.dateDepo || '', period))),
+    [situations, period],
+  );
+
+  const total = scoped.length;
+  // Compte les poteaux depuis la colonne dédiée (nouveaux imports) avec repli sur
+  // l'extraction du motif (anciennes situations importées avant l'ajout de la colonne).
+  const totalPoteaux = scoped.reduce((sum, s) => sum + (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)), 0);
+  const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
+  const dansDelai = total - horsDelai;
+  const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
+  const today = todayStr();
+  // "Aujourd'hui" inclut aussi tout ce qui est encore en cours (peu importe sa
+  // date de dépôt) — pas seulement les nouvelles situations du jour.
+  const totalAujourdhui = scoped.filter(
+    (s) => (s.dateClt || s.dateMessage || s.dateDepo) === today || s.status === 'pending' || s.status === 'in_progress',
+  ).length;
+  const weekStart = presetToRange('semaine').from!;
+  const totalSemaine = scoped.filter((s) => (s.dateClt || s.dateMessage || s.dateDepo || '') >= weekStart).length;
+  const villesActives = new Set(
+    scoped.map((s) => {
+      const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
+      return eq?.ville ?? 'Nouakchott';
+    }),
+  ).size;
+
+  const delaiDetailRows = useMemo(() => {
+    if (!delaiDetail) return [];
+    return scoped.filter((s) => (delaiDetail === 'hors' ? isHorsDelai(s) : !isHorsDelai(s)));
+  }, [scoped, delaiDetail]);
+
+  // Courbe de tendance (30 derniers jours de la période, ou toute la période si + courte)
+  const trendPoints = useMemo(() => {
+    const days: string[] = [];
+    const end = period.to ? new Date(period.to) : new Date();
+    const span = 29;
+    for (let i = span; i >= 0; i--) {
+      const d = new Date(end);
+      d.setDate(end.getDate() - i);
+      days.push(d.toISOString().slice(0, 10));
+    }
+    const byDay: Record<string, number> = {};
+    situations
+      .filter((s) => matchesNature(s, nature))
+      .forEach((s) => {
+        const d = s.dateClt || s.dateMessage || s.dateDepo;
+        if (d) byDay[d] = (byDay[d] ?? 0) + 1;
+      });
+    return days.map((d) => ({ label: d.slice(8, 10) + '/' + d.slice(5, 7), value: byDay[d] ?? 0 }));
+  }, [situations, nature, period.to]);
+
+  // Répartition par jour de semaine
+  const weekdayData = useMemo(() => {
+    const counts = [0, 0, 0, 0, 0, 0, 0];
+    scoped.forEach((s) => {
+      const d = s.dateClt || s.dateMessage || s.dateDepo;
+      if (d) counts[new Date(d).getDay()]++;
+    });
+    return WEEKDAYS.map((label, i) => ({ label, value: counts[i] }));
+  }, [scoped]);
+
+  // Classement équipes les plus performantes (taux de conformité)
+  const leaderboard = useMemo(
+    () =>
+      byEquipe
+        .filter((e) => e.total >= 1)
+        .slice()
+        .sort((a, b) => b.pctConformite - a.pctConformite || b.total - a.total)
+        .slice(0, 5)
+        .map((e) => ({
+          name: e.equipe,
+          sub: `${e.ville} — ${e.total} dossier(s)`,
+          value: e.pctConformite,
+          unit: '%',
+          color: getEquipeColor(e.equipe, equipes),
+        })),
+    [byEquipe, equipes],
+  );
+
+  const donutData = byVille.map((v) => ({ label: v.ville, value: v.total, color: VILLE_COLORS[v.ville] ?? '#546E7A' }));
+
+  // ── Nouveaux rapports détaillés (façon relevés Huawei/Mauritel) ──────────
+  // Ceux-ci ignorent volontairement le toggle Installation/Dérangement (nature) —
+  // ils montrent Installation, CST et DRG côte à côte, indépendamment du filtre —
+  // mais respectent période/équipe/ville comme le reste de la page.
+  const scopedAll = useMemo(
+    () =>
+      situations.filter((s) => {
+        if (!inPeriod(s.dateClt || s.dateMessage || s.dateDepo || '', period)) return false;
+        if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
+        if (fVille) {
+          const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
+          if ((eq?.ville ?? 'Nouakchott') !== fVille) return false;
+        }
+        return true;
+      }),
+    [situations, period, fEquipe, fVille, equipes],
+  );
+
+  const INSTALLATION_TYPES_SANS_CST = useMemo(() => MERGED_TYPES.filter((t) => t !== 'CST'), []);
+  const installDetail = useMemo(
+    () => statsDelaiDetailleParVilleEtType(scopedAll, equipes, INSTALLATION_TYPES_SANS_CST),
+    [scopedAll, equipes, INSTALLATION_TYPES_SANS_CST],
+  );
+  const cstDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['CST']), [scopedAll, equipes]);
+  const drgVilleDetail = useMemo(() => statsByVille(scopedAll.filter((s) => s.type === 'DRG'), equipes), [scopedAll, equipes]);
+
+  // Backlog "du jour" — snapshot indépendant de la période choisie (un backlog en
+  // attente depuis +7j a forcément une date de dépôt hors d'une période "cette
+  // semaine", donc on ne filtre ici que par équipe/ville, pas par période.
+  const scopedForBacklog = useMemo(
+    () =>
+      situations.filter((s) => {
+        if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
+        if (fVille) {
+          const eq = equipes.find((e) => e.name.toLowerCase() === s.equipe?.toLowerCase());
+          if ((eq?.ville ?? 'Nouakchott') !== fVille) return false;
+        }
+        return true;
+      }),
+    [situations, fEquipe, fVille, equipes],
+  );
+  const backlogRows = useMemo(() => statsBacklogParAnciennete(scopedForBacklog), [scopedForBacklog]);
+
+  const nonOkDetail = useMemo(() => statsNonOk(scopedAll, equipes), [scopedAll, equipes]);
+
+  const handleExport = async () => {
+    await exportStatsToExcel({
+      fileName: `stats_${nature}_${period.from ?? 'all'}_${period.to ?? 'all'}.xlsx`,
+      byEquipe,
+      byVille,
+      byType,
+      repeats,
+      situations: scoped,
+      installDetail,
+      cstDetail,
+      drgVilleDetail,
+      nonOkDetail,
+      backlogRows,
+    });
+  };
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900">Statistiques</h1>
+          <p className="text-slate-400 text-sm">Délai / conformité par équipe, ville, type — installation & dérangement séparés</p>
+        </div>
+        <Button icon="" variant="outline" onClick={handleExport}>
+          Exporter Excel
+        </Button>
+      </div>
+
+      {/* Nature toggle */}
+      <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+        {(['all', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
+          <button
+            key={n}
+            onClick={() => setNature(n)}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            {n === 'all' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2 flex-wrap w-full">
+            <Select value={preset} onChange={(e) => setPreset(e.target.value as PeriodPreset)} style={{ width: 'auto' }}>
+              <option value="tout">Toute la période</option>
+              <option value="jour">Aujourd'hui</option>
+              <option value="semaine">Cette semaine</option>
+              <option value="mois">Ce mois</option>
+              <option value="custom">Par mois</option>
+            </Select>
+            {preset === 'custom' && (
+              <>
+                <Select
+                  value={String(Number(customFrom.slice(5, 7)))}
+                  onChange={(e) => {
+                    const year = customFrom.slice(0, 4);
+                    const month = e.target.value.padStart(2, '0');
+                    const lastDay = new Date(Number(year), Number(month), 0).getDate();
+                    setCustomFrom(`${year}-${month}-01`);
+                    setCustomTo(`${year}-${month}-${String(lastDay).padStart(2, '0')}`);
+                  }}
+                  style={{ width: 'auto' }}
+                >
+                  {MOIS_FR.map((label, i) => (
+                    <option key={i} value={i + 1}>
+                      {label}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={customFrom.slice(0, 4)}
+                  onChange={(e) => {
+                    const year = e.target.value;
+                    const month = customFrom.slice(5, 7);
+                    const lastDay = new Date(Number(year), Number(month), 0).getDate();
+                    setCustomFrom(`${year}-${month}-01`);
+                    setCustomTo(`${year}-${month}-${String(lastDay).padStart(2, '0')}`);
+                  }}
+                  style={{ width: 'auto' }}
+                >
+                  {ANNEES_SELECT.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </Select>
+              </>
+            )}
+            <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} style={{ width: 'auto' }}>
+              <option value="">Toutes équipes</option>
+              {equipes.map((e) => (
+                <option key={e.id} value={e.name}>
+                  {e.name}
+                </option>
+              ))}
+            </Select>
+            <Select
+              value={fVille}
+              onChange={(e) => setFVille(e.target.value)}
+              style={{ width: 'auto' }}
+              disabled={!!user.villeScope}
+              title={user.villeScope ? `Restreint à ${user.villeScope}` : undefined}
+            >
+              <option value="">Toutes villes</option>
+              {villes.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </CardHeader>
+      </Card>
+
+      {/* KPIs — style dashboard (villes actives / semaine / jour / total) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <StatCard value={`${villesActives}/${villes.length}`} label="Villes actives" icon="" accent="#1565C0" />
+        <StatCard value={totalSemaine} label="Cette semaine" icon="" accent="#2E7D32" />
+        <StatCard value={totalAujourdhui} label="Aujourd'hui" icon="" accent="#00838F" />
+        <StatCard value={total} label="Total période" icon="" accent="#E65100" />
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <StatCard value={`${pctConf}%`} label="Conformité" icon="" accent="#2E7D32" />
+        <StatCard
+          value={dansDelai}
+          label="Dans délai"
+          icon=""
+          accent="#1565C0"
+          active={delaiDetail === 'dans'}
+          onClick={() => setDelaiDetail(delaiDetail === 'dans' ? null : 'dans')}
+        />
+        <StatCard
+          value={horsDelai}
+          label="Hors délai"
+          icon=""
+          accent="#C62828"
+          active={delaiDetail === 'hors'}
+          onClick={() => setDelaiDetail(delaiDetail === 'hors' ? null : 'hors')}
+        />
+        <StatCard
+          value={repeats.length}
+          label="DRG répétés"
+          icon=""
+          accent="#8E24AA"
+          active={repeatsOpen}
+          onClick={() => setRepeatsOpen(!repeatsOpen)}
+        />
+        <StatCard value={totalPoteaux} label="Poteaux posés (période)" icon="" accent="#6D4C41" />
+      </div>
+
+      {/* Détail — situations dans/hors délai (clic sur les cartes ci-dessus) */}
+      {delaiDetail && (
+        <Card className={delaiDetail === 'hors' ? 'border-red-200 bg-red-50/30' : 'border-blue-200 bg-blue-50/30'}>
+          <CardHeader>
+            <div className="flex items-center justify-between w-full">
+              <CardTitle>
+                {delaiDetail === 'hors' ? 'Situations hors délai' : 'Situations dans les délais'} ({delaiDetailRows.length})
+              </CardTitle>
+              <button onClick={() => setDelaiDetail(null)} className="text-xs font-semibold text-slate-500 hover:text-slate-700">
+                Fermer ✕
+              </button>
+            </div>
+          </CardHeader>
+          {delaiDetailRows.length === 0 ? (
+            <EmptyState icon="" text="Aucune situation" />
+          ) : (
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    {['FGP', 'Type', 'Zone', 'Équipe', 'Motif', 'Statut'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {delaiDetailRows.slice(0, 300).map((s) => (
+                    <tr key={s.id} className="border-b border-slate-50">
+                      <td className="px-3 py-2 font-bold text-slate-800">{s.fgp}</td>
+                      <td className="px-3 py-2">
+                        <TypeBadge type={s.type} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <ZoneChip zone={s.zone} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500 max-w-40 truncate">{s.motif || '—'}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                        >
+                          {s.status === 'ok' ? 'OK' : s.status === 'non_ok' ? 'NON OK' : s.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {delaiDetailRows.length > 300 && (
+                <p className="text-[11px] text-slate-400 p-3">
+                  Affichage limité à 300 lignes sur {delaiDetailRows.length} — affinez les filtres pour cibler.
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* DRG répétés — même emplacement/style que le détail délai ci-dessus */}
+      {repeatsOpen && (
+        <Card className="border-purple-200 bg-purple-50/30">
+          <CardHeader>
+            <div className="flex items-center justify-between w-full">
+              <CardTitle>DRG répétés ({repeats.length}) — triés du plus au moins répété</CardTitle>
+              <button onClick={() => setRepeatsOpen(false)} className="text-xs font-semibold text-slate-500 hover:text-slate-700">
+                Fermer ✕
+              </button>
+            </div>
+          </CardHeader>
+          {repeats.length === 0 ? (
+            <EmptyState icon="" text="Aucun client avec plusieurs dérangements sur la période" />
+          ) : (
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    {['FGP', 'Nb interventions', 'Zone', 'Équipe', 'Motifs'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {repeats.slice(0, 300).map((r) => (
+                    <tr key={r.fgp} className="border-b border-slate-50">
+                      <td className="px-3 py-2 font-bold text-slate-800">{r.fgp}</td>
+                      <td className="px-3 py-2">
+                        <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-bold">{r.count}×</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{r.zone}</td>
+                      <td className="px-3 py-2">
+                        <EquipeTag name={r.equipe || '—'} color={getEquipeColor(r.equipe, equipes)} />
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400 max-w-xs truncate" title={r.motifs.join(' | ')}>
+                        {r.motifs.join(' | ') || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {repeats.length > 300 && (
+                <p className="text-[11px] text-slate-400 p-3">
+                  Affichage limité à 300 lignes sur {repeats.length} — affinez les filtres pour cibler.
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Équipes les plus actives + courbe de tendance */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle> Équipes les plus actives</CardTitle>
+          </CardHeader>
+          <div className="p-5">
+            {byEquipe.length === 0 ? (
+              <EmptyState icon="" text="Aucune donnée" />
+            ) : (
+              <RankedBars
+                data={byEquipe.slice(0, 8).map((e) => ({ label: e.equipe, value: e.total, sub: `(${e.pctConformite}%)` }))}
+                color="#1565C0"
+              />
+            )}
+          </div>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle> Tendance — 30 derniers jours</CardTitle>
+          </CardHeader>
+          <div className="p-5">
+            <TrendArea points={trendPoints} color={nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0'} />
+          </div>
+        </Card>
+      </div>
+
+      {/* Répartition par ville (donut) + par jour de semaine */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle> Répartition par ville</CardTitle>
+          </CardHeader>
+          <div className="p-5">
+            {donutData.length === 0 ? <EmptyState icon="" text="Aucune donnée" /> : <DonutChart data={donutData} />}
+          </div>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle> Répartition par jour de semaine</CardTitle>
+          </CardHeader>
+          <div className="p-5">
+            <WeekdayBars data={weekdayData} color={nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0'} />
+          </div>
+        </Card>
+      </div>
+
+      {/* Leaderboard équipes + par type */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle> Équipes les plus performantes (% conformité)</CardTitle>
+          </CardHeader>
+          <div className="p-5">
+            {leaderboard.length === 0 ? <EmptyState icon="" text="Aucune donnée" /> : <Leaderboard items={leaderboard} />}
+          </div>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle> Par type (CLS, CPL, RLR, CMI, TRL, CST, ANS...)</CardTitle>
+          </CardHeader>
+          <div className="p-5">
+            {byType.length === 0 ? (
+              <EmptyState icon="" text="Aucune donnée" />
+            ) : (
+              <RankedBars data={byType.map((t) => ({ label: t.type, value: t.total, sub: `(${t.pctConformite}%)` }))} color="#00838F" />
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Par ville - tableau détaillé */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Détail par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Dans délai', 'Hors délai', '% Conf.'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {byVille.map((v) => (
+                <tr key={v.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{v.ville}</td>
+                  <td className="px-3 py-2">{v.total}</td>
+                  <td className="px-3 py-2 text-green-700 font-semibold">{v.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700 font-semibold">{v.horsDelai}</td>
+                  <td className="px-3 py-2">{v.pctConformite}%</td>
+                </tr>
+              ))}
+              {byVille.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* ═══ Nouveaux rapports détaillés (façon relevés Huawei/Mauritel) ═══ */}
+
+      {/* Backlog du jour — installations et DRG en attente, par ancienneté */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Backlog du jour — par ancienneté</CardTitle>
+        </CardHeader>
+        <p className="px-5 -mt-1 pb-2 text-[11px] text-slate-400">
+          "Résolu aujourd'hui" = traité (OK/NON OK) le jour même. Le reste = encore en attente, réparti par ancienneté. Indépendant du
+          filtre de période ci-dessus (c'est un instantané "à date").
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Nature', 'Résolu aujourd\'hui', 'Moins de 2J', 'Moins de 7J', 'Plus de 7J', 'Somme instance', 'Somme totale', '% réalisation'].map(
+                  (h) => (
+                    <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                      {h}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {backlogRows.map((r) => (
+                <tr key={r.nature} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.nature === 'installation' ? 'Installation' : 'DRG'}</td>
+                  <td className="px-3 py-2 font-bold text-green-700">{r.resoluAujourdhui}</td>
+                  <td className="px-3 py-2">{r.moins2j}</td>
+                  <td className="px-3 py-2">{r.moins7j}</td>
+                  <td className="px-3 py-2 text-red-700">{r.plus7j}</td>
+                  <td className="px-3 py-2 font-semibold">{r.sommeInstance}</td>
+                  <td className="px-3 py-2 font-semibold">{r.sommeTotal}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctRealisation}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* % Installation dans les délais — par ville et type (CLS, RLR, TRL, CMI...) */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Installation dans les délais — par ville et type</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Type', 'Total', 'Moins24H', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {installDetail.map((r) => (
+                <tr key={`${r.ville}-${r.type}`} className={`border-b border-slate-50 ${r.type === 'TOTAL' ? 'bg-blue-50/40' : ''}`}>
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.type === 'TOTAL' ? r.ville : ''}</td>
+                  <td className={`px-3 py-2 ${r.type === 'TOTAL' ? 'font-bold text-blue-700' : 'text-slate-500 pl-6'}`}>{r.type}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-blue-600">{r.moins24h}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctDansDelai}%</td>
+                </tr>
+              ))}
+              {installDetail.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* % CST dans les délais — par ville */}
+      <Card>
+        <CardHeader>
+          <CardTitle> CST dans les délais — par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Moins24H', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {cstDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-blue-600">{r.moins24h}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctDansDelai}%</td>
+                </tr>
+              ))}
+              {cstDetail.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Relevés DRG dans les délais — par ville (binaire : DRG a déjà un seuil de 24h, pas de tranche "Moins24H" distincte) */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Relevés DRG dans les délais — par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {drgVilleDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctConformite}%</td>
+                </tr>
+              ))}
+              {drgVilleDetail.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* NON OK — motivé (commentaire de justification renseigné) vs sans motif */}
+      <Card>
+        <CardHeader>
+          <CardTitle> NON OK — motivé vs sans motif</CardTitle>
+        </CardHeader>
+        <p className="px-5 -mt-1 pb-2 text-[11px] text-slate-400">
+          Les NON OK ne sont plus comptés dans "hors délai" ci-dessus (c'est une issue documentée, pas un retard) — on les détaille ici à
+          part : combien ont un commentaire de justification renseigné, et combien n'en ont pas (à compléter).
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total NON OK', 'Motivé', 'Sans motif', '% motivé'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {nonOkDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-green-700">{r.motive}</td>
+                  <td className="px-3 py-2 text-red-700">{r.sansMotif}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctMotive}%</td>
+                </tr>
+              ))}
+              {nonOkDetail.length === 0 && (
+                <tr>
+                  <td colSpan={5}>
+                    <EmptyState icon="" text="Aucun NON OK sur cette période" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
