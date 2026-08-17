@@ -1,14 +1,67 @@
+import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Button, Card } from '@/components/ui';
+import { Button, Card, useToast } from '@/components/ui';
+import { changePassword } from '@/lib/supabaseService';
 
 export default function ProfilPage() {
   const user = useAppStore((s) => s.user)!;
   const logout = useAppStore((s) => s.logout);
+  const { showToast } = useToast();
 
   const roleLabel: Record<string, string> = {
     superviseur: 'Superviseur',
     chef: "Chef d'Équipe",
     admin: 'Administrateur',
+    rh: 'RH',
+    consultation: 'Consultation',
+  };
+
+  const [showPwdForm, setShowPwdForm] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [confirmPwd, setConfirmPwd] = useState('');
+  const [pwdError, setPwdError] = useState('');
+  const [pwdLoading, setPwdLoading] = useState(false);
+
+  const inputClass =
+    'w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all bg-white';
+
+  const resetPwdForm = () => {
+    setCurrentPwd('');
+    setNewPwd('');
+    setConfirmPwd('');
+    setPwdError('');
+  };
+
+  const handleChangePassword = async () => {
+    setPwdError('');
+    if (!currentPwd || !newPwd || !confirmPwd) {
+      setPwdError('Remplissez tous les champs');
+      return;
+    }
+    if (newPwd.length < 6) {
+      setPwdError('Le nouveau mot de passe doit faire au moins 6 caractères');
+      return;
+    }
+    if (newPwd !== confirmPwd) {
+      setPwdError('La confirmation ne correspond pas au nouveau mot de passe');
+      return;
+    }
+    setPwdLoading(true);
+    try {
+      const result = await changePassword(user.id, currentPwd, newPwd);
+      if (result.success) {
+        showToast('Mot de passe modifié avec succès', 'success');
+        resetPwdForm();
+        setShowPwdForm(false);
+      } else {
+        setPwdError(result.error ?? 'Échec du changement de mot de passe');
+      }
+    } catch {
+      setPwdError('Connexion impossible pour le moment. Réessayez.');
+    } finally {
+      setPwdLoading(false);
+    }
   };
 
   return (
@@ -42,6 +95,64 @@ export default function ProfilPage() {
             </div>
           ))}
         </div>
+
+        {!showPwdForm ? (
+          <Button variant="outline" className="w-full justify-center mb-3" onClick={() => setShowPwdForm(true)}>
+            Changer mon mot de passe
+          </Button>
+        ) : (
+          <div className="mb-5 p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3">
+            {pwdError && (
+              <div className="px-3 py-2 bg-red-50 border border-red-100 rounded-lg text-red-700 text-xs">{pwdError}</div>
+            )}
+            <div>
+              <label className="block text-slate-500 text-xs font-semibold mb-1.5">Mot de passe actuel</label>
+              <input
+                type="password"
+                className={inputClass}
+                value={currentPwd}
+                onChange={(e) => setCurrentPwd(e.target.value)}
+                placeholder="Mot de passe actuel"
+              />
+            </div>
+            <div>
+              <label className="block text-slate-500 text-xs font-semibold mb-1.5">Nouveau mot de passe</label>
+              <input
+                type="password"
+                className={inputClass}
+                value={newPwd}
+                onChange={(e) => setNewPwd(e.target.value)}
+                placeholder="Au moins 6 caractères"
+              />
+            </div>
+            <div>
+              <label className="block text-slate-500 text-xs font-semibold mb-1.5">Confirmer le nouveau mot de passe</label>
+              <input
+                type="password"
+                className={inputClass}
+                value={confirmPwd}
+                onChange={(e) => setConfirmPwd(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleChangePassword()}
+                placeholder="Retapez le nouveau mot de passe"
+              />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button
+                variant="outline"
+                className="flex-1 justify-center"
+                onClick={() => {
+                  resetPwdForm();
+                  setShowPwdForm(false);
+                }}
+              >
+                Annuler
+              </Button>
+              <Button className="flex-1 justify-center" onClick={handleChangePassword} disabled={pwdLoading}>
+                {pwdLoading ? 'Enregistrement...' : 'Valider'}
+              </Button>
+            </div>
+          </div>
+        )}
 
         <Button variant="danger" className="w-full justify-center" onClick={logout}>
           Se Déconnecter
