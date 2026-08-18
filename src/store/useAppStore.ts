@@ -696,19 +696,16 @@ export const useAppStore = create<AppState>()(
       },
     }),
     {
-      name: 'gss-app-storage', // clé localStorage — conserve la session + un cache local
+      name: 'gss-app-storage', // clé localStorage — conserve uniquement la session
       storage: createJSONStorage(() => localStorage),
+      // On ne persiste QUE l'utilisateur connecté. Les listes (situations,
+      // employés, véhicules...) étaient réécrites en entier dans localStorage
+      // à chaque action, ce qui dépasse le quota de stockage du navigateur sur
+      // certains téléphones ("The quota has been exceeded") — et c'était de
+      // toute façon inutile : onRehydrateStorage recharge tout depuis Supabase
+      // au démarrage, avec ou sans cache local.
       partialize: (state) => ({
         user: state.user,
-        situations: state.situations,
-        equipes: state.equipes,
-        importHistory: state.importHistory,
-        employees: state.employees,
-        leaves: state.leaves,
-        loans: state.loans,
-        chantiers: state.chantiers,
-        vehicles: state.vehicles,
-        materiels: state.materiels,
       }),
       // Après un refresh : on garde la session (pas de retour forcé au login),
       // puis on resynchronise avec Supabase en tâche de fond.
