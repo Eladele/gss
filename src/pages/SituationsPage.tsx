@@ -155,7 +155,10 @@ export default function SituationsPage() {
     () =>
       situations.filter((s) => {
         if (villeScope && equipeVille(s.equipe) !== villeScope) return false;
-        if (search && !s.fgp.includes(search) && !s.zone.toLowerCase().includes(search.toLowerCase())) return false;
+        if (search.trim()) {
+          const q = search.trim().toLowerCase();
+          if (!s.fgp.toLowerCase().includes(q) && !s.zone.toLowerCase().includes(q)) return false;
+        }
         if (fType === '__installation__' && !MERGED_TYPES.includes(s.type)) return false;
         else if (fType === '__derangement__' && s.type !== 'DRG') return false;
         else if (fType && fType !== '__installation__' && fType !== '__derangement__' && s.type !== fType) return false;
@@ -164,7 +167,7 @@ export default function SituationsPage() {
         if (fDate && (s.dateDepo || s.dateMessage) !== fDate) return false;
         // Vue par défaut : seulement les situations pas encore décidées (en attente / en
         // cours) — OK et NON OK sont des issues finales, désactivable via le bouton.
-        if (showEnCoursOnly && !fStatus && !fDate) {
+        if (showEnCoursOnly && !fStatus && !fDate && !search.trim()) {
           if (s.status !== 'pending' && s.status !== 'in_progress') return false;
         }
         return true;
@@ -175,7 +178,7 @@ export default function SituationsPage() {
 
   // Colonnes réduites tant qu'on est dans la vue "en cours" par défaut (sans filtre
   // statut/date explicite) — vue simplifiée pour aller à l'essentiel au quotidien.
-  const isEnCoursView = showEnCoursOnly && !fStatus && !fDate;
+  const isEnCoursView = showEnCoursOnly && !fStatus && !fDate && !search.trim();
 
   const sorted = useMemo(() => {
     if (!sortBy || !SORT_GETTERS[sortBy]) return filtered;
@@ -322,7 +325,7 @@ export default function SituationsPage() {
           <h1 className="text-2xl font-black text-slate-900">Situations</h1>
           <p className="text-slate-400 text-sm">
             {filtered.length} / {situations.length} situations
-            {showEnCoursOnly && !fStatus && !fDate && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
+            {showEnCoursOnly && !fStatus && !fDate && !search.trim() && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
           </p>
         </div>
         <div className="flex items-center gap-2">
