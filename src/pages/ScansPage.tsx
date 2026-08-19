@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ExcelJS from 'exceljs';
 import { useAppStore } from '@/store/useAppStore';
 import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useToast } from '@/components/ui';
+import { TrendArea } from '@/components/charts';
+import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
 import type { ScanRecord } from '@/types';
 
 // Trois intervalles de signal (Rx Optical Power, dBm) :
@@ -264,10 +266,21 @@ export default function ScansPage() {
             if (fDateTo && (!s.scanTime || s.scanTime.slice(0, 10) > fDateTo)) return false;
           }
           return true;
-        })
-        .slice(0, 300),
+        }),
     [scans, fZone, fEquipe, equipesAvecZones, fResult, fSignal, fNouveau, fDateFrom, fDateTo],
-  ); // limité à 300 lignes affichées (performance)
+  );
+
+  // ── Pagination (remplace l'ancien plafond silencieux à 300 lignes) ──
+  const SCAN_PAGE_SIZE = 50;
+  const [scanPage, setScanPage] = useState(1);
+  useEffect(() => {
+    setScanPage(1);
+  }, [fZone, fEquipe, fResult, fSignal, fNouveau, fDateFrom, fDateTo]);
+  const scanTotalPages = Math.max(1, Math.ceil(filtered.length / SCAN_PAGE_SIZE));
+  const paginatedScans = useMemo(
+    () => filtered.slice((scanPage - 1) * SCAN_PAGE_SIZE, scanPage * SCAN_PAGE_SIZE),
+    [filtered, scanPage],
+  );
 
   const nouveauxCount = useMemo(() => scans.filter((s) => s.changeType === 'new').length, [scans]);
 
@@ -314,6 +327,28 @@ export default function ScansPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const exportScansToExcel = async () => {
+    const workbook = new ExcelJS.Workbook();
+    addSheetFromObjects(
+      workbook,
+      'Scans',
+      filtered.map((s) => ({
+        Zone: s.zone,
+        Résultat: s.result,
+        FGP: s.onuName || s.onuId || '',
+        'SN/MAC': s.snMac || '',
+        'Rx (dBm)': s.rxPower ?? '',
+        Niveau: signalLevel(s.rxPower) === 'absent' ? '' : SIGNAL_LABELS[signalLevel(s.rxPower)].split(' (')[0],
+        'Distance (m)': s.ranging ?? '',
+        'Scan time': formatScanDate(s.scanTime),
+        'Ajouté au NMS': formatScanDate(s.timeAddedToNms),
+        Remarque: s.remarque || '',
+      })),
+    );
+    const buffer = await workbook.xlsx.writeBuffer();
+    downloadWorkbookBuffer(buffer as ArrayBuffer, `scans_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   return (
@@ -415,6 +450,23 @@ export default function ScansPage() {
         <StatCard value={stats.suspendus} label="Total suspendus" icon="" accent="#8D6E63" />
       </div>
 
+      {/* ── Graphique de tendance % scanné (semaine par semaine) ── */}
+      {scanHistory.length > 1 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Tendance % scanné</CardTitle>
+          </CardHeader>
+          <div className="p-4">
+            <TrendArea
+              points={[...scanHistory]
+                .reverse()
+                .map((h) => ({ label: new Date(h.importedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }), value: h.pctScanne }))}
+              color="#1565C0"
+            />
+          </div>
+        </Card>
+      )}
+
       {/* ── Historique des imports (évolution semaine par semaine) ── */}
       {scanHistory.length > 0 && (
         <Card>
@@ -472,6 +524,9 @@ export default function ScansPage() {
           <div className="flex items-center gap-2 flex-wrap w-full">
             <CardTitle>Détail des scans</CardTitle>
             <div className="flex items-center gap-2 ml-auto flex-wrap">
+              <Button variant="outline" size="sm" onClick={exportScansToExcel} disabled={filtered.length === 0}>
+                Exporter Excel
+              </Button>
               <Select
                 value={fEquipe}
                 onChange={(e) => {
@@ -568,7 +623,7 @@ export default function ScansPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filtered.map((s) => {
+                {paginatedScans.map((s) => {
                   const level = signalLevel(s.rxPower);
                   return (
                     <tr key={s.id} className={level === 'degrade' ? 'bg-red-50' : ''}>
@@ -604,12 +659,27 @@ export default function ScansPage() {
                 })}
               </tbody>
             </table>
-            {scans.length > 300 && (
-              <p className="text-[11px] text-slate-400 p-3">
-                Affichage limité à 300 lignes sur {filtered.length === 300 ? '300+' : filtered.length} résultats filtrés — affinez les
-                filtres pour cibler.
+            <div className="flex items-center justify-between px-3 py-3 border-t border-slate-100 flex-wrap gap-2">
+              <p className="text-xs text-slate-400">
+                {(scanPage - 1) * SCAN_PAGE_SIZE + 1}–{Math.min(scanPage * SCAN_PAGE_SIZE, filtered.length)} sur {filtered.length}
               </p>
-            )}
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" disabled={scanPage <= 1} onClick={() => setScanPage((p) => Math.max(1, p - 1))}>
+                  Précédent
+                </Button>
+                <span className="text-xs text-slate-500 font-medium px-1">
+                  Page {scanPage} / {scanTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={scanPage >= scanTotalPages}
+                  onClick={() => setScanPage((p) => Math.min(scanTotalPages, p + 1))}
+                >
+                  Suivant
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </Card>

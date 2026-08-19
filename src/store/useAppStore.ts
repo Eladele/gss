@@ -102,7 +102,20 @@ interface AppState {
     },
   ) => Promise<void>;
   removeSituation: (id: string) => Promise<void>;
-  addSituationManual: (fgp: string, type: string, zone: string, motif: string, equipe?: string) => Promise<void>;
+  addSituationManual: (
+    fgp: string,
+    type: string,
+    zone: string,
+    motif: string,
+    equipe?: string,
+    extra?: {
+      dateMessage?: string;
+      serviceDestination?: string;
+      dateDepo?: string;
+      dateClt?: string;
+      poteau?: number;
+    },
+  ) => Promise<void>;
   importSituations: (rows: Situation[], fileName: string) => Promise<void>;
   removeImportRecord: (id: string) => Promise<void>;
   reassign: (id: string, equipe: string) => void;
@@ -351,7 +364,7 @@ export const useAppStore = create<AppState>()(
         }
       },
 
-      addSituationManual: async (fgp, type, zone, motif, equipeOverride) => {
+      addSituationManual: async (fgp, type, zone, motif, equipeOverride, extra) => {
         // Résolution équipe : override fourni sinon déduit de la zone (comme à l'import)
         const zoneMap: Record<string, string> = {};
         get().equipes.forEach((e) =>
@@ -360,6 +373,10 @@ export const useAppStore = create<AppState>()(
           }),
         );
         const equipe = equipeOverride || ZONE_EQUIPE_MAP[zone] || zoneMap[zone] || '';
+        const today = new Date().toISOString().slice(0, 10);
+        // Si une Date de Mise en Service est saisie à la création, la situation est déjà
+        // résolue → statut OK d'emblée (même logique que l'import Excel), sinon "pending".
+        const dateClt = extra?.dateClt || '';
         const newSit: Situation = {
           id: 'fgp-' + Date.now(),
           fgp,
@@ -367,10 +384,13 @@ export const useAppStore = create<AppState>()(
           zone,
           equipe,
           motif,
-          dateDepo: new Date().toISOString().slice(0, 10),
-          dateClt: '',
+          dateMessage: extra?.dateMessage || undefined,
+          serviceDestination: extra?.serviceDestination || undefined,
+          dateDepo: extra?.dateDepo || today,
+          dateClt,
+          poteau: extra?.poteau ?? 0,
           delai: 0,
-          status: 'pending',
+          status: dateClt ? 'ok' : 'pending',
           comment: '',
         };
         set((s) => ({ situations: [newSit, ...s.situations] }));

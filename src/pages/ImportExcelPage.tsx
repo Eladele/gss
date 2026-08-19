@@ -48,6 +48,7 @@ export default function ImportExcelPage() {
   const importHistory = useAppStore((s) => s.importHistory);
   const removeImportRecord = useAppStore((s) => s.removeImportRecord);
   const equipes = useAppStore((s) => s.equipes);
+  const situations = useAppStore((s) => s.situations);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -67,6 +68,11 @@ export default function ImportExcelPage() {
     });
     return map;
   }, [equipes]);
+
+  // FGP déjà présents en base (situations chargées) — pour signaler dans l'aperçu
+  // lesquelles lignes du fichier correspondent à des dossiers déjà suivis (mise à
+  // jour probable) plutôt que de vraies nouvelles situations.
+  const existingFgpSet = useMemo(() => new Set(situations.map((s) => s.fgp.trim().toLowerCase())), [situations]);
 
   // Résout l'équipe à partir de la zone (insensible à la casse)
   const resolveEquipe = (zone: string, equipeFromFile: string): string => {
@@ -239,16 +245,18 @@ export default function ImportExcelPage() {
           });
         }
 
-        // ── Déduplication par FGP + TYPE + MOTIF + DATE MISE EN SERVICE — pour toutes les
-        // lignes, y compris DRG. Nécessaire car la base rejette l'upsert si deux lignes du
-        // même lot ont exactement la même clé de conflit ("ON CONFLICT DO UPDATE command
-        // cannot affect row a second time") — donc même les vrais doublons DRG doivent être
-        // fusionnés ici. Un même FGP+TYPE peut légitimement avoir plusieurs lignes actives
-        // en même temps chez vous (différents motifs/dates de passage) — on ne fusionne donc
-        // QUE les lignes strictement identiques sur ces 4 champs, tout le reste est conservé.
+        // ── Déduplication par DATE MESSAGE + TYPE + FGP + SERVICE DESTINATION + ZONE +
+        // DATE DEPOT + MOTIF — doit rester synchronisée avec la contrainte UNIQUE réelle
+        // de la table `situations` (situations_dedup_key) et avec le onConflict utilisé
+        // par insertSituationsBulk/upsertSituation dans supabaseService.ts. Nécessaire car
+        // la base rejette l'upsert si deux lignes du même lot ont exactement la même clé
+        // de conflit ("ON CONFLICT DO UPDATE command cannot affect row a second time") —
+        // donc même les vrais doublons doivent être fusionnés ici. Motif est inclus dans
+        // la clé pour ne pas fusionner par erreur deux interventions distinctes qui
+        // partageraient les 6 autres champs (ex: une clôturée OK et une NON OK).
         const bestByKey = new Map<string, Situation & { _hasDelai?: boolean }>();
         for (const r of rows) {
-          const key = `${r.fgp}|${r.type}|${r.motif}|${r.dateClt}`;
+          const key = `${r.dateMessage}|${r.type}|${r.fgp}|${r.serviceDestination}|${r.zone}|${r.dateDepo}|${r.motif}`;
           const existing = bestByKey.get(key);
           if (!existing) {
             bestByKey.set(key, r);
@@ -265,8 +273,9 @@ export default function ImportExcelPage() {
         const assigned = dedupedRows.filter((r) => r.equipe).length;
         const unassigned = dedupedRows.length - assigned;
         const autoOk = dedupedRows.filter((r) => r.status === 'ok').length;
+        const dejaEnBase = dedupedRows.filter((r) => existingFgpSet.has(r.fgp.trim().toLowerCase())).length;
         showToast(
-          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}${rejected.length > 0 ? ` · ${rejected.length} lignes rejetées (type/FGP invalide, voir ci-dessous)` : ''}`,
+          `${dedupedRows.length} lignes retenues${duplicatesCount > 0 ? ` · ${duplicatesCount} doublons exacts (même FGP+TYPE+MOTIF+DATE) fusionnés` : ''} — ${assigned} affectées${unassigned > 0 ? `, ${unassigned} sans équipe` : ''}${autoOk > 0 ? ` · ${autoOk} auto-OK (sans motif + date de mise en service)` : ''}${dejaEnBase > 0 ? ` · ${dejaEnBase} FGP déjà en base (mise à jour probable)` : ''}${rejected.length > 0 ? ` · ${rejected.length} lignes rejetées (type/FGP invalide, voir ci-dessous)` : ''}`,
           rejected.length > 0 ? 'warning' : unassigned === 0 ? 'success' : 'warning',
         );
         setLoading(false);
@@ -467,18 +476,37 @@ export default function ImportExcelPage() {
                   {previewStats[' Non affectée']} situation(s) sans équipe — zones non reconnues
                 </p>
               )}
+              {(() => {
+                const dejaEnBase = preview.filter((r) => existingFgpSet.has(r.fgp.trim().toLowerCase())).length;
+                return dejaEnBase > 0 ? (
+                  <p className="text-xs text-amber-700 mt-2">
+                    {dejaEnBase} FGP du fichier existe(nt) déjà en base — probable mise à jour plutôt que nouvelle situation (voir colonne
+                    « État » ci-dessous).
+                  </p>
+                ) : null;
+              })()}
             </div>
             <div className="border border-slate-200 rounded-xl overflow-hidden max-h-72 overflow-y-auto scrollbar-hide">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
                   <tr>
-                    {['#', 'Date Message', 'Type', 'FGP', 'Service Dest.', 'Zone', 'Date Mise en Service', 'Motif', 'Délai', 'Statut'].map(
-                      (h) => (
-                        <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">
-                          {h}
-                        </th>
-                      ),
-                    )}
+                    {[
+                      '#',
+                      'Date Message',
+                      'Type',
+                      'FGP',
+                      'État',
+                      'Service Dest.',
+                      'Zone',
+                      'Date Mise en Service',
+                      'Motif',
+                      'Délai',
+                      'Statut',
+                    ].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wide">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -490,6 +518,13 @@ export default function ImportExcelPage() {
                         <TypeBadge type={row.type} />
                       </td>
                       <td className="px-3 py-2 font-bold text-slate-800">{row.fgp}</td>
+                      <td className="px-3 py-2">
+                        {existingFgpSet.has(row.fgp.trim().toLowerCase()) ? (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">Déjà en base</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-700">Nouveau</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-400">{row.serviceDestination || '—'}</td>
                       <td className="px-3 py-2">
                         <ZoneChip zone={row.zone} />

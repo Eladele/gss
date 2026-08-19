@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
-import { calcDelai, isHorsDelai, countPoteaux, MERGED_TYPES } from '@/utils/stats';
+import { calcDelai, isHorsDelai, countPoteaux, MERGED_TYPES, addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
+import ExcelJS from 'exceljs';
 import {
   Card,
   CardHeader,
@@ -30,6 +31,7 @@ export default function SituationsPage() {
   const markOK = useAppStore((s) => s.markOK);
   const markNonOK = useAppStore((s) => s.markNonOK);
   const addSituationManual = useAppStore((s) => s.addSituationManual);
+  const reassign = useAppStore((s) => s.reassign);
   const { showToast } = useToast();
 
   const isAdmin = user.role === 'admin' || user.role === 'superviseur';
@@ -92,6 +94,16 @@ export default function SituationsPage() {
   const [fgpZone, setFgpZone] = useState('');
   const [fgpMotif, setFgpMotif] = useState('');
   const [fgpEquipe, setFgpEquipe] = useState('');
+  const [fgpDateMessage, setFgpDateMessage] = useState('');
+  const [fgpServiceDest, setFgpServiceDest] = useState('');
+  const [fgpDateDepot, setFgpDateDepot] = useState('');
+  const [fgpDateMES, setFgpDateMES] = useState('');
+  const [fgpPoteau, setFgpPoteau] = useState('');
+
+  // ── Sélection multiple (actions groupées) ──
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkEquipe, setBulkEquipe] = useState('');
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const PAGE_SIZE = 25;
   const [page, setPage] = useState(1);
@@ -310,12 +322,139 @@ export default function SituationsPage() {
       return;
     }
     const zone = fgpZone || allZones[0];
-    await addSituationManual(fgpValue.trim(), fgpType, zone, fgpMotif.trim(), fgpEquipe || undefined);
+    await addSituationManual(fgpValue.trim(), fgpType, zone, fgpMotif.trim(), fgpEquipe || undefined, {
+      dateMessage: fgpDateMessage || undefined,
+      serviceDestination: fgpServiceDest.trim() || undefined,
+      dateDepo: fgpDateDepot || undefined,
+      dateClt: fgpDateMES || undefined,
+      poteau: fgpPoteau ? parseInt(fgpPoteau, 10) || 0 : undefined,
+    });
     setFgpOpen(false);
     setFgpValue('');
     setFgpMotif('');
     setFgpEquipe('');
+    setFgpDateMessage('');
+    setFgpServiceDest('');
+    setFgpDateDepot('');
+    setFgpDateMES('');
+    setFgpPoteau('');
     showToast(`FGP ${fgpValue.trim()} créé → ${fgpEquipe || 'auto-assigné'} `, 'success');
+  };
+
+  // ── Avertissement (non bloquant) si le FGP tapé existe déjà — plusieurs situations
+  // pour un même FGP sont autorisées (motifs/dates différents), mais on informe
+  // l'utilisateur pour éviter une re-création involontaire d'un dossier déjà suivi.
+  const existingFgpMatches = useMemo(() => {
+    const q = fgpValue.trim().toLowerCase();
+    if (!q) return [];
+    return situations.filter((s) => s.fgp.trim().toLowerCase() === q);
+  }, [fgpValue, situations]);
+
+  // ── Sélection multiple ──
+  const toggleSelectOne = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const pageIds = paginated.map((s) => s.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+  const toggleSelectPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const bulkReassign = async () => {
+    if (!bulkEquipe || selectedIds.size === 0) return;
+    setBulkLoading(true);
+    try {
+      selectedIds.forEach((id) => reassign(id, bulkEquipe));
+      showToast(`${selectedIds.size} situation(s) réaffectée(s) à ${bulkEquipe}`, 'success');
+      clearSelection();
+      setBulkEquipe('');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const bulkMarkOK = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Marquer OK les ${selectedIds.size} situation(s) sélectionnée(s) (date de mise en service = aujourd'hui) ?`)) return;
+    setBulkLoading(true);
+    let ok = 0;
+    let fail = 0;
+    for (const id of selectedIds) {
+      try {
+        await markOK(id, {});
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    setBulkLoading(false);
+    clearSelection();
+    showToast(`${ok} situation(s) marquée(s) OK${fail > 0 ? ` · ${fail} échec(s)` : ''}`, fail > 0 ? 'warning' : 'success');
+  };
+
+  const bulkMarkNOK = async () => {
+    if (selectedIds.size === 0) return;
+    const comment = prompt(`Motif NON OK pour les ${selectedIds.size} situation(s) sélectionnée(s) :`, '');
+    if (comment === null) return;
+    setBulkLoading(true);
+    let ok = 0;
+    let fail = 0;
+    for (const id of selectedIds) {
+      try {
+        await markNonOK(id, comment);
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    setBulkLoading(false);
+    clearSelection();
+    showToast(`${ok} situation(s) marquée(s) NON OK${fail > 0 ? ` · ${fail} échec(s)` : ''}`, fail > 0 ? 'warning' : 'success');
+  };
+
+  // ── Export Excel de la vue filtrée (pas seulement la page affichée) ──
+  const exportToExcel = async () => {
+    const workbook = new ExcelJS.Workbook();
+    addSheetFromObjects(
+      workbook,
+      'Situations',
+      sorted.map((s) => {
+        const sc = scanByFgp.get(normalizeKey(s.fgp));
+        return {
+          FGP: s.fgp,
+          Type: s.type,
+          'Date Message': s.dateMessage || '',
+          'Service Dest.': s.serviceDestination || '',
+          Zone: s.zone,
+          'Date Dépôt': s.dateDepo || '',
+          'Date Mise en Service': s.dateClt || '',
+          Motif: s.motif || '',
+          Poteau: s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif),
+          Équipe: s.equipe || '',
+          'Délai (j)': s.dateDepo || s.dateMessage ? calcDelai(s) : '',
+          Conformité: s.status === 'non_ok' ? '' : s.dateDepo || s.dateMessage ? (isHorsDelai(s) ? 'HorsDélais' : 'TLID') : '',
+          'Statut Réseau': sc?.result === 'SCANNE' ? 'Scanné' : sc ? 'Non scanné' : '',
+          'Rx (dBm)': sc?.rxPower ?? '',
+          'Ranging (m)': sc?.ranging ?? '',
+          'Clôturé par': s.closedBy || '',
+          Statut: s.status,
+          Commentaire: s.comment || '',
+        };
+      }),
+    );
+    const buffer = await workbook.xlsx.writeBuffer();
+    downloadWorkbookBuffer(buffer as ArrayBuffer, `situations_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   return (
@@ -329,6 +468,9 @@ export default function SituationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={exportToExcel} disabled={filtered.length === 0}>
+            Exporter Excel
+          </Button>
           {isAdmin && canAct && (
             <Button variant="outline" icon="" onClick={() => setFgpOpen(true)}>
               Créer un FGP
@@ -336,6 +478,33 @@ export default function SituationsPage() {
           )}
         </div>
       </div>
+
+      {/* ─── Barre d'actions groupées (visible dès qu'une ligne est sélectionnée) ─── */}
+      {canAct && selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 flex-wrap bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+          <span className="text-sm font-semibold text-blue-800">{selectedIds.size} sélectionnée(s)</span>
+          <Select value={bulkEquipe} onChange={(e) => setBulkEquipe(e.target.value)} style={{ width: 'auto' }}>
+            <option value="">Réaffecter à...</option>
+            {equipes.map((e) => (
+              <option key={e.id} value={e.name}>
+                {e.name}
+              </option>
+            ))}
+          </Select>
+          <Button variant="outline" size="sm" onClick={bulkReassign} disabled={!bulkEquipe || bulkLoading}>
+            Réaffecter
+          </Button>
+          <Button variant="success" size="sm" onClick={bulkMarkOK} disabled={bulkLoading}>
+            Marquer OK
+          </Button>
+          <Button variant="danger" size="sm" onClick={bulkMarkNOK} disabled={bulkLoading}>
+            Marquer NON OK
+          </Button>
+          <Button variant="ghost" size="sm" onClick={clearSelection} disabled={bulkLoading}>
+            Annuler la sélection
+          </Button>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -391,6 +560,11 @@ export default function SituationsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
+                  {canAct && (
+                    <th className="px-3 py-3 w-8">
+                      <input type="checkbox" checked={allPageSelected} onChange={toggleSelectPage} title="Tout sélectionner (page)" />
+                    </th>
+                  )}
                   {(isEnCoursView
                     ? ['FGP', 'Type', 'Date Message', 'Zone', 'Statut', 'Actions']
                     : [
@@ -445,8 +619,13 @@ export default function SituationsPage() {
                   return (
                   <tr
                     key={s.id}
-                    className={`border-b border-slate-50 hover:bg-slate-50/50 transition-colors ${s.isUrgent ? 'bg-orange-50/30' : ''}`}
+                    className={`border-b border-slate-50 hover:bg-slate-50/50 transition-colors ${s.isUrgent ? 'bg-orange-50/30' : ''} ${selectedIds.has(s.id) ? 'bg-blue-50/50' : ''}`}
                   >
+                    {canAct && (
+                      <td className="px-3 py-3">
+                        <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggleSelectOne(s.id)} />
+                      </td>
+                    )}
                     <td className="px-3 py-3 font-bold text-slate-800">
                       {s.fgp}
                       {s.isUrgent && <span className="ml-1 text-orange-500 text-xs"></span>}
@@ -650,6 +829,16 @@ export default function SituationsPage() {
               onChange={(e) => setFgpValue(e.target.value)}
               placeholder="ex: 223344"
             />
+            {existingFgpMatches.length > 0 && (
+              <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
+                ⚠ Ce FGP existe déjà — {existingFgpMatches.length} situation(s) trouvée(s) :{' '}
+                {existingFgpMatches
+                  .slice(0, 3)
+                  .map((s) => `${s.type} (${s.status === 'ok' ? 'OK' : s.status === 'non_ok' ? 'NON OK' : 'en cours'})`)
+                  .join(', ')}
+                {existingFgpMatches.length > 3 ? '…' : ''} — vous pouvez continuer si c'est une nouvelle intervention distincte.
+              </div>
+            )}
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1.5">Type</label>
@@ -684,6 +873,70 @@ export default function SituationsPage() {
                 </option>
               ))}
             </Select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1.5">
+                Date Message <span className="text-slate-300 font-normal">(optionnel)</span>
+              </label>
+              <input
+                type="date"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                value={fgpDateMessage}
+                onChange={(e) => setFgpDateMessage(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1.5">
+                Date Dépôt <span className="text-slate-300 font-normal">(défaut: aujourd'hui)</span>
+              </label>
+              <input
+                type="date"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                value={fgpDateDepot}
+                onChange={(e) => setFgpDateDepot(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1.5">
+                Date Mise en Service <span className="text-slate-300 font-normal">(si déjà résolu — passe le FGP en OK)</span>
+              </label>
+              <input
+                type="date"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                value={fgpDateMES}
+                onChange={(e) => setFgpDateMES(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1.5">
+                Poteau <span className="text-slate-300 font-normal">(optionnel)</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                value={fgpPoteau}
+                onChange={(e) => setFgpPoteau(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-500 block mb-1.5">
+              Service Destination <span className="text-slate-300 font-normal">(optionnel — ex: GSS)</span>
+            </label>
+            <input
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+              value={fgpServiceDest}
+              onChange={(e) => setFgpServiceDest(e.target.value)}
+              placeholder="ex: GSS"
+            />
           </div>
 
           <div>

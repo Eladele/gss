@@ -29,7 +29,7 @@ export async function fetchSituations(): Promise<Situation[]> {
 
 export async function upsertSituation(sit: Situation): Promise<void> {
   const { id: _omit, ...payload } = toDbSituation(sit);
-  const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'fgp,type,motif,date_mise_en_service' });
+  const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'date_message,type,fgp,service_destination,zone,date_depo,motif' });
   if (error) console.error('upsertSituation:', error);
 }
 
@@ -74,12 +74,13 @@ export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
     // `id` n'est PAS envoyé ici : les id générés côté app (ex: "imp-546-...") ne sont pas
     // des UUID valides pour la colonne `id` de la table, ce qui faisait échouer tout le lot
     // avec "invalid input syntax for type uuid". On laisse Postgres générer le vrai UUID ;
-    // le upsert se base sur `fgp` (onConflict) pour la déduplication, pas sur `id`.
+    // le upsert se base sur la clé composite (onConflict, cf. contrainte situations_dedup_key
+    // en base) pour la déduplication, pas sur `id`.
     const chunk = rows.slice(i, i + CHUNK).map((r) => {
       const { id: _omit, ...rest } = toDbSituation(r);
       return rest;
     });
-    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: 'fgp,type,motif,date_mise_en_service' });
+    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: 'date_message,type,fgp,service_destination,zone,date_depo,motif' });
     if (error) {
       console.error('insertSituationsBulk chunk:', error);
       lastError = error.message;
