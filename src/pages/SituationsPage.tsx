@@ -103,6 +103,7 @@ export default function SituationsPage() {
   // ── Sélection multiple (actions groupées) ──
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkEquipe, setBulkEquipe] = useState('');
+  const [bulkDateMES, setBulkDateMES] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
 
   const PAGE_SIZE = 25;
@@ -386,13 +387,14 @@ export default function SituationsPage() {
 
   const bulkMarkOK = async () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Marquer OK les ${selectedIds.size} situation(s) sélectionnée(s) (date de mise en service = aujourd'hui) ?`)) return;
+    const dateLabel = bulkDateMES || "aujourd'hui";
+    if (!confirm(`Marquer OK les ${selectedIds.size} situation(s) sélectionnée(s) (date de mise en service = ${dateLabel}) ?`)) return;
     setBulkLoading(true);
     let ok = 0;
     let fail = 0;
     for (const id of selectedIds) {
       try {
-        await markOK(id, {});
+        await markOK(id, bulkDateMES ? { dateClt: bulkDateMES } : {});
         ok++;
       } catch {
         fail++;
@@ -400,6 +402,7 @@ export default function SituationsPage() {
     }
     setBulkLoading(false);
     clearSelection();
+    setBulkDateMES('');
     showToast(`${ok} situation(s) marquée(s) OK${fail > 0 ? ` · ${fail} échec(s)` : ''}`, fail > 0 ? 'warning' : 'success');
   };
 
@@ -494,6 +497,13 @@ export default function SituationsPage() {
           <Button variant="outline" size="sm" onClick={bulkReassign} disabled={!bulkEquipe || bulkLoading}>
             Réaffecter
           </Button>
+          <input
+            type="date"
+            value={bulkDateMES}
+            onChange={(e) => setBulkDateMES(e.target.value)}
+            className="border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
+            title="Date de mise en service à appliquer (défaut : aujourd'hui si vide)"
+          />
           <Button variant="success" size="sm" onClick={bulkMarkOK} disabled={bulkLoading}>
             Marquer OK
           </Button>
