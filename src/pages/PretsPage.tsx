@@ -12,6 +12,8 @@ export default function PretsPage() {
   const loans = useAppStore((s) => s.loans);
   const loadEmployees = useAppStore((s) => s.loadEmployees);
   const addLoan = useAppStore((s) => s.addLoan);
+  const editLoan = useAppStore((s) => s.editLoan);
+  const removeLoan = useAppStore((s) => s.removeLoan);
   const recordLoanPayment = useAppStore((s) => s.recordLoanPayment);
   const { showToast } = useToast();
 
@@ -26,6 +28,7 @@ export default function PretsPage() {
   }, [employees]);
 
   const [addOpen, setAddOpen] = useState(false);
+  const [editingLoanId, setEditingLoanId] = useState<string | null>(null);
   const [fEmployee, setFEmployee] = useState('');
   const [fMontant, setFMontant] = useState('');
   const [fMensualite, setFMensualite] = useState('');
@@ -55,27 +58,62 @@ export default function PretsPage() {
     setFBanqueCaisse('');
   };
 
-  const handleAdd = async () => {
+  const handleSubmit = async () => {
     if (!fEmployee || !fMontant || !fMensualite || !fDate) {
       showToast('Employé, montant, mensualité et date sont obligatoires', 'error');
       return;
     }
     setSaving(true);
     try {
-      await addLoan({
-        employeeId: fEmployee,
-        montantTotal: Number(fMontant),
-        mensualite: Number(fMensualite),
-        dateDebut: fDate,
-        dureeMois: fDuree ? Number(fDuree) : undefined,
-        banqueCaisse: fBanqueCaisse || undefined,
-      });
+      if (editingLoanId) {
+        await editLoan(editingLoanId, {
+          montantTotal: Number(fMontant),
+          mensualite: Number(fMensualite),
+          dateDebut: fDate,
+          dureeMois: fDuree ? Number(fDuree) : undefined,
+          banqueCaisse: fBanqueCaisse || undefined,
+        });
+        showToast('Prêt modifié', 'success');
+      } else {
+        await addLoan({
+          employeeId: fEmployee,
+          montantTotal: Number(fMontant),
+          mensualite: Number(fMensualite),
+          dateDebut: fDate,
+          dureeMois: fDuree ? Number(fDuree) : undefined,
+          banqueCaisse: fBanqueCaisse || undefined,
+        });
+      }
       setAddOpen(false);
+      setEditingLoanId(null);
       resetForm();
     } catch (err: any) {
       showToast('Échec — ' + (err?.message || 'erreur inconnue'), 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openEdit = (l: (typeof loans)[number]) => {
+    setEditingLoanId(l.id);
+    setFEmployee(l.employeeId);
+    setFMontant(String(l.montantTotal));
+    setFMensualite(String(l.mensualite));
+    setFDate(l.dateDebut);
+    setFDuree(l.dureeMois ? String(l.dureeMois) : '');
+    setFBanqueCaisse(l.banqueCaisse || '');
+    setAddOpen(true);
+  };
+
+  const handleDelete = async (l: (typeof loans)[number]) => {
+    const emp = employeeById.get(l.employeeId);
+    if (!confirm(`Supprimer définitivement le prêt de ${emp?.name || 'cet employé'} (${l.montantTotal.toLocaleString('fr-FR')} MRU) ?\n\nCette action est irréversible et supprime aussi son historique de prélèvements.`))
+      return;
+    try {
+      await removeLoan(l.id);
+      showToast('Prêt supprimé', 'success');
+    } catch (err: any) {
+      showToast('Échec — ' + (err?.message || 'erreur inconnue'), 'error');
     }
   };
 
@@ -96,7 +134,15 @@ export default function PretsPage() {
             La mensualité en cours est déduite automatiquement du salaire dans l'export "Ordre de virement".
           </p>
         </div>
-        <Button onClick={() => setAddOpen(true)}>Nouveau prêt</Button>
+        <Button
+          onClick={() => {
+            setEditingLoanId(null);
+            resetForm();
+            setAddOpen(true);
+          }}
+        >
+          Nouveau prêt
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -147,14 +193,28 @@ export default function PretsPage() {
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {l.statut === 'actif' && (
+                        <div className="flex gap-2 justify-end flex-wrap">
+                          {l.statut === 'actif' && (
+                            <button
+                              onClick={() => handlePrelever(l.id)}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95"
+                            >
+                              Prélever ce mois
+                            </button>
+                          )}
                           <button
-                            onClick={() => handlePrelever(l.id)}
-                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors active:scale-95"
+                            onClick={() => openEdit(l)}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-600 text-xs font-bold rounded-lg transition-colors active:scale-95"
                           >
-                            Prélever ce mois
+                            Modifier
                           </button>
-                        )}
+                          <button
+                            onClick={() => handleDelete(l)}
+                            className="px-3 py-1.5 bg-red-100 hover:bg-red-600 hover:text-white text-red-700 text-xs font-bold rounded-lg transition-colors active:scale-95"
+                          >
+                            Supprimer
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -165,11 +225,18 @@ export default function PretsPage() {
         )}
       </Card>
 
-      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Nouveau prêt">
+      <Modal
+        open={addOpen}
+        onClose={() => {
+          setAddOpen(false);
+          setEditingLoanId(null);
+        }}
+        title={editingLoanId ? 'Modifier le prêt' : 'Nouveau prêt'}
+      >
         <div className="space-y-4">
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1.5">Employé</label>
-            <Select className="w-full" value={fEmployee} onChange={(e) => setFEmployee(e.target.value)}>
+            <Select className="w-full" value={fEmployee} onChange={(e) => setFEmployee(e.target.value)} disabled={!!editingLoanId}>
               <option value="">-- Sélectionner --</option>
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>
@@ -177,6 +244,7 @@ export default function PretsPage() {
                 </option>
               ))}
             </Select>
+            {editingLoanId && <p className="text-[11px] text-slate-400 mt-1">L'employé ne peut pas être changé après création.</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -207,11 +275,17 @@ export default function PretsPage() {
             </Select>
           </div>
           <div className="flex gap-3 justify-end pt-2">
-            <Button variant="outline" onClick={() => setAddOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAddOpen(false);
+                setEditingLoanId(null);
+              }}
+            >
               Annuler
             </Button>
-            <Button onClick={handleAdd} disabled={saving}>
-              {saving ? '...' : 'Enregistrer'}
+            <Button onClick={handleSubmit} disabled={saving}>
+              {saving ? '...' : editingLoanId ? 'Enregistrer les modifications' : 'Enregistrer'}
             </Button>
           </div>
         </div>

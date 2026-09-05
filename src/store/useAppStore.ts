@@ -43,6 +43,8 @@ import {
   deleteScanImportSnapshot,
   fetchLoans,
   createLoan,
+  updateLoan,
+  deleteLoan,
   recordLoanPayment as recordLoanPaymentService,
   fetchChantiers,
   createChantier,
@@ -143,6 +145,17 @@ interface AppState {
     dureeMois?: number;
     banqueCaisse?: string;
   }) => Promise<void>;
+  editLoan: (
+    id: string,
+    loan: Partial<{
+      montantTotal: number;
+      mensualite: number;
+      dateDebut: string;
+      dureeMois?: number;
+      banqueCaisse?: string;
+    }>,
+  ) => Promise<void>;
+  removeLoan: (id: string) => Promise<void>;
   recordLoanPayment: (loanId: string, month: string) => Promise<void>;
   loadChantiers: () => Promise<void>;
   addChantier: (c: Partial<Chantier>) => Promise<void>;
@@ -553,6 +566,29 @@ export const useAppStore = create<AppState>()(
         if (newLoan) {
           set((s) => ({ loans: [newLoan, ...s.loans] }));
           get().addNotification('Prêt enregistré', `Prêt ajouté pour un montant de ${newLoan.montantTotal} MRU.`, 'ok');
+        }
+      },
+
+      editLoan: async (id, loan) => {
+        const previous = get().loans.find((l) => l.id === id);
+        if (!previous) return;
+        set((s) => ({ loans: s.loans.map((l) => (l.id === id ? { ...l, ...loan } : l)) }));
+        try {
+          await updateLoan(id, loan);
+        } catch (err: unknown) {
+          set((s) => ({ loans: s.loans.map((l) => (l.id === id ? previous : l)) }));
+          throw err;
+        }
+      },
+
+      removeLoan: async (id) => {
+        const previous = get().loans;
+        set((s) => ({ loans: s.loans.filter((l) => l.id !== id) }));
+        try {
+          await deleteLoan(id);
+        } catch (err: unknown) {
+          set({ loans: previous });
+          throw err;
         }
       },
 

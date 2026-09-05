@@ -426,6 +426,30 @@ export default function SituationsPage() {
     showToast(`${ok} situation(s) marquée(s) NON OK${fail > 0 ? ` · ${fail} échec(s)` : ''}`, fail > 0 ? 'warning' : 'success');
   };
 
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (
+      !confirm(
+        `Supprimer définitivement les ${selectedIds.size} situation(s) sélectionnée(s) ?\n\nCette action est irréversible.`,
+      )
+    )
+      return;
+    setBulkLoading(true);
+    let ok = 0;
+    let fail = 0;
+    for (const id of selectedIds) {
+      try {
+        await removeSituation(id);
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    setBulkLoading(false);
+    clearSelection();
+    showToast(`${ok} situation(s) supprimée(s)${fail > 0 ? ` · ${fail} échec(s)` : ''}`, fail > 0 ? 'warning' : 'success');
+  };
+
   // ── Export Excel de la vue filtrée (pas seulement la page affichée) ──
   const exportToExcel = async () => {
     const workbook = new ExcelJS.Workbook();
@@ -510,6 +534,11 @@ export default function SituationsPage() {
           <Button variant="danger" size="sm" onClick={bulkMarkNOK} disabled={bulkLoading}>
             Marquer NON OK
           </Button>
+          {isAdmin && (
+            <Button variant="danger" size="sm" onClick={bulkDelete} disabled={bulkLoading}>
+              Supprimer
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={clearSelection} disabled={bulkLoading}>
             Annuler la sélection
           </Button>
@@ -547,11 +576,9 @@ export default function SituationsPage() {
             </Select>
             <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
               <option value="">Tous statuts</option>
-              <option value="pending">En attente</option>
               <option value="in_progress">En cours</option>
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
-              <option value="urgent">Urgent</option>
             </Select>
             <input
               type="date"

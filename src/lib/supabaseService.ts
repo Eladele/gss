@@ -510,6 +510,42 @@ export async function createLoan(loan: {
   return mapLoan(data);
 }
 
+export async function updateLoan(
+  id: string,
+  patch: Partial<{
+    montantTotal: number;
+    mensualite: number;
+    dateDebut: string;
+    dureeMois?: number;
+    banqueCaisse?: string;
+    reste: number;
+    statut: 'actif' | 'solde';
+  }>,
+): Promise<void> {
+  const payload: Record<string, any> = {};
+  if (patch.montantTotal !== undefined) payload.montant_total = patch.montantTotal;
+  if (patch.mensualite !== undefined) payload.mensualite = patch.mensualite;
+  if (patch.dateDebut !== undefined) payload.date_debut = patch.dateDebut;
+  if (patch.dureeMois !== undefined) payload.duree_mois = patch.dureeMois ?? null;
+  if (patch.banqueCaisse !== undefined) payload.banque_caisse = patch.banqueCaisse ?? null;
+  if (patch.reste !== undefined) payload.reste = patch.reste;
+  if (patch.statut !== undefined) payload.statut = patch.statut;
+  const { error } = await supabase.from('loans').update(payload).eq('id', id);
+  if (error) {
+    console.error('updateLoan:', error);
+    throw new Error(error.message);
+  }
+}
+
+export async function deleteLoan(id: string): Promise<void> {
+  // loan_payments est supprimé automatiquement (ON DELETE CASCADE côté base).
+  const { error } = await supabase.from('loans').delete().eq('id', id);
+  if (error) {
+    console.error('deleteLoan:', error);
+    throw new Error(error.message);
+  }
+}
+
 // Enregistre la mensualité du mois (idempotent — la contrainte UNIQUE(loan_id, month)
 // empêche de déduire deux fois la même mensualité si on clique par erreur deux fois),
 // puis met à jour le reste dû (et passe le prêt en "solde" s'il atteint 0).
