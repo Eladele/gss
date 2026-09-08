@@ -43,12 +43,8 @@ export default function SituationsPage() {
   const [search, setSearch] = useState('');
   const [fType, setFType] = useState('');
   const [fEquipe, setFEquipe] = useState('');
-  const [fStatus, setFStatus] = useState('');
+  const [fStatus, setFStatus] = useState('__default__');
   const [fDate, setFDate] = useState('');
-  // Vue par défaut : seulement les situations pas encore décidées (en attente / en
-  // cours) — le bouton pour voir tout l'historique a été retiré ; l'historique
-  // reste accessible via les filtres Statut ou Date, qui lèvent cette restriction.
-  const showEnCoursOnly = true;
   const [fgpOpen, setFgpOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
   const [nokId, setNokId] = useState('');
@@ -176,22 +172,24 @@ export default function SituationsPage() {
         else if (fType === '__derangement__' && s.type !== 'DRG') return false;
         else if (fType && fType !== '__installation__' && fType !== '__derangement__' && s.type !== fType) return false;
         if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
-        if (fStatus && s.status !== fStatus) return false;
         if (fDate && (s.dateDepo || s.dateMessage) !== fDate) return false;
-        // Vue par défaut : seulement les situations pas encore décidées (en attente / en
-        // cours) — OK et NON OK sont des issues finales, désactivable via le bouton.
-        if (showEnCoursOnly && !fStatus && !fDate && !search.trim()) {
-          if (s.status !== 'pending' && s.status !== 'in_progress') return false;
+        // "__default__" = vue par défaut du sélecteur Statut : seulement les situations pas
+        // encore décidées (en attente / en cours) — OK et NON OK sont des issues finales.
+        // Une recherche active lève cette restriction (on cherche alors dans tout l'historique).
+        if (fStatus === '__default__') {
+          if (!search.trim() && s.status !== 'pending' && s.status !== 'in_progress') return false;
+        } else if (fStatus && s.status !== fStatus) {
+          return false;
         }
         return true;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [situations, search, fType, fEquipe, fStatus, fDate, showEnCoursOnly, villeScope, equipes],
+    [situations, search, fType, fEquipe, fStatus, fDate, villeScope, equipes],
   );
 
   // Colonnes réduites tant qu'on est dans la vue "en cours" par défaut (sans filtre
   // statut/date explicite) — vue simplifiée pour aller à l'essentiel au quotidien.
-  const isEnCoursView = showEnCoursOnly && !fStatus && !fDate && !search.trim();
+  const isEnCoursView = fStatus === '__default__' && !fDate && !search.trim();
 
   const sorted = useMemo(() => {
     if (!sortBy || !SORT_GETTERS[sortBy]) return filtered;
@@ -210,7 +208,7 @@ export default function SituationsPage() {
   // Remise à la page 1 quand un filtre change — ajustée PENDANT le rendu (pattern
   // recommandé par React) plutôt que dans un useEffect, qui provoquerait un rendu
   // supplémentaire inutile ("Calling setState synchronously within an effect").
-  const filterKey = `${search}|${fType}|${fEquipe}|${fStatus}|${fDate}|${showEnCoursOnly}`;
+  const filterKey = `${search}|${fType}|${fEquipe}|${fStatus}|${fDate}`;
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey);
@@ -491,7 +489,7 @@ export default function SituationsPage() {
           <h1 className="text-2xl font-black text-slate-900">Situations</h1>
           <p className="text-slate-400 text-sm">
             {filtered.length} / {situations.length} situations
-            {showEnCoursOnly && !fStatus && !fDate && !search.trim() && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
+            {fStatus === '__default__' && !fDate && !search.trim() && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -575,10 +573,13 @@ export default function SituationsPage() {
               ))}
             </Select>
             <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
+              <option value="__default__">En cours (par défaut)</option>
               <option value="">Tous statuts</option>
+              <option value="pending">En attente</option>
               <option value="in_progress">En cours</option>
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
+              <option value="urgent">Urgent</option>
             </Select>
             <input
               type="date"
