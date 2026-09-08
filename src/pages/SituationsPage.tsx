@@ -575,11 +575,8 @@ export default function SituationsPage() {
             <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
               <option value="__default__">En cours (par défaut)</option>
               <option value="">Tous statuts</option>
-              <option value="pending">En attente</option>
-              <option value="in_progress">En cours</option>
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
-              <option value="urgent">Urgent</option>
             </Select>
             <input
               type="date"
