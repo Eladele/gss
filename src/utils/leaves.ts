@@ -75,9 +75,10 @@ function buildVirementSheet(
     ordreNum: string;
     dateStr: string;
     motifMois: string;
+    signatureBase64?: string | null;
   },
 ) {
-  const { sheetName, banque, employees, ordreNum, dateStr, motifMois } = opts;
+  const { sheetName, banque, employees, ordreNum, dateStr, motifMois, signatureBase64 } = opts;
   const isBpm = banque === 'BPM';
   const total = employees.reduce((s, e) => s + (e.montantSheet || 0), 0);
   const lastCol = isBpm ? 9 : 7;
@@ -245,6 +246,16 @@ function buildVirementSheet(
   rBlank2.height = 24;
   const rSign = ws.addRow(['', '', '', SOCIETE.signataire]);
   rSign.getCell(4).font = { name: 'Times New Roman', size: 14, bold: true, underline: true, color: { argb: COLOR.accentDark } };
+  ws.addRow([]);
+  ws.addRow([]);
+
+  rBlank2.height = 24;
+
+  if (signatureBase64) {
+    const sigImageId = workbook.addImage({ base64: signatureBase64, extension: 'png' });
+    ws.addImage(sigImageId, { tl: { col: 3, row: rBlank2.number }, ext: { width: 150, height: 55 } });
+    ws.addRow([]).height = 40;
+  }
 
   // ── Impression sur une seule page A4, portrait, marges serrées ────
   ws.pageSetup = {
@@ -414,6 +425,8 @@ export async function exportEmployesPresentsExcel(opts: {
   /** Feuilles à inclure, ex: ['BPM', 'SGM', 'Récap']. Non fourni ou vide = toutes
    * les banques présentes + le récap (comportement par défaut, inchangé). */
   feuilles?: string[];
+  /** Signature du directeur (image PNG en base64), insérée au-dessus du nom du signataire. */
+  signatureBase64?: string | null;
 }) {
   const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
 
@@ -433,6 +446,7 @@ export async function exportEmployesPresentsExcel(opts: {
       ordreNum: nextOrdre(ordreBase, idx),
       dateStr,
       motifMois,
+      signatureBase64: opts.signatureBase64,
     });
   });
 

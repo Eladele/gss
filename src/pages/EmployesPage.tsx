@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, Em
 import { BANQUES } from '@/data';
 import { exportEmployesPresentsExcel } from '@/utils/leaves';
 import type { Employee, LeaveType, LeaveRecord } from '@/types';
-
+import { SignaturePad } from '@/components/signaturePad'; // ← ajouter cette ligne
 const LEAVE_LABELS: Record<LeaveType, string> = {
   annuel: 'Congé annuel',
   maladie: 'Congé maladie',
@@ -55,6 +55,8 @@ export default function EmployesPage() {
   const addLeave = useAppStore((s) => s.addLeave);
   const editLeave = useAppStore((s) => s.editLeave);
   const removeLeave = useAppStore((s) => s.removeLeave);
+    const directorSignature = useAppStore((s) => s.directorSignature); // ← ajouter
+  const setDirectorSignature = useAppStore((s) => s.setDirectorSignature); 
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -79,7 +81,7 @@ export default function EmployesPage() {
   const [feuillesSelectionnees, setFeuillesSelectionnees] = useState<string[]>(FEUILLES_DISPONIBLES);
   const toggleFeuille = (f: string) =>
     setFeuillesSelectionnees((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]));
-
+  const [sigModal, setSigModal] = useState(false); // ← ajouter
   const villes = useMemo(() => [...new Set(employees.map((e) => e.ville).filter(Boolean))].sort() as string[], [employees]);
 
   const filtered = useMemo(
@@ -172,10 +174,17 @@ export default function EmployesPage() {
       showToast('Sélectionne au moins une feuille à exporter', 'error');
       return;
     }
-    await exportEmployesPresentsExcel({ month: exportMonth, employees, leaves, loans, ordreBase: exportOrdre, feuilles: feuillesSelectionnees });
+    await exportEmployesPresentsExcel({
+      month: exportMonth,
+      employees,
+      leaves,
+      loans,
+      ordreBase: exportOrdre,
+      feuilles: feuillesSelectionnees,
+      signatureBase64: directorSignature, 
+    });
     showToast('Fichier Excel des employés présents généré ', 'success');
   };
-
   const filteredLeaves = congeFilterMonth
     ? leaves.filter((l) => {
         if (!l.dateDebut || !l.dateFin) return false;
@@ -337,6 +346,13 @@ export default function EmployesPage() {
                 placeholder="N° d'ordre ex: 020/DG/GSS/2026"
                 className="w-48"
               />
+              <Button variant="outline" icon="" onClick={handleExportPresents}>
+                Exporter employés présents (Excel)
+              </Button>
+              <Button variant="outline" onClick={() => setSigModal(true)}>
+                {directorSignature ? 'Modifier la signature' : 'Ajouter la signature du directeur'}
+              </Button>
+
               <Button variant="outline" icon="" onClick={handleExportPresents}>
                 Exporter employés présents (Excel)
               </Button>
@@ -563,6 +579,20 @@ export default function EmployesPage() {
             <Button onClick={saveConge}>{editingLeave ? ' Enregistrer les modifications' : ' Enregistrer le congé'}</Button>
           </div>
         </div>
+      </Modal>
+
+
+      {/* Signature du directeur */}
+      <Modal open={sigModal} onClose={() => setSigModal(false)} title="Signature du directeur">
+        <SignaturePad
+          initialValue={directorSignature}
+          onSave={async (b64) => {
+            await setDirectorSignature(b64);
+            setSigModal(false);
+            showToast('Signature enregistrée', 'success');
+          }}
+          onClear={() => setDirectorSignature(null)}
+        />
       </Modal>
     </div>
   );

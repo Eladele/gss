@@ -392,6 +392,27 @@ export async function setTeamVille(teamId: string, ville: string): Promise<void>
   if (error) console.error('setTeamVille:', error);
 }
 
+
+export async function fetchDirectorSignature(): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'director_signature')
+    .maybeSingle();
+  if (error) {
+    console.error('fetchDirectorSignature error:', error);
+    return null;
+  }
+  return data?.value ?? null;
+}
+
+export async function saveDirectorSignature(base64: string | null): Promise<void> {
+  const { error } = await supabase
+    .from('app_settings')
+    .upsert({ key: 'director_signature', value: base64 }, { onConflict: 'key' });
+  if (error) throw error;
+}
+
 // ─── EMPLOYÉS ──────────────────────────────────────────────────────────────────
 
 export async function fetchEmployees(): Promise<Employee[]> {

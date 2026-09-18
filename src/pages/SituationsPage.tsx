@@ -575,11 +575,10 @@ export default function SituationsPage() {
             <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
               <option value="__default__">En cours (par défaut)</option>
               <option value="">Tous statuts</option>
-              <option value="pending">En attente</option>
+
               <option value="in_progress">En cours</option>
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
-              <option value="urgent">Urgent</option>
             </Select>
             <input
               type="date"
@@ -606,30 +605,30 @@ export default function SituationsPage() {
                   {(isEnCoursView
                     ? ['FGP', 'Type', 'Date Message', 'Zone', 'Statut', 'Actions']
                     : [
-                        'FGP',
-                        'Type',
-                        'Date Message',
-                        'Service Dest.',
-                        'Zone',
-                        'Date Dépôt',
-                        'Date Mise en Service',
-                        'Motif',
-                        'Poteau',
-                        'Équipe',
-                        'Délai',
-                        'Conformité',
-                        'Réseau',
-                        'ONU Install Time',
-                        'Port ID',
-                        'ONU ID',
-                        'SN/MAC',
-                        'Rx (dBm)',
-                        'Ranging (m)',
-                        'Remarque',
-                        'Clôturé par',
-                        'Statut',
-                        'Actions',
-                      ]
+                      'FGP',
+                      'Type',
+                      'Date Message',
+                      'Service Dest.',
+                      'Zone',
+                      'Date Dépôt',
+                      'Date Mise en Service',
+                      'Motif',
+                      'Poteau',
+                      'Équipe',
+                      'Délai',
+                      'Conformité',
+                      'Réseau',
+                      'ONU Install Time',
+                      'Port ID',
+                      'ONU ID',
+                      'SN/MAC',
+                      'Rx (dBm)',
+                      'Ranging (m)',
+                      'Remarque',
+                      'Clôturé par',
+                      'Statut',
+                      'Actions',
+                    ]
                   ).map((h) => {
                     const sortable = h !== 'Actions';
                     return (
@@ -655,180 +654,180 @@ export default function SituationsPage() {
                 {paginated.map((s) => {
                   const sc = scanByFgp.get(normalizeKey(s.fgp));
                   return (
-                  <tr
-                    key={s.id}
-                    className={`border-b border-slate-50 hover:bg-slate-50/50 transition-colors ${s.isUrgent ? 'bg-orange-50/30' : ''} ${selectedIds.has(s.id) ? 'bg-blue-50/50' : ''}`}
-                  >
-                    {canAct && (
-                      <td className="px-3 py-3">
-                        <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggleSelectOne(s.id)} />
+                    <tr
+                      key={s.id}
+                      className={`border-b border-slate-50 hover:bg-slate-50/50 transition-colors ${s.isUrgent ? 'bg-orange-50/30' : ''} ${selectedIds.has(s.id) ? 'bg-blue-50/50' : ''}`}
+                    >
+                      {canAct && (
+                        <td className="px-3 py-3">
+                          <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggleSelectOne(s.id)} />
+                        </td>
+                      )}
+                      <td className="px-3 py-3 font-bold text-slate-800">
+                        {s.fgp}
+                        {s.isUrgent && <span className="ml-1 text-orange-500 text-xs"></span>}
                       </td>
-                    )}
-                    <td className="px-3 py-3 font-bold text-slate-800">
-                      {s.fgp}
-                      {s.isUrgent && <span className="ml-1 text-orange-500 text-xs"></span>}
-                    </td>
-                    <td className="px-3 py-3">
-                      <TypeBadge type={s.type} />
-                    </td>
-                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateMessage || '—'}</td>
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-400">{s.serviceDestination || '—'}</td>
-                    )}
-                    <td className="px-3 py-3">
-                      <ZoneChip zone={s.zone} />
-                    </td>
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
-                      {s.status === 'non_ok' && s.comment ? (
-                        <span className="text-red-600 font-medium">{s.comment}</span>
-                      ) : (
-                        s.motif || '—'
+                      <td className="px-3 py-3">
+                        <TypeBadge type={s.type} />
+                      </td>
+                      <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateMessage || '—'}</td>
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-400">{s.serviceDestination || '—'}</td>
                       )}
-                    </td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">
-                      {(() => {
-                        const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
-                        return nb > 0 ? (
-                          <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{nb}</span>
+                      <td className="px-3 py-3">
+                        <ZoneChip zone={s.zone} />
+                      </td>
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
+                          {s.status === 'non_ok' && s.comment ? (
+                            <span className="text-red-600 font-medium">{s.comment}</span>
+                          ) : (
+                            s.motif || '—'
+                          )}
+                        </td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">
+                          {(() => {
+                            const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+                            return nb > 0 ? (
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{nb}</span>
+                            ) : (
+                              '—'
+                            );
+                          })()}
+                        </td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3">
+                          <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
+                        </td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">
+                          {s.status === 'non_ok' && MERGED_TYPES.includes(s.type)
+                            ? '—'
+                            : s.dateDepo || s.dateMessage
+                              ? `${calcDelai(s)}j`
+                              : '—'}
+                        </td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">
+                          {s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                            >
+                              {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300" title={s.status === 'non_ok' ? 'NON OK — hors délai/dans délai non applicable' : undefined}>
+                              --
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">
+                          {(() => {
+                            if (!sc) return <span className="text-slate-300">—</span>;
+                            if (sc.result !== 'SCANNE') {
+                              return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">Non scanné</span>;
+                            }
+                            const rx = sc.rxPower;
+                            const quality = rx == null ? null : rx >= -22 ? 'Excellent' : rx >= -25 ? 'Moyen' : 'Dégradé';
+                            const color =
+                              quality === 'Excellent'
+                                ? 'bg-green-100 text-green-700'
+                                : quality === 'Moyen'
+                                  ? 'bg-yellow-100 text-yellow-700'
+                                  : 'bg-red-100 text-red-700';
+                            return (
+                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${color}`} title={rx != null ? `${rx} dBm` : ''}>
+                                {quality ?? 'Scanné'}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{sc?.timeAddedToNms || '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">{sc?.portId ?? '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">{sc?.onuId ?? '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-400">{sc?.snMac || '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">{sc?.rxPower != null ? sc.rxPower : '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-center">{sc?.ranging != null ? sc.ranging : '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-400 max-w-32 truncate">{sc?.remarque || '—'}</td>
+                      )}
+                      {!isEnCoursView && (
+                        <td className="px-3 py-3 text-xs text-slate-500">{s.closedBy || '—'}</td>
+                      )}
+                      <td className="px-3 py-3">
+                        <StatusBadge status={s.status} />
+                      </td>
+                      <td className="px-3 py-3">
+                        {!canAct ? (
+                          <span className="text-xs text-slate-300 italic">Lecture seule</span>
                         ) : (
-                          '—'
-                        );
-                      })()}
-                    </td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3">
-                      <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
-                    </td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">
-                      {s.status === 'non_ok' && MERGED_TYPES.includes(s.type)
-                        ? '—'
-                        : s.dateDepo || s.dateMessage
-                          ? `${calcDelai(s)}j`
-                          : '—'}
-                    </td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">
-                      {s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
-                        >
-                          {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
-                        </span>
-                      ) : (
-                        <span className="text-slate-300" title={s.status === 'non_ok' ? 'NON OK — hors délai/dans délai non applicable' : undefined}>
-                          --
-                        </span>
-                      )}
-                    </td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">
-                      {(() => {
-                        if (!sc) return <span className="text-slate-300">—</span>;
-                        if (sc.result !== 'SCANNE') {
-                          return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">Non scanné</span>;
-                        }
-                        const rx = sc.rxPower;
-                        const quality = rx == null ? null : rx >= -22 ? 'Excellent' : rx >= -25 ? 'Moyen' : 'Dégradé';
-                        const color =
-                          quality === 'Excellent'
-                            ? 'bg-green-100 text-green-700'
-                            : quality === 'Moyen'
-                              ? 'bg-yellow-100 text-yellow-700'
-                              : 'bg-red-100 text-red-700';
-                        return (
-                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${color}`} title={rx != null ? `${rx} dBm` : ''}>
-                            {quality ?? 'Scanné'}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{sc?.timeAddedToNms || '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">{sc?.portId ?? '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">{sc?.onuId ?? '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-400">{sc?.snMac || '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">{sc?.rxPower != null ? sc.rxPower : '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-center">{sc?.ranging != null ? sc.ranging : '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-400 max-w-32 truncate">{sc?.remarque || '—'}</td>
-                    )}
-                    {!isEnCoursView && (
-                    <td className="px-3 py-3 text-xs text-slate-500">{s.closedBy || '—'}</td>
-                    )}
-                    <td className="px-3 py-3">
-                      <StatusBadge status={s.status} />
-                    </td>
-                    <td className="px-3 py-3">
-                      {!canAct ? (
-                        <span className="text-xs text-slate-300 italic">Lecture seule</span>
-                      ) : (
-                      <div className="flex gap-2 flex-wrap items-center">
-                        {s.status !== 'ok' && (
-                          <button
-                            onClick={() => openOkSheet(s)}
-                            title="Marquer OK"
-                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
-                          >
-                            OK
-                          </button>
+                          <div className="flex gap-2 flex-wrap items-center">
+                            {s.status !== 'ok' && (
+                              <button
+                                onClick={() => openOkSheet(s)}
+                                title="Marquer OK"
+                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
+                              >
+                                OK
+                              </button>
+                            )}
+                            {s.status !== 'non_ok' && (
+                              <button
+                                onClick={() => handleMarkNOK(s.id, s.fgp, '')}
+                                title="Marquer NON OK"
+                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-red-100 hover:bg-red-600 hover:text-white text-red-700"
+                              >
+                                NOK
+                              </button>
+                            )}
+                            {isAdmin && (
+                              <button
+                                onClick={() => openEditSheet(s)}
+                                title="Modifier les détails"
+                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700"
+                              >
+                                Modifier
+                              </button>
+                            )}
+                            {isAdmin && (
+                              <button
+                                onClick={() => handleDeleteSituation(s.id, s.fgp)}
+                                title="Supprimer"
+                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-500"
+                              >
+                                Supprimer
+                              </button>
+                            )}
+                          </div>
                         )}
-                        {s.status !== 'non_ok' && (
-                          <button
-                            onClick={() => handleMarkNOK(s.id, s.fgp, '')}
-                            title="Marquer NON OK"
-                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-red-100 hover:bg-red-600 hover:text-white text-red-700"
-                          >
-                            NOK
-                          </button>
-                        )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => openEditSheet(s)}
-                            title="Modifier les détails"
-                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700"
-                          >
-                            Modifier
-                          </button>
-                        )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => handleDeleteSituation(s.id, s.fgp)}
-                            title="Supprimer"
-                            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-500"
-                          >
-                            Supprimer
-                          </button>
-                        )}
-                      </div>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                    </tr>
                   );
                 })}
               </tbody>

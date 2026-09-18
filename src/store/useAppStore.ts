@@ -15,6 +15,8 @@ import {
   fetchEquipes,
   fetchImportHistory,
   createEquipe,
+    fetchDirectorSignature,
+  saveDirectorSignature,
   fetchEmployees,
   createEmployee,
   updateEmployee,
@@ -63,6 +65,7 @@ interface AppState {
   importHistory: ImportRecord[];
   equipes: Equipe[];
   employees: Employee[];
+  directorSignature: string | null; // ← nouveau
   leaves: LeaveRecord[];
   loans: Loan[];
   chantiers: Chantier[];
@@ -131,6 +134,8 @@ interface AppState {
   removeEquipe: (id: string) => Promise<void>;
   // Employés & congés (admin uniquement)
   loadEmployees: () => Promise<void>;
+  loadDirectorSignature: () => Promise<void>;
+  setDirectorSignature: (base64: string | null) => Promise<void>;
   addEmployee: (emp: Partial<Employee>) => Promise<void>;
   editEmployee: (id: string, emp: Partial<Employee>) => Promise<void>;
   removeEmployee: (id: string) => Promise<void>;
@@ -214,6 +219,7 @@ export const useAppStore = create<AppState>()(
       equipes: [],
       employees: [],
       leaves: [],
+      directorSignature: null, 
       loans: [],
       chantiers: [],
       reseauNoeuds: [],
@@ -227,6 +233,8 @@ export const useAppStore = create<AppState>()(
         set({ user, notifications: [...SAMPLE_NOTIFICATIONS] });
         // Load real data from Supabase on login
         get().loadAll();
+       if (user.role === 'admin') get().loadDirectorSignature(); // ← nouveau, si applicable
+
       },
       logout: () =>
         set({
@@ -520,7 +528,24 @@ export const useAppStore = create<AppState>()(
         const [employees, leaves, loans] = await Promise.all([fetchEmployees(), fetchLeaves(), fetchLoans()]);
         set({ employees, leaves, loans });
       },
+// ← nouveau
+loadDirectorSignature: async () => {
+  const directorSignature = await fetchDirectorSignature();
+  set({ directorSignature });
+},
 
+setDirectorSignature: async (base64) => {
+  const previous = get().directorSignature;
+  set({ directorSignature: base64 }); // optimiste
+  try {
+    await saveDirectorSignature(base64);
+    get().addNotification(base64 ? 'Signature enregistrée' : 'Signature supprimée', '', 'ok');
+  } catch (err: unknown) {
+    set({ directorSignature: previous }); // rollback si échec
+    get().addNotification('Échec', errMsg(err) || "La signature n'a pas pu être enregistrée", 'nok');
+    throw err;
+  }
+},
       addEmployee: async (emp) => {
         const newEmp = await createEmployee(emp);
         if (newEmp) {
@@ -772,6 +797,8 @@ export const useAppStore = create<AppState>()(
             state.loadEmployees();
             state.loadVehicles();
             state.loadMateriels();
+            state.loadDirectorSignature(); // ← nouveau
+
           }
         }
       },
