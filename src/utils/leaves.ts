@@ -241,21 +241,32 @@ function buildVirementSheet(
   rCompte.getCell(6).value = total;
   rChiffres.getCell(6).value = total;
 
+
   ws.addRow([]);
-  const rBlank2 = ws.addRow([]);
-  rBlank2.height = 24;
+  ws.addRow([]);
+
+  const SIG_H_PX = 55;   // hauteur de l'image de signature (px)
+  const SIG_GAP_PT = 14; // ← espace entre la signature et le nom (en points, augmentez si besoin)
   const rSign = ws.addRow(['', '', '', SOCIETE.signataire]);
   rSign.getCell(4).font = { name: 'Times New Roman', size: 14, bold: true, underline: true, color: { argb: COLOR.accentDark } };
   ws.addRow([]);
-  ws.addRow([]);
-
-  rBlank2.height = 24;
 
   if (signatureBase64) {
+    // Ligne dédiée à la signature (hauteur en points = px × 0,75)
+    const rSigZone = ws.addRow([]);
+    rSigZone.height = SIG_H_PX * 0.75 + 4;
     const sigImageId = workbook.addImage({ base64: signatureBase64, extension: 'png' });
-    ws.addImage(sigImageId, { tl: { col: 3, row: rBlank2.number }, ext: { width: 150, height: 55 } });
-    ws.addRow([]).height = 40;
+    ws.addImage(sigImageId, {
+      tl: { col: 3, row: rSigZone.number - 1 }, // index 0-based = cette ligne
+      ext: { width: 150, height: SIG_H_PX },
+    });
+  } else {
+    ws.addRow([]).height = 24;
   }
+
+  // Espace entre la signature et le nom du directeur
+  ws.addRow([]).height = SIG_GAP_PT;
+
 
   // ── Impression sur une seule page A4, portrait, marges serrées ────
   ws.pageSetup = {
