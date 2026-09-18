@@ -55,8 +55,8 @@ export default function EmployesPage() {
   const addLeave = useAppStore((s) => s.addLeave);
   const editLeave = useAppStore((s) => s.editLeave);
   const removeLeave = useAppStore((s) => s.removeLeave);
-    const directorSignature = useAppStore((s) => s.directorSignature); // ← ajouter
-  const setDirectorSignature = useAppStore((s) => s.setDirectorSignature); 
+  const directorSignature = useAppStore((s) => s.directorSignature); // ← ajouter
+  const setDirectorSignature = useAppStore((s) => s.setDirectorSignature);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -181,20 +181,20 @@ export default function EmployesPage() {
       loans,
       ordreBase: exportOrdre,
       feuilles: feuillesSelectionnees,
-      signatureBase64: directorSignature, 
+      signatureBase64: directorSignature,
     });
     showToast('Fichier Excel des employés présents généré ', 'success');
   };
   const filteredLeaves = congeFilterMonth
     ? leaves.filter((l) => {
-        if (!l.dateDebut || !l.dateFin) return false;
-        const [y, m] = congeFilterMonth.split('-').map(Number);
-        const start = new Date(y, m - 1, 1),
-          end = new Date(y, m, 0, 23, 59, 59);
-        const d1 = new Date(l.dateDebut),
-          d2 = new Date(l.dateFin);
-        return d1 <= end && d2 >= start;
-      })
+      if (!l.dateDebut || !l.dateFin) return false;
+      const [y, m] = congeFilterMonth.split('-').map(Number);
+      const start = new Date(y, m - 1, 1),
+        end = new Date(y, m, 0, 23, 59, 59);
+      const d1 = new Date(l.dateDebut),
+        d2 = new Date(l.dateFin);
+      return d1 <= end && d2 >= start;
+    })
     : leaves;
 
   return (
@@ -346,9 +346,6 @@ export default function EmployesPage() {
                 placeholder="N° d'ordre ex: 020/DG/GSS/2026"
                 className="w-48"
               />
-              <Button variant="outline" icon="" onClick={handleExportPresents}>
-                Exporter employés présents (Excel)
-              </Button>
               <Button variant="outline" onClick={() => setSigModal(true)}>
                 {directorSignature ? 'Modifier la signature' : 'Ajouter la signature du directeur'}
               </Button>
