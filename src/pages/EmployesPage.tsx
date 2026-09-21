@@ -2,9 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast } from '@/components/ui';
 import { BANQUES } from '@/data';
-import { exportEmployesPresentsExcel } from '@/utils/leaves';
+import { buildExportPreview, exportEmployesPresentsExcel } from '@/utils/leaves';
 import type { Employee, LeaveType, LeaveRecord } from '@/types';
-import { SignaturePad } from '@/components/signaturePad'; // ← ajouter cette ligne
+import { SignaturePad } from '@/components/signaturePad';
+
+import type { ExportPreview } from '@/utils/leaves';
+import { ExportPreviewModal } from '@/components/ExportPreviewModal';
+import { DEFAULT_SIGNATURE } from '@/utils/signature';// ← ajouter cette ligne
 const LEAVE_LABELS: Record<LeaveType, string> = {
   annuel: 'Congé annuel',
   maladie: 'Congé maladie',
@@ -81,7 +85,8 @@ export default function EmployesPage() {
   const [feuillesSelectionnees, setFeuillesSelectionnees] = useState<string[]>(FEUILLES_DISPONIBLES);
   const toggleFeuille = (f: string) =>
     setFeuillesSelectionnees((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]));
-  const [sigModal, setSigModal] = useState(false); // ← ajouter
+  const [sigModal, setSigModal] = useState(false);
+  const [preview, setPreview] = useState<ExportPreview | null>(null);// ← ajouter
   const villes = useMemo(() => [...new Set(employees.map((e) => e.ville).filter(Boolean))].sort() as string[], [employees]);
 
   const filtered = useMemo(
@@ -169,20 +174,31 @@ export default function EmployesPage() {
     setCongeModal(false);
   };
 
+  const exportOpts = () => ({
+    month: exportMonth,
+    employees,
+    leaves,
+    loans,
+    ordreBase: exportOrdre,
+    feuilles: feuillesSelectionnees,
+    signatureBase64: directorSignature, // null → signature du DG par défaut
+  });
+
+  const handlePreviewPresents = () => {
+    if (feuillesSelectionnees.length === 0) {
+      showToast('Sélectionne au moins une feuille à exporter', 'error');
+      return;
+    }
+    setPreview(buildExportPreview(exportOpts()));
+  };
+
   const handleExportPresents = async () => {
     if (feuillesSelectionnees.length === 0) {
       showToast('Sélectionne au moins une feuille à exporter', 'error');
       return;
     }
-    await exportEmployesPresentsExcel({
-      month: exportMonth,
-      employees,
-      leaves,
-      loans,
-      ordreBase: exportOrdre,
-      feuilles: feuillesSelectionnees,
-      signatureBase64: directorSignature,
-    });
+    await exportEmployesPresentsExcel(exportOpts());
+    setPreview(null);
     showToast('Fichier Excel des employés présents généré ', 'success');
   };
   const filteredLeaves = congeFilterMonth
@@ -347,9 +363,11 @@ export default function EmployesPage() {
                 className="w-48"
               />
               <Button variant="outline" onClick={() => setSigModal(true)}>
-                {directorSignature ? 'Modifier la signature' : 'Ajouter la signature du directeur'}
+                Modifier la signature
               </Button>
-
+              <Button variant="outline" onClick={handlePreviewPresents}>
+                Aperçu avant export
+              </Button>
               <Button variant="outline" icon="" onClick={handleExportPresents}>
                 Exporter employés présents (Excel)
               </Button>
@@ -583,6 +601,26 @@ export default function EmployesPage() {
       <Modal open={sigModal} onClose={() => setSigModal(false)} title="Signature du directeur">
         <SignaturePad
           initialValue={directorSignature}
+          onSave={async (b64) => {
+            await setDirectorSignature(b64);
+            setSigModal(false);
+            showToast('Signature enregistrée', 'success');
+          }}
+          onClear={() => setDirectorSignature(null)}
+        />
+      </Modal>
+
+
+      <ExportPreviewModal
+        open={!!preview}
+        preview={preview}
+        onClose={() => setPreview(null)}
+        onConfirm={handleExportPresents}
+      />
+
+      <Modal open={sigModal} onClose={() => setSigModal(false)} title="Signature du directeur">
+        <SignaturePad
+          initialValue={directorSignature ?? DEFAULT_SIGNATURE}
           onSave={async (b64) => {
             await setDirectorSignature(b64);
             setSigModal(false);

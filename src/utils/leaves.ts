@@ -4,7 +4,7 @@ import { numberToFrenchWords } from './numberToWordsFr';
 import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
 
 const BANQUES_ORDER = ['BPM', 'Caisse', 'SGM'];
-const SOCIETE = {
+export const SOCIETE = {
   siege: 'Siège social : Nouakchott, K.Ext SOCOGIM  873 2E A1',
   rc: ' RC N° : analytique:75781 chrono: 1522',
   nif: 'NIF : 21104523 ',
@@ -12,6 +12,7 @@ const SOCIETE = {
   compte: 'Par le débit de notre compte n° 1005194, veuillez virer la somme :',
   signataire: 'MOHAMED YAHYA LIMAM',
 };
+import { resolveSignature, imageExtension, toDataUrl } from './signature';
 
 const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 
@@ -54,7 +55,26 @@ function nextOrdre(base: string, offset: number): string {
   const next = (parseInt(m[1], 10) + offset).toString().padStart(width, '0');
   return next + m[2];
 }
+export interface ExportPresentsOpts {
+  month: string; // "YYYY-MM"
+  employees: Employee[];
+  leaves: LeaveRecord[];
+  loans?: Loan[];
+  ordreBase?: string;
+  dateStr?: string;
+  fileName?: string;
+  feuilles?: string[];
+  signatureBase64?: string | null;
+}
 
+type PresentEmployee = Employee & { conge_double?: boolean; pret_deduit?: number; pret_reste_apres?: number };
+
+function remarquesFor(e: PresentEmployee): string {
+  const r: string[] = [];
+  if (e.conge_double) r.push('Congé le mois prochain — salaire doublé');
+  if (e.pret_deduit) r.push(`Prêt : -${e.pret_deduit.toLocaleString('fr-FR')} MRU (reste ${e.pret_reste_apres?.toLocaleString('fr-FR')} MRU)`);
+  return r.join(' · ');
+}
 /**
  * Construit une feuille "Ordre de virement" — même contenu officiel que le
  * modèle GSS (logo, en-tête société, motif, tableau, total, signature) mais
@@ -251,18 +271,15 @@ function buildVirementSheet(
   rSign.getCell(4).font = { name: 'Times New Roman', size: 14, bold: true, underline: true, color: { argb: COLOR.accentDark } };
   ws.addRow([]);
 
-  if (signatureBase64) {
-    // Ligne dédiée à la signature (hauteur en points = px × 0,75)
-    const rSigZone = ws.addRow([]);
-    rSigZone.height = SIG_H_PX * 0.75 + 4;
-    const sigImageId = workbook.addImage({ base64: signatureBase64, extension: 'png' });
-    ws.addImage(sigImageId, {
-      tl: { col: 3, row: rSigZone.number - 1 }, // index 0-based = cette ligne
-      ext: { width: 150, height: SIG_H_PX },
-    });
-  } else {
-    ws.addRow([]).height = 24;
-  }
+  // Signature : celle enregistrée, sinon la signature du DG par défaut
+  const sigB64 = resolveSignature(signatureBase64);
+  const rSigZone = ws.addRow([]);
+  rSigZone.height = SIG_H_PX * 0.75 + 4;
+  const sigImageId = workbook.addImage({ base64: sigB64, extension: imageExtension(sigB64) });
+  ws.addImage(sigImageId, {
+    tl: { col: 3, row: rSigZone.number - 1 },
+    ext: { width: 150, height: SIG_H_PX },
+  });
 
   // Espace entre la signature et le nom du directeur
   ws.addRow([]).height = SIG_GAP_PT;
@@ -399,8 +416,8 @@ function buildRecapSheet(
       cell.alignment = { horizontal: colNumber === 3 ? 'left' : 'center', vertical: 'middle' };
       if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
       if (colNumber === 9) cell.numFmt = MONTANT_FMT; // Montant — vrai nombre
-      if (colNumber === 10 && remarques.length > 0) {
-        cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
+if (colNumber === 10 && remarques)
+   {        cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
       }
     });
   });
@@ -414,7 +431,15 @@ function buildRecapSheet(
     margins: { left: 0.4, right: 0.4, top: 0.4, bottom: 0.4, header: 0.5, footer: 0.5 },
   };
 }
-
+function resolveSheets(opts: ExportPresentsOpts) {
+  const base = computePresentEmployees(opts);
+  const voulues = opts.feuilles && opts.feuilles.length > 0 ? opts.feuilles : [...base.banquesPresentes, 'Récap'];
+  return {
+    ...base,
+    banquesAExporter: base.banquesPresentes.filter((b) => voulues.includes(b)),
+    inclureRecap: voulues.includes('Récap'),
+  };
+}
 /**
  * Exporte, pour un mois donné, la liste des employés QUI NE SONT PAS EN CONGÉ,
  * au format des "Ordres de virement" GSS (logo, en-tête, tableau, total,
@@ -425,25 +450,8 @@ function buildRecapSheet(
  * salaire de CE mois DOUBLÉ ; un employé dont le congé DÉMARRE ce mois-ci est
  * EXCLU du virement (déjà payé en double le mois précédent).
  */
-export async function exportEmployesPresentsExcel(opts: {
-  month: string; // "YYYY-MM"
-  employees: Employee[];
-  leaves: LeaveRecord[];
-  loans?: Loan[]; // prêts en cours — la mensualité active est déduite automatiquement
-  ordreBase?: string; // ex: "020/DG/GSS/2026" — incrémenté automatiquement par banque
-  dateStr?: string; // ex: "17/07/2026" — défaut : aujourd'hui
-  fileName?: string;
-  /** Feuilles à inclure, ex: ['BPM', 'SGM', 'Récap']. Non fourni ou vide = toutes
-   * les banques présentes + le récap (comportement par défaut, inchangé). */
-  feuilles?: string[];
-  /** Signature du directeur (image PNG en base64), insérée au-dessus du nom du signataire. */
-  signatureBase64?: string | null;
-}) {
-  const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
-
-  const feuillesVoulues = opts.feuilles && opts.feuilles.length > 0 ? opts.feuilles : [...banquesPresentes, 'Récap'];
-  const banquesAExporter = banquesPresentes.filter((b) => feuillesVoulues.includes(b));
-  const inclureRecap = feuillesVoulues.includes('Récap');
+export async function exportEmployesPresentsExcel(opts: ExportPresentsOpts) {
+  const { present, motifMois, dateStr, ordreBase, banquesAExporter, inclureRecap } = resolveSheets(opts);
 
   const workbook = new ExcelJS.Workbook();
   const logoImageId = workbook.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
@@ -468,7 +476,6 @@ export async function exportEmployesPresentsExcel(opts: {
   const buffer = await workbook.xlsx.writeBuffer();
   downloadWorkbook(buffer as ArrayBuffer, opts.fileName ?? `Ordre_virement_${opts.month}.xlsx`);
 }
-
 /**
  * Même contenu que `exportEmployesPresentsExcel`, mais chaque feuille (BPM,
  * Caisse, SGM, Récap) est téléchargée comme un **fichier .xlsx séparé** au
@@ -479,24 +486,13 @@ export async function exportEmployesPresentsExcel(opts: {
  * un pour le récap) ; certains navigateurs demandent une autorisation la
  * première fois qu'une page déclenche plusieurs téléchargements d'un coup.
  */
-export async function exportEmployesPresentsExcelSepares(opts: {
-  month: string; // "YYYY-MM"
-  employees: Employee[];
-  leaves: LeaveRecord[];
-  loans?: Loan[];
-  ordreBase?: string;
-  dateStr?: string;
-  filePrefix?: string; // défaut : "Ordre_virement"
-  /** Feuilles à inclure, ex: ['BPM', 'SGM', 'Récap']. Non fourni ou vide = toutes
-   * les banques présentes + le récap (comportement par défaut, inchangé). */
-  feuilles?: string[];
-}) {
-  const { present, motifMois, dateStr, ordreBase, banquesPresentes } = computePresentEmployees(opts);
+export async function exportEmployesPresentsExcelSepares(
+  opts: ExportPresentsOpts & {
+    filePrefix?: string; // défaut : "Ordre_virement"
+  },
+) {
+  const { present, motifMois, dateStr, ordreBase, banquesAExporter, inclureRecap } = resolveSheets(opts);
   const prefix = opts.filePrefix ?? 'Ordre_virement';
-
-  const feuillesVoulues = opts.feuilles && opts.feuilles.length > 0 ? opts.feuilles : [...banquesPresentes, 'Récap'];
-  const banquesAExporter = banquesPresentes.filter((b) => feuillesVoulues.includes(b));
-  const inclureRecap = feuillesVoulues.includes('Récap');
 
   for (let idx = 0; idx < banquesAExporter.length; idx++) {
     const banque = banquesAExporter[idx];
@@ -511,6 +507,7 @@ export async function exportEmployesPresentsExcelSepares(opts: {
       ordreNum: nextOrdre(ordreBase, idx),
       dateStr,
       motifMois,
+      signatureBase64: opts.signatureBase64, // ← ajouté
     });
     const buf = await wb.xlsx.writeBuffer();
     downloadWorkbook(buf as ArrayBuffer, `${prefix}_${banque}_${opts.month}.xlsx`);
@@ -523,4 +520,54 @@ export async function exportEmployesPresentsExcelSepares(opts: {
     const bufRecap = await wbRecap.xlsx.writeBuffer();
     downloadWorkbook(bufRecap as ArrayBuffer, `${prefix}_Recap_${opts.month}.xlsx`);
   }
+}
+
+// ─── Aperçu (mêmes données que l'export) ────────────────────────────────
+export interface PreviewVirementSheet {
+  kind: 'virement';
+  name: string; banque: string; ordreNum: string; dateStr: string; motifMois: string;
+  total: number; totalLettres: string;
+  rows: { ordre: number; mle: string; name: string; banque: string; rib: string; montant: number }[];
+}
+export interface PreviewRecapSheet {
+  kind: 'recap';
+  name: string;
+  rows: { ordre: number; mle: string; name: string; poste: string; ville: string; equipe: string; banque: string; rib: string; montant?: number; remarque: string }[];
+}
+export type PreviewSheet = PreviewVirementSheet | PreviewRecapSheet;
+export interface ExportPreview { sheets: PreviewSheet[]; logo: string; signature: string }
+
+export function buildExportPreview(opts: ExportPresentsOpts): ExportPreview {
+  const { present, motifMois, dateStr, ordreBase, banquesAExporter, inclureRecap } = resolveSheets(opts);
+
+  const sheets: PreviewSheet[] = banquesAExporter.map((banque, idx): PreviewVirementSheet => {
+    const emps = present.filter((e) => (e.banque || 'Caisse') === banque);
+    const total = emps.reduce((s, e) => s + (e.montant ?? 0), 0);
+    return {
+      kind: 'virement', name: banque, banque,
+      ordreNum: nextOrdre(ordreBase, idx), dateStr, motifMois, total,
+      totalLettres: `${numberToFrenchWords(total)} MRU`,
+      rows: emps.map((e, i) => ({
+        ordre: i + 1, mle: e.mle ?? '', name: e.name, banque, rib: formatRib(e.rib), montant: e.montant ?? 0,
+      })),
+    };
+  });
+
+  if (inclureRecap) {
+    sheets.push({
+      kind: 'recap',
+      name: 'Récap',
+      rows: present.map((e, i) => ({
+        ordre: i + 1, mle: e.mle ?? '', name: e.name, poste: e.poste || '', ville: e.ville || '',
+        equipe: e.equipeNom || '', banque: e.banque || 'Caisse', rib: formatRib(e.rib),
+        montant: e.montant ?? undefined, remarque: remarquesFor(e),
+      })),
+    });
+  }
+
+  return {
+    sheets,
+    logo: toDataUrl(GSS_LOGO_BASE64, 'image/png'),
+    signature: resolveSignature(opts.signatureBase64),
+  };
 }
