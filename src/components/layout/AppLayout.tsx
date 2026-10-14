@@ -37,7 +37,7 @@ import ZonesPage from '@/pages/ZonesPage';
 import NotificationsPage from '@/pages/NotificationsPage';
 import ProfilPage from '@/pages/ProfilPage';
 import StatistiquesPage from '@/pages/StatistiquesPage';
-import EmployesPage from '@/pages/EmployesPage';
+// import EmployesPage from '@/pages/EmployesPage';
 import VehiculesPage from '@/pages/VehiculesPage';
 import MaterielsPage from '@/pages/MaterielsPage';
 import ScansPage from '@/pages/ScansPage';
@@ -58,7 +58,7 @@ type Page =
   | 'notifications'
   | 'profil'
   | 'statistiques'
-  | 'employes'
+  // | 'employes'
   | 'vehicules'
   | 'materiels'
   | 'scans'
@@ -107,7 +107,7 @@ const RH_GROUP: NavGroup = {
   group: 'rh-group',
   label: 'RH',
   children: [
-    { id: 'employes', label: 'Employés' },
+    // { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'equipes', label: 'Équipes' },
@@ -142,7 +142,7 @@ const NAV: Record<Role, NavItem[]> = {
   // Comptable / RH (ex: Betoul) — uniquement Employés et Prêts, rien d'opérationnel
   // (pas de Situations, Réseau, Déploiement).
   rh: [
-    { id: 'employes', label: 'Employés' },
+    // { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'notifications', label: 'Notifications' },
@@ -173,7 +173,7 @@ const PAGE_TITLES: Record<Page, string> = {
   notifications: 'Notifications',
   profil: 'Mon Profil',
   statistiques: 'Statistiques',
-  employes: 'Gestion Employés',
+  // employes: 'Gestion Employés',
   conges: 'Gestion Congés',
   prets: 'Prêts Employés',
   vehicules: 'Gestion Véhicules',
@@ -195,7 +195,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   notifications: Bell,
   profil: User,
   statistiques: BarChart3,
-  employes: UserCheck,
+  // employes: UserCheck,
   conges: FileText,
   prets: Wallet,
   vehicules: Car,
@@ -253,7 +253,6 @@ export default function AppLayout() {
     notifications: <NotificationsPage />,
     profil: <ProfilPage />,
     statistiques: <StatistiquesPage />,
-    employes: <EmployesPage />,
     conges: <CongesPage />,
     prets: <PretsPage />,
     vehicules: <VehiculesPage />,
