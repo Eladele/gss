@@ -14,6 +14,7 @@ import {
   statsDelaiDetailleParVilleEtType,
   statsBacklogParAnciennete,
   statsNonOk,
+  villeForEquipe,
   type PeriodFilter,
 } from '@/utils/stats';
 import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
@@ -135,6 +136,23 @@ export default function StatistiquesPage() {
     }),
   ).size;
 
+  // ── Poteaux posés, par ville (période/filtres en cours) ──
+  // Même logique de comptage que totalPoteaux (colonne dédiée avec repli sur le
+  // motif) mais groupée par ville, pour voir où l'effort de pose se concentre.
+  const poteauxParVille = useMemo(() => {
+    const byVilleMap: Record<string, { nbFgp: number; poteaux: number }> = {};
+    scoped.forEach((s) => {
+      const v = villeForEquipe(s.equipe, equipes);
+      const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+      if (!byVilleMap[v]) byVilleMap[v] = { nbFgp: 0, poteaux: 0 };
+      if (nb > 0) byVilleMap[v].nbFgp += 1;
+      byVilleMap[v].poteaux += nb;
+    });
+    return Object.entries(byVilleMap)
+      .map(([ville, d]) => ({ ville, nbFgp: d.nbFgp, poteaux: d.poteaux }))
+      .sort((a, b) => b.poteaux - a.poteaux);
+  }, [scoped, equipes]);
+
   const delaiDetailRows = useMemo(() => {
     if (!delaiDetail) return [];
     return scoped.filter((s) => (delaiDetail === 'hors' ? isHorsDelai(s) : !isHorsDelai(s)));
@@ -208,12 +226,16 @@ export default function StatistiquesPage() {
     [situations, period, fEquipe, fVille, equipes],
   );
 
-  const INSTALLATION_TYPES_SANS_CST = useMemo(() => MERGED_TYPES.filter((t) => t !== 'CST'), []);
+  // CST, RLR et ANS ont chacun leur propre tableau détaillé ci-dessous — on les
+  // retire donc du tableau "Installation" générique pour éviter les doublons.
+  const INSTALLATION_TYPES_RESTANTS = useMemo(() => MERGED_TYPES.filter((t) => !['CST', 'RLR', 'ANS'].includes(t)), []);
   const installDetail = useMemo(
-    () => statsDelaiDetailleParVilleEtType(scopedAll, equipes, INSTALLATION_TYPES_SANS_CST),
-    [scopedAll, equipes, INSTALLATION_TYPES_SANS_CST],
+    () => statsDelaiDetailleParVilleEtType(scopedAll, equipes, INSTALLATION_TYPES_RESTANTS),
+    [scopedAll, equipes, INSTALLATION_TYPES_RESTANTS],
   );
   const cstDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['CST']), [scopedAll, equipes]);
+  const rlrDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['RLR']), [scopedAll, equipes]);
+  const ansDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['ANS']), [scopedAll, equipes]);
   const drgVilleDetail = useMemo(() => statsByVille(scopedAll.filter((s) => s.type === 'DRG'), equipes), [scopedAll, equipes]);
 
   // Backlog "du jour" — snapshot indépendant de la période choisie (un backlog en
@@ -611,6 +633,53 @@ export default function StatistiquesPage() {
         </div>
       </Card>
 
+      {/* Poteaux posés — par ville (nouveau) */}
+      <Card>
+        <CardHeader>
+          <CardTitle> Poteaux posés — par ville</CardTitle>
+        </CardHeader>
+        <p className="px-5 -mt-1 pb-2 text-[11px] text-slate-400">
+          Compte les poteaux (colonne dédiée, ou extraits du motif si absente) des situations de la période/filtres en cours, regroupés
+          par ville.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Poteaux posés'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {poteauxParVille.map((v) => (
+                <tr key={v.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{v.ville}</td>
+                  <td className="px-3 py-2">
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{v.poteaux}</span>
+                  </td>
+                </tr>
+              ))}
+              {poteauxParVille.length > 0 && (
+                <tr className="bg-slate-50/60 font-bold">
+                  <td className="px-3 py-2 text-slate-700">Total</td>
+                  <td className="px-3 py-2">{poteauxParVille.reduce((a, v) => a + v.poteaux, 0)}</td>
+                </tr>
+              )}
+              {poteauxParVille.length === 0 && (
+                <tr>
+                  <td colSpan={2}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
       {/* ═══ Nouveaux rapports détaillés (façon relevés Huawei/Mauritel) ═══ */}
 
       {/* Backlog du jour — installations et DRG en attente, par ancienneté */}
@@ -721,6 +790,84 @@ export default function StatistiquesPage() {
                 </tr>
               ))}
               {cstDetail.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* % RLR dans les délais — par ville */}
+      <Card>
+        <CardHeader>
+          <CardTitle> RLR dans les délais — par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Moins24H', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rlrDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-blue-600">{r.moins24h}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctDansDelai}%</td>
+                </tr>
+              ))}
+              {rlrDetail.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <EmptyState icon="" text="Aucune donnée" />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* % ANS dans les délais — par ville */}
+      <Card>
+        <CardHeader>
+          <CardTitle> ANS dans les délais — par ville</CardTitle>
+        </CardHeader>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-100">
+                {['Ville', 'Total', 'Moins24H', 'Dans délai', 'Hors délai', '% TLID'].map((h) => (
+                  <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ansDetail.map((r) => (
+                <tr key={r.ville} className="border-b border-slate-50">
+                  <td className="px-3 py-2 font-semibold text-slate-700">{r.ville}</td>
+                  <td className="px-3 py-2">{r.total}</td>
+                  <td className="px-3 py-2 text-blue-600">{r.moins24h}</td>
+                  <td className="px-3 py-2 text-green-700">{r.dansDelai}</td>
+                  <td className="px-3 py-2 text-red-700">{r.horsDelai}</td>
+                  <td className="px-3 py-2 font-bold">{r.pctDansDelai}%</td>
+                </tr>
+              ))}
+              {ansDetail.length === 0 && (
                 <tr>
                   <td colSpan={6}>
                     <EmptyState icon="" text="Aucune donnée" />
