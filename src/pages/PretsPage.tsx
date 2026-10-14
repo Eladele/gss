@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, EmptyState, StatCard, useToast } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import type { Employee } from '@/types';
 
 function currentMonth(): string {
@@ -202,18 +202,8 @@ export default function PretsPage() {
                               Prélever ce mois
                             </button>
                           )}
-                          <button
-                            onClick={() => openEdit(l)}
-                            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-600 text-xs font-bold rounded-lg transition-colors active:scale-95"
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            onClick={() => handleDelete(l)}
-                            className="px-3 py-1.5 bg-red-100 hover:bg-red-600 hover:text-white text-red-700 text-xs font-bold rounded-lg transition-colors active:scale-95"
-                          >
-                            Supprimer
-                          </button>
+                          <BtnEdit onClick={() => openEdit(l)} />
+                          <BtnDelete onClick={() => handleDelete(l)} />
                         </div>
                       </td>
                     </tr>

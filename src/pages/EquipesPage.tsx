@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { ProgressBar, ZoneChip, EmptyState, Modal, Button, Input } from '@/components/ui';
+import { ProgressBar, ZoneChip, EmptyState, Modal, Button, Input, BtnEdit, BtnDelete } from '@/components/ui';
 import { ETAT_MATERIEL_LABELS, ETAT_MATERIEL_STYLES } from '@/data';
 import type { Equipe } from '@/types';
 
@@ -206,21 +206,18 @@ export default function EquipesPage() {
                   </div>
 
                   {canManage && (
-                    <div className="flex gap-1.5 mb-4">
-                      <button
+                    <div className="flex gap-2 mb-4">
+                      <BtnEdit
                         onClick={() => openEdit(eq)}
-                        className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg"
-                      >
-                        {' '}
-                        Modifier
-                      </button>
+                        className="flex-1 justify-center py-2"
+                      />
                       {canDelete && (
-                        <button
+                        <BtnDelete
                           onClick={() => {
                             if (confirm(`Supprimer l'équipe ${eq.name} ?`)) removeEquipe(eq.id);
                           }}
-                          className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg"
-                        ></button>
+                          className="flex-1 justify-center py-2"
+                        />
                       )}
                     </div>
                   )}

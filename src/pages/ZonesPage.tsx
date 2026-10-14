@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { addZoneToTeam, removeZoneFromTeam } from '@/lib/supabaseService';
 import { getEquipeColor } from '@/utils';
-import { Card, CardHeader, CardTitle, Button, Modal, Input, Select, EmptyState } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Modal, Input, Select, EmptyState, BtnEdit, BtnDelete } from '@/components/ui';
 import { useToast } from '@/components/ui';
 
 export default function ZonesPage() {
@@ -182,19 +182,20 @@ export default function ZonesPage() {
                   </div>
                   {/* Admin actions */}
                   {isAdmin && (
-                    <div className="mt-3 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
+                    <div className="mt-3 flex gap-1.5 items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <BtnEdit
+                        size="xs"
+                        label="Affecter"
                         onClick={() => openAssign(zone)}
-                        className="flex-1 text-[10px] py-1 px-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-semibold transition-colors"
-                      >
-                        Affecter
-                      </button>
+                        className="flex-1 justify-center"
+                      />
                       {eq && (
-                        <button
-                          onClick={() => handleRemoveZone(zone)}
+                        <BtnDelete
+                          size="xs"
+                          label="Retirer"
                           disabled={saving}
-                          className="text-[10px] py-1 px-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg font-semibold transition-colors"
-                        ></button>
+                          onClick={() => handleRemoveZone(zone)}
+                        />
                       )}
                     </div>
                   )}

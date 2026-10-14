@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import type { Vehicle, VehicleStatut } from '@/types';
 
 const STATUT_LABELS: Record<VehicleStatut, string> = {
@@ -184,20 +184,17 @@ export default function VehiculesPage() {
                       </p>
                       {v.notes && <p className="text-slate-400 italic">{v.notes}</p>}
                     </div>
-                    <div className="flex gap-1.5">
-                      <button
+                    <div className="flex gap-2 pt-2 border-t border-slate-100">
+                      <BtnEdit
                         onClick={() => openEdit(v)}
-                        className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg"
-                      >
-                        {' '}
-                        Modifier
-                      </button>
-                      <button
+                        className="flex-1 justify-center py-2"
+                      />
+                      <BtnDelete
                         onClick={() => {
                           if (confirm(`Supprimer le véhicule ${v.immatriculation} ?`)) removeVehicle(v.id);
                         }}
-                        className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg"
-                      ></button>
+                        className="flex-1 justify-center py-2"
+                      />
                     </div>
                   </div>
                 </div>

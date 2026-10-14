@@ -17,6 +17,8 @@ import {
   Select,
   Textarea,
   EmptyState,
+  BtnEdit,
+  BtnDelete,
 } from '@/components/ui';
 import type { OKSheetValues } from '@/components/ui';
 import { useToast } from '@/components/ui';
@@ -807,22 +809,16 @@ export default function SituationsPage() {
                               </button>
                             )}
                             {isAdmin && (
-                              <button
+                              <BtnEdit
                                 onClick={() => openEditSheet(s)}
                                 title="Modifier les détails"
-                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-blue-100 hover:bg-blue-600 hover:text-white text-blue-700"
-                              >
-                                Modifier
-                              </button>
+                              />
                             )}
                             {isAdmin && (
-                              <button
+                              <BtnDelete
                                 onClick={() => handleDeleteSituation(s.id, s.fgp)}
                                 title="Supprimer"
-                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-slate-100 hover:bg-slate-700 hover:text-white text-slate-500"
-                              >
-                                Supprimer
-                              </button>
+                              />
                             )}
                           </div>
                         )}

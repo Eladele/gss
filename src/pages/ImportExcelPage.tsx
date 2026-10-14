@@ -2,7 +2,7 @@ import { useRef, useState, useMemo } from 'react';
 import ExcelJS from 'exceljs';
 import { useAppStore } from '@/store/useAppStore';
 import { ZONE_EQUIPE_MAP } from '@/data';
-import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, EmptyState } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, TypeBadge, ZoneChip, EquipeTag, EmptyState, BtnDelete } from '@/components/ui';
 import { useToast } from '@/components/ui';
 import { errMsg } from '@/utils';
 import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
@@ -585,7 +585,8 @@ export default function ImportExcelPage() {
                     <EquipeTag name={h.by} />
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button
+                    <BtnDelete
+                      size="xs"
                       onClick={() => {
                         if (
                           confirm(
@@ -597,10 +598,7 @@ export default function ImportExcelPage() {
                           });
                         }
                       }}
-                      className="text-red-600 hover:underline text-xs font-semibold"
-                    >
-                      Supprimer
-                    </button>
+                    />
                   </td>
                 </tr>
               ))}

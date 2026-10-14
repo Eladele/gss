@@ -78,6 +78,94 @@ export function Button({ variant = 'primary', size = 'md', icon, children, class
   );
 }
 
+// ─── Action Buttons (Edit / Delete) ──────────────────────────────────────────
+export function BtnEdit({
+  onClick,
+  children,
+  label = 'Modifier',
+  size = 'sm',
+  className = '',
+  disabled = false,
+  title,
+  iconOnly = false,
+}: {
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  children?: React.ReactNode;
+  label?: string;
+  size?: 'xs' | 'sm' | 'md';
+  className?: string;
+  disabled?: boolean;
+  title?: string;
+  iconOnly?: boolean;
+}) {
+  const sizeClasses = {
+    xs: 'px-2 py-1 text-[11px] gap-1',
+    sm: 'px-3 py-1.5 text-xs gap-1.5',
+    md: 'px-4 py-2 text-sm gap-2',
+  }[size];
+
+  const content = children ?? (iconOnly ? null : label);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title || (typeof content === 'string' ? content : 'Modifier')}
+      className={`inline-flex items-center font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-300 transition-all hover:shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${sizeClasses} ${className}`}
+    >
+      <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+      </svg>
+      {content && <span>{content}</span>}
+    </button>
+  );
+}
+
+export function BtnDelete({
+  onClick,
+  children,
+  label = 'Supprimer',
+  size = 'sm',
+  className = '',
+  disabled = false,
+  title,
+  iconOnly = false,
+}: {
+  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  children?: React.ReactNode;
+  label?: string;
+  size?: 'xs' | 'sm' | 'md';
+  className?: string;
+  disabled?: boolean;
+  title?: string;
+  iconOnly?: boolean;
+}) {
+  const sizeClasses = {
+    xs: 'px-2 py-1 text-[11px] gap-1',
+    sm: 'px-3 py-1.5 text-xs gap-1.5',
+    md: 'px-4 py-2 text-sm gap-2',
+  }[size];
+
+  const content = children ?? (iconOnly ? null : label);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title || (typeof content === 'string' ? content : 'Supprimer')}
+      className={`inline-flex items-center font-semibold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 hover:text-rose-800 border border-rose-200 hover:border-rose-300 transition-all hover:shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${sizeClasses} ${className}`}
+    >
+      <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+      </svg>
+      {content && <span>{content}</span>}
+    </button>
+  );
+}
+
+
 // ─── Card ─────────────────────────────────────────────────────────────────────
 export function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <div className={`bg-white rounded-xl shadow-sm border border-slate-200 ${className}`}>{children}</div>;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast } from '@/components/ui';
+import { Card, CardHeader, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import { MATERIEL_CATALOGUE, ETAT_MATERIEL_LABELS as ETAT_LABELS, ETAT_MATERIEL_STYLES as ETAT_STYLES } from '@/data';
 import type { Materiel, EtatMateriel } from '@/types';
 
@@ -154,17 +154,15 @@ export default function MaterielsPage() {
                       {m.notes || '—'}
                     </td>
                     <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <button onClick={() => openEdit(m)} className="text-blue-600 hover:underline text-xs font-semibold mr-3">
-                        Modifier
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (confirm(`Supprimer ${m.nom} ?`)) removeMateriel(m.id);
-                        }}
-                        className="text-red-600 hover:underline text-xs font-semibold"
-                      >
-                        Supprimer
-                      </button>
+                      <div className="inline-flex items-center gap-1.5 justify-end">
+                        <BtnEdit size="xs" onClick={() => openEdit(m)} />
+                        <BtnDelete
+                          size="xs"
+                          onClick={() => {
+                            if (confirm(`Supprimer ${m.nom} ?`)) removeMateriel(m.id);
+                          }}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

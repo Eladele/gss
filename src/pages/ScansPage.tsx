@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ExcelJS from 'exceljs';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useToast } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useToast, BtnDelete } from '@/components/ui';
 import { TrendArea } from '@/components/charts';
 import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
 import type { ScanRecord } from '@/types';
@@ -496,7 +496,8 @@ export default function ScansPage() {
                     <td className="px-3 py-2 text-center text-amber-700">{h.moyen}</td>
                     <td className="px-3 py-2 text-center text-red-700">{h.degrade}</td>
                     <td className="px-3 py-2 text-right">
-                      <button
+                      <BtnDelete
+                        size="xs"
                         onClick={() => {
                           if (
                             confirm(
@@ -506,10 +507,7 @@ export default function ScansPage() {
                             removeScanSnapshot(h.id);
                           }
                         }}
-                        className="text-red-600 hover:underline text-xs font-semibold"
-                      >
-                        Supprimer
-                      </button>
+                      />
                     </td>
                   </tr>
                 ))}

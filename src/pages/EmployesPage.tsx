@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import { BANQUES } from '@/data';
 import { buildExportPreview, exportEmployesPresentsExcel } from '@/utils/leaves';
 import type { Employee, LeaveType, LeaveRecord } from '@/types';
@@ -320,24 +320,22 @@ export default function EmployesPage() {
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        <div className="flex gap-1.5 flex-wrap">
+                        <div className="flex gap-1.5 flex-wrap items-center">
                           <button
                             onClick={() => openConge(e)}
-                            className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200 transition-all hover:shadow-sm"
                           >
-                            {' '}
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
                             Congé
                           </button>
-                          <button
-                            onClick={() => openEdit(e)}
-                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg"
-                          ></button>
-                          <button
+                          <BtnEdit onClick={() => openEdit(e)} />
+                          <BtnDelete
                             onClick={() => {
                               if (confirm(`Supprimer ${e.name} ?`)) removeEmployee(e.id);
                             }}
-                            className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg"
-                          ></button>
+                          />
                         </div>
                       </td>
                     </tr>
@@ -413,7 +411,12 @@ export default function EmployesPage() {
                         <p className="text-[11px] text-slate-400">{LEAVE_LABELS[l.type]}</p>
                       </div>
                     </div>
-                    <button onClick={() => removeLeave(l.id)} className="text-red-400 hover:text-red-600 text-xs"></button>
+                    <BtnDelete
+                      size="xs"
+                      onClick={() => {
+                        if (confirm('Supprimer ce congé ?')) removeLeave(l.id);
+                      }}
+                    />
                   </div>
                   <div className="flex items-center justify-between text-xs text-slate-500 mt-2">
                     <span>
@@ -428,10 +431,7 @@ export default function EmployesPage() {
                   )}
                   <div className="flex items-center justify-between mt-2">
                     <p className="text-[10px] text-slate-300">Ajouté par {l.createdBy || '—'}</p>
-                    <button onClick={() => openEditConge(l, emp)} className="text-[11px] text-blue-600 hover:underline">
-                      {' '}
-                      Modifier
-                    </button>
+                    <BtnEdit size="xs" onClick={() => openEditConge(l, emp)} />
                   </div>
                 </div>
               );

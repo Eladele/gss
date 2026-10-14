@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, Button, Modal, Select, Input, EmptyState, StatCard, ProgressBar, useToast } from '@/components/ui';
+import { Card, CardHeader, Button, Modal, Select, Input, EmptyState, StatCard, ProgressBar, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import { errMsg } from '@/utils';
 import { parseAvancementExcel, parseKmlOrKmz, type AvancementParsed, type KmlParsed } from '@/utils/deploiementImport';
 import type { Chantier } from '@/types';
@@ -355,13 +355,9 @@ export default function DeploiementPage() {
                       </div>
                       <p className="text-xs text-slate-400">{[c.zone, c.ville, c.equipeNom].filter(Boolean).join(' — ') || '—'}</p>
                     </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => openEdit(c)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg">
-                        Modifier
-                      </button>
-                      <button onClick={() => handleDelete(c)} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg">
-                        Supprimer
-                      </button>
+                    <div className="flex gap-2 items-center">
+                      <BtnEdit onClick={() => openEdit(c)} />
+                      <BtnDelete onClick={() => handleDelete(c)} />
                     </div>
                   </div>
 

@@ -45,6 +45,7 @@ import PretsPage from '@/pages/PretsPage';
 import DeploiementPage from '@/pages/DeploiementPage';
 import MaintenancePage from '@/pages/MaintenancePage';
 import ReseauPage from '@/pages/ReseauPage';
+import CongesPage from '@/pages/CongesPage';
 
 type Page =
   | 'dashboard'
@@ -64,7 +65,8 @@ type Page =
   | 'prets'
   | 'deploiement'
   | 'maintenance'
-  | 'reseau';
+  | 'reseau'
+  | 'conges';
 
 type NavLeaf = { id: Page; label: string };
 type NavGroup = { group: string; label: string; children: NavLeaf[] };
@@ -106,6 +108,7 @@ const RH_GROUP: NavGroup = {
   label: 'RH',
   children: [
     { id: 'employes', label: 'Employés' },
+    { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'equipes', label: 'Équipes' },
     { id: 'materiels', label: 'Matériel' },
@@ -140,6 +143,7 @@ const NAV: Record<Role, NavItem[]> = {
   // (pas de Situations, Réseau, Déploiement).
   rh: [
     { id: 'employes', label: 'Employés' },
+    { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'profil', label: 'Profil' },
@@ -170,6 +174,7 @@ const PAGE_TITLES: Record<Page, string> = {
   profil: 'Mon Profil',
   statistiques: 'Statistiques',
   employes: 'Gestion Employés',
+  conges: 'Gestion Congés',
   prets: 'Prêts Employés',
   vehicules: 'Gestion Véhicules',
   materiels: 'Gestion Matériel',
@@ -191,6 +196,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   profil: User,
   statistiques: BarChart3,
   employes: UserCheck,
+  conges: FileText,
   prets: Wallet,
   vehicules: Car,
   materiels: Wrench,
@@ -248,6 +254,7 @@ export default function AppLayout() {
     profil: <ProfilPage />,
     statistiques: <StatistiquesPage />,
     employes: <EmployesPage />,
+    conges: <CongesPage />,
     prets: <PretsPage />,
     vehicules: <VehiculesPage />,
     materiels: <MaterielsPage />,
