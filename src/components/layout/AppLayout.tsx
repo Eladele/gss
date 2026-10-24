@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { useCaisseStore, canDecide } from '@/store/useCaisseStore';
+import { useToast } from '@/components/ui';
 import type { Role } from '@/types';
 import {
   LayoutDashboard,
@@ -16,6 +18,8 @@ import {
   Wrench,
   Network,
   Wallet,
+  Banknote,
+  Send,
   Construction,
   ChevronDown,
   Hammer,
@@ -46,6 +50,8 @@ import DeploiementPage from '@/pages/DeploiementPage';
 import MaintenancePage from '@/pages/MaintenancePage';
 import ReseauPage from '@/pages/ReseauPage';
 import CongesPage from '@/pages/CongesPage';
+import CaissesPage from '@/pages/CaissePage';
+import DistributionPage from '@/pages/DistributionPage';
 
 type Page =
   | 'dashboard'
@@ -66,7 +72,9 @@ type Page =
   | 'deploiement'
   | 'maintenance'
   | 'reseau'
-  | 'conges';
+  | 'conges'
+  | 'caisses'
+  | 'distribution';
 
 type NavLeaf = { id: Page; label: string };
 type NavGroup = { group: string; label: string; children: NavLeaf[] };
@@ -89,6 +97,7 @@ const RACCORDEMENT_GROUP_ADMIN: NavGroup = {
   label: 'Raccordement',
   children: [
     { id: 'situations', label: 'Situations' },
+    { id: 'distribution', label: 'Distribuer programme' },
     { id: 'scans', label: 'Scan Réseau' },
     { id: 'import-excel', label: 'Import Excel' },
   ],
@@ -99,6 +108,7 @@ const RACCORDEMENT_GROUP_SUPERVISEUR: NavGroup = {
   label: 'Raccordement',
   children: [
     { id: 'situations', label: 'Situations' },
+    { id: 'distribution', label: 'Distribuer programme' },
     { id: 'import-excel', label: 'Import Excel' },
   ],
 };
@@ -137,11 +147,13 @@ const NAV: Record<Role, NavItem[]> = {
     RACCORDEMENT_GROUP_ADMIN,
     DEPLOIEMENT_GROUP,
     RH_GROUP,
+    { id: 'caisses', label: 'Caisses' },
     { id: 'notifications', label: 'Notifications' },
   ],
   // Comptable / RH (ex: Betoul) — uniquement Employés et Prêts, rien d'opérationnel
   // (pas de Situations, Réseau, Déploiement).
   rh: [
+    { id: 'caisses', label: 'Caisses' },
     // { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
@@ -155,6 +167,16 @@ const NAV: Record<Role, NavItem[]> = {
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
     { id: 'situations', label: 'Situations' },
+    { id: 'profil', label: 'Profil' },
+  ],
+  // Directeur — demandes d'alimentation (Caisses) + suivi opérationnel
+  directeur: [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'statistiques', label: 'Statistiques' },
+    RACCORDEMENT_GROUP_ADMIN,
+    DEPLOIEMENT_GROUP,
+    { id: 'caisses', label: 'Caisses' },
+    { id: 'notifications', label: 'Notifications' },
     { id: 'profil', label: 'Profil' },
   ],
 };
@@ -179,6 +201,8 @@ const PAGE_TITLES: Record<Page, string> = {
   vehicules: 'Gestion Véhicules',
   materiels: 'Gestion Matériel',
   scans: 'Scans Réseau (ONU/OLT)',
+  caisses: 'Caisses',
+  distribution: 'Distribuer le programme',
 };
 
 const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
@@ -201,6 +225,8 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   vehicules: Car,
   materiels: Wrench,
   scans: Network,
+  caisses: Banknote,
+  distribution: Send,
 };
 
 const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
@@ -225,7 +251,18 @@ export default function AppLayout() {
   const user = useAppStore((s) => s.user)!;
   const notifications = useAppStore((s) => s.notifications);
   const logout = useAppStore((s) => s.logout);
-  const unread = notifications.filter((n) => !n.read).length;
+  const remoteNotifs = useCaisseStore((s: { notifications: any; }) => s.notifications);
+  const incoming = useCaisseStore((s) => s.incoming);
+  const startCaisses = useCaisseStore((s) => s.start);
+  const pendingCaisse = useCaisseStore((s) => s.operations.filter((o) => o.statut === 'en_attente' && canDecide(user, o)).length);
+  const { showToast } = useToast();
+  const unread = notifications.filter((n) => !n.read).length + remoteNotifs.filter((n: { lu: any; }) => !n.lu).length;
+
+  // Notifications en base + temps réel (demandes de dépense, validations, alimentations)
+  useEffect(() => startCaisses(user), [user.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (incoming) showToast(`${incoming.titre} — ${incoming.message}`, incoming.type === 'rejetee' ? 'warning' : 'info');
+  }, [incoming]); // eslint-disable-line react-hooks/exhaustive-deps
   const navItems = NAV[user.role];
   const defaultPage = allowedPages(user.role)[0] ?? 'profil';
   const [page, setPage] = useState<Page>(defaultPage);
@@ -258,6 +295,8 @@ export default function AppLayout() {
     vehicules: <VehiculesPage />,
     materiels: <MaterielsPage />,
     scans: <ScansPage />,
+    caisses: <CaissesPage />,
+    distribution: <DistributionPage />,
   };
 
   return (
@@ -401,6 +440,11 @@ export default function AppLayout() {
                     {unread}
                   </span>
                 )}
+                {item.id === 'caisses' && pendingCaisse > 0 && (
+                  <span className="ml-auto px-2 py-0.5 text-xs bg-amber-100 text-amber-800 font-bold rounded-full">
+                    {pendingCaisse}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -474,6 +518,11 @@ export default function AppLayout() {
                       {unread}
                     </span>
                   )}
+                  {item.id === 'caisses' && pendingCaisse > 0 && (
+                    <span className="ml-auto px-1.5 py-0.5 text-[10px] bg-amber-100 text-amber-800 font-bold rounded-full">
+                      {pendingCaisse}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -526,13 +575,20 @@ export default function AppLayout() {
               );
             })
           ) : (
-            // Admin/Superviseur layout bottom items
-            [
-              { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-              { id: 'situations', label: 'Situations', icon: ClipboardList },
-              { id: 'notifications', label: 'Alertes', icon: Bell, badge: unread },
-              { id: 'menu', label: 'Menu', icon: MenuIcon, onClick: () => setMenuOpen(true) },
-            ].map((item) => {
+            // Admin/Superviseur/RH layout bottom items — uniquement des pages autorisées au rôle
+            (
+              [
+                { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+                { id: 'situations', label: 'Situations', icon: ClipboardList },
+                { id: 'caisses', label: 'Caisses', icon: Banknote, badge: pendingCaisse },
+                { id: 'prets', label: 'Prêts', icon: Wallet },
+                { id: 'notifications', label: 'Alertes', icon: Bell, badge: unread },
+                { id: 'menu', label: 'Menu', icon: MenuIcon, onClick: () => setMenuOpen(true) },
+              ] as { id: string; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number; onClick?: () => void }[]
+            )
+              .filter((item) => item.id === 'menu' || allowedPages(user.role).includes(item.id as Page))
+              .filter((item, _i, arr) => item.id !== 'prets' || arr.length <= 4)
+              .map((item) => {
               const Icon = item.icon;
               const isActive = page === item.id;
               return (

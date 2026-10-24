@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'superviseur' | 'chef' | 'rh' | 'consultation';
+export type Role = 'admin' | 'superviseur' | 'chef' | 'rh' | 'consultation' | 'directeur';
 export type SituationStatus = 'pending' | 'in_progress' | 'ok' | 'non_ok' | 'urgent';
 export type SituationType = 'CPL' | 'DRG' | 'TRL' | 'CST' | 'ANS' | 'CLS' | 'CMI' | 'RLR';
 // Nature d'une situation : installation (mise en service) ou dérangement (SAV / panne)
@@ -49,7 +49,7 @@ export interface Situation {
   isUrgent?: boolean;
   nature?: SituationNature;
   conformite?: ConformiteDelai;
- importId?: string; // relie la situation à sa ligne d'historique d'import (suppression en cascade)
+  importId?: string; // relie la situation à sa ligne d'historique d'import (suppression en cascade)
   poteau?: number; // nombre de poteaux posés pour cette intervention (colonne POTEAU du fichier)
   rxDbm?: number; // Rx (dBm) confirmé à la clôture OK
   rangingM?: number; // Ranging (m) confirmé à la clôture OK
@@ -235,4 +235,111 @@ export interface NoeudReseau {
   puissanceOptiqueDbm?: number;
   notes?: string;
   createdAt?: string;
+}
+// ─── CAISSES (dépenses terrain, alimentations Bankily, validation comptable) ──
+export type CaisseOpType = 'depense' | 'alimentation';
+export type CaisseOpStatut = 'en_attente' | 'validee' | 'rejetee' | 'annulee';
+export type CaisseCategorie =
+  | 'carburant'
+  | 'main_oeuvre'
+  | 'materiel'
+  | 'transport'
+  | 'vehicule'
+  | 'location'
+  | 'communication'
+  | 'projet'
+  | 'autre'
+  | 'alimentation';
+
+export interface Caisse {
+  id: string;
+  nom: string;
+  titulaireId: string | null;
+  telephone: string;
+  seuilAlerte: number;
+  actif: boolean;
+}
+
+export interface CaisseOperation {
+  id: string;
+  caisseId: string;
+  type: CaisseOpType;
+  montant: number; // MRU
+  date: string; // YYYY-MM-DD
+  libelle: string;
+  categorie: CaisseCategorie;
+  chantier: string;
+  trsId: string | null;
+  statut: CaisseOpStatut;
+  demandeParId: string | null;
+  demandeParNom: string | null;
+  traiteParNom: string | null;
+  traiteLe: string | null;
+  motifRejet: string | null;
+  note: string;
+  source: string;
+  createdAt: string;
+}
+
+export interface CaisseChargeFixe {
+  id: string;
+  caisseId: string;
+  libelle: string;
+  montant: number; // MRU
+  categorie: CaisseCategorie;
+  chantier?: string;
+  frequence: 'hebdo' | 'mensuel';
+  jourSemaine?: number | null; // 1 = Lundi, 4 = Jeudi
+  jourMois?: number | null; // 1 = 1er du mois
+  actif: boolean;
+  dernierDeclenchement?: string | null; // YYYY-MM-DD
+  createdAt?: string;
+}
+
+// Notification persistée en base (une ligne par destinataire), reçue en temps réel
+export interface AppNotification {
+  id: string;
+  titre: string;
+  message: string;
+  type: 'demande_depense' | 'demande_alimentation' | 'validee' | 'rejetee' | 'alimentation' | 'programme' | 'programme_non_fait' | 'info';
+  module: string;
+  refId: string | null;
+  lu: boolean;
+  createdAt: string;
+}
+
+// ─── PROGRAMME PAR FICHES OT (PDF Mauritel dérangements / installations) ─────
+export type OtStatut = 'a_faire' | 'fait' | 'non_fait';
+
+export interface ProgrammeOT {
+  id: string;
+  numeroOt: string;
+  nature: 'derangement' | 'installation';
+  sousType: string;
+  dateRecu: string | null;
+  dateProgramme: string; // YYYY-MM-DD
+  fgp: string;
+  clientCode: string;
+  clientNom: string;
+  clientInfo: string;
+  telephones: string[];
+  adresse: string;
+  zone: string;
+  pco: string;
+  port: string;
+  dis: string;
+  ancienDis: string;
+  ontSerials: string[];
+  defaut: string;
+  abonnement: string;
+  cableFibreM: number | null; // installation : câble fibre prévu (m)
+  miseEnService: string;
+  equipe: string;
+  statut: OtStatut;
+  commentaire: string;
+  traiteParNom: string | null;
+  traiteLe: string | null;
+  distribueParNom: string | null;
+  sourceFichier: string;
+  createdAt: string;
 }
