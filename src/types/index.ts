@@ -316,6 +316,8 @@ export interface ProgrammeOT {
   numeroOt: string;
   nature: 'derangement' | 'installation';
   sousType: string;
+  typeOt: string; // CPL, CLS, TRL, RLR, CST, ANS, DRG
+  typeLigne: 'FGP' | 'TPH';
   dateRecu: string | null;
   dateProgramme: string; // YYYY-MM-DD
   fgp: string;
@@ -336,7 +338,15 @@ export interface ProgrammeOT {
   miseEnService: string;
   equipe: string;
   statut: OtStatut;
+  motif: string; // motif choisi à la clôture (liste « fait » ou « non fait »)
   commentaire: string;
+  decharge: boolean | null; // décharge signée (fait)
+  scanne: boolean | null; // ONT scanné (fait)
+  cstChange: boolean; // fait avec changement de constitution
+  nouveauDis: string;
+  nouvelOnt: string;
+  poteaux: number; // poteaux comptés dans les statistiques
+  assigneLe: string | null; // YYYY-MM-DD / date d'affectation à l'équipe
   traiteParNom: string | null;
   traiteLe: string | null;
   distribueParNom: string | null;

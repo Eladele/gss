@@ -12,3 +12,56 @@ export const STATUT_OT = {
 
 /** 49617103 → « 49 61 71 03 » (plus lisible au téléphone) */
 export const fmtTel = (t: string) => t.replace(/(\d{2})(?=\d)/g, '$1 ');
+
+// ─── Types d'OT (mêmes codes que les situations) ─────────────────────────────
+export const TYPE_OT_LABEL: Record<string, string> = {
+  CPL: 'Création première ligne',
+  CLS: 'Ajout nouvelle ligne',
+  TRL: 'Transfert local',
+  RLR: 'Recréation ligne résiliée',
+  CST: 'Changement de constitution',
+  ANS: 'Ajout numéro supplémentaire',
+  DRG: 'Dérangement',
+};
+
+// ─── Motifs de clôture du programme ──────────────────────────────────────────
+// `poteaux` : nombre de poteaux comptés dans les statistiques quand ce motif est choisi
+export interface MotifDef {
+  label: string;
+  poteaux?: number;
+}
+
+export const MOTIFS_NON_FAIT: MotifDef[] = [
+  { label: 'Le client sonne, ne répond pas' },
+  { label: 'Contact fermé / injoignable' },
+  { label: 'Fausse contact' },
+  { label: 'Local fermé' },
+  { label: 'Hors zone' },
+  { label: 'Câble distribution coupé' },
+  { label: 'Câble transport coupé' },
+  { label: 'Poteau cassé' },
+  { label: 'Problème signal' },
+  { label: 'Besoin poteau', poteaux: 1 },
+  { label: 'Besoin 2 poteaux 350 m', poteaux: 2 },
+  { label: 'Le modem n’est pas en place' },
+  { label: 'Ligne tirée, pas d’électricité' },
+  { label: 'Le modem n’est pas la copie conforme' },
+];
+
+export const MOTIFS_FAIT: MotifDef[] = [
+  { label: 'Câble distribution coupé' },
+  { label: 'Câble transport coupé' },
+  { label: 'Zone en panne' },
+  { label: 'Modem défectueux' },
+  { label: 'Installé par quelqu’un' },
+  { label: 'Confirmé par client' },
+];
+
+/** Poteaux à compter pour un motif (« Besoin 2 poteaux 350 m » → 2) */
+export const poteauxDuMotif = (motif: string, liste: MotifDef[]) => liste.find((m) => m.label === motif)?.poteaux ?? 0;
+
+/** « FGP 077490 » ou « TPH 45240200 » */
+export const ligneLabel = (o: { typeLigne?: string; fgp: string }) => `${o.typeLigne || 'FGP'} ${o.fgp || '—'}`;
+
+/** Application décharge (ouverte dans un nouvel onglet) */
+export const DECHARGE_URL = 'https://41.188.123.36/';

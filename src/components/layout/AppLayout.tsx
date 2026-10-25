@@ -20,6 +20,8 @@ import {
   Wallet,
   Banknote,
   Send,
+  Trophy,
+  ExternalLink,
   Construction,
   ChevronDown,
   Hammer,
@@ -52,6 +54,8 @@ import ReseauPage from '@/pages/ReseauPage';
 import CongesPage from '@/pages/CongesPage';
 import CaissesPage from '@/pages/CaissePage';
 import DistributionPage from '@/pages/DistributionPage';
+import PointsPage from '@/pages/PointsPage';
+import { DECHARGE_URL } from '@/utils/programme';
 
 type Page =
   | 'dashboard'
@@ -74,7 +78,8 @@ type Page =
   | 'reseau'
   | 'conges'
   | 'caisses'
-  | 'distribution';
+  | 'distribution'
+  | 'points';
 
 type NavLeaf = { id: Page; label: string };
 type NavGroup = { group: string; label: string; children: NavLeaf[] };
@@ -130,13 +135,14 @@ const NAV: Record<Role, NavItem[]> = {
   superviseur: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
+    { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_SUPERVISEUR,
     { id: 'equipes', label: 'Équipes' },
     DEPLOIEMENT_GROUP,
     { id: 'notifications', label: 'Notifications' },
   ],
+  // Chef d'équipe : uniquement son programme (fiches OT) + lien vers l'application décharge
   chef: [
-    { id: 'chef-situations', label: 'Situations' },
     { id: 'programme', label: 'Programme' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'profil', label: 'Profil' },
@@ -144,6 +150,7 @@ const NAV: Record<Role, NavItem[]> = {
   admin: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
+    { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_ADMIN,
     DEPLOIEMENT_GROUP,
     RH_GROUP,
@@ -173,6 +180,7 @@ const NAV: Record<Role, NavItem[]> = {
   directeur: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
+    { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_ADMIN,
     DEPLOIEMENT_GROUP,
     { id: 'caisses', label: 'Caisses' },
@@ -203,6 +211,7 @@ const PAGE_TITLES: Record<Page, string> = {
   scans: 'Scans Réseau (ONU/OLT)',
   caisses: 'Caisses',
   distribution: 'Distribuer le programme',
+  points: 'Points des équipes',
 };
 
 const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
@@ -227,6 +236,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   scans: Network,
   caisses: Banknote,
   distribution: Send,
+  points: Trophy,
 };
 
 const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
@@ -297,6 +307,7 @@ export default function AppLayout() {
     scans: <ScansPage />,
     caisses: <CaissesPage />,
     distribution: <DistributionPage />,
+    points: <PointsPage />,
   };
 
   return (
@@ -448,6 +459,17 @@ export default function AppLayout() {
               </button>
             );
           })}
+          {user.role === 'chef' && (
+            <a
+              href={DECHARGE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-800"
+            >
+              <ExternalLink className="w-5 h-5 text-slate-400" />
+              Application décharge
+            </a>
+          )}
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -526,6 +548,17 @@ export default function AppLayout() {
                 </button>
               );
             })}
+            {user.role === 'chef' && (
+              <a
+                href={DECHARGE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-800"
+              >
+                <ExternalLink className="w-4 h-4 text-slate-400" />
+                Application décharge
+              </a>
+            )}
           </nav>
           <div className="p-3 border-t border-slate-100">
             <button
@@ -550,8 +583,8 @@ export default function AppLayout() {
           {user.role === 'chef' ? (
             // Chef layout bottom items
             [
-              { id: 'chef-situations', label: 'Situations', icon: ClipboardList },
               { id: 'programme', label: 'Programme', icon: FileText },
+              { id: 'decharge', label: 'Décharge', icon: ExternalLink },
               { id: 'notifications', label: 'Alertes', icon: Bell, badge: unread },
               { id: 'profil', label: 'Profil', icon: User },
             ].map((item) => {
@@ -559,7 +592,7 @@ export default function AppLayout() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setPage(item.id as Page)}
+                  onClick={() => (item.id === 'decharge' ? window.open(DECHARGE_URL, '_blank', 'noopener') : setPage(item.id as Page))}
                   className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 text-[10px] font-medium transition-colors ${page === item.id ? 'text-blue-700' : 'text-slate-400 hover:text-slate-600'}`}
                 >
                   <span className="relative">

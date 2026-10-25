@@ -9,6 +9,8 @@ function mapOt(r: any): ProgrammeOT {
     numeroOt: r.numero_ot,
     nature: r.nature,
     sousType: r.sous_type ?? '',
+    typeOt: r.type_ot ?? '',
+    typeLigne: r.type_ligne === 'TPH' ? 'TPH' : 'FGP',
     dateRecu: r.date_recu ?? null,
     dateProgramme: r.date_programme,
     fgp: r.fgp ?? '',
@@ -29,10 +31,18 @@ function mapOt(r: any): ProgrammeOT {
     miseEnService: r.mise_en_service ?? '',
     equipe: r.equipe ?? '',
     statut: r.statut,
+    motif: r.motif ?? '',
     commentaire: r.commentaire ?? '',
+    decharge: r.decharge ?? null,
+    scanne: r.scanne ?? null,
+    cstChange: !!r.cst_change,
+    nouveauDis: r.nouveau_dis ?? '',
+    nouvelOnt: r.nouvel_ont ?? '',
+    poteaux: r.poteaux ?? 0,
     traiteParNom: r.traite_par_nom ?? null,
     traiteLe: r.traite_le ?? null,
     distribueParNom: r.distribue_par_nom ?? null,
+    assigneLe: r.assigne_le ?? r.created_at ?? null,
     sourceFichier: r.source_fichier ?? '',
     createdAt: r.created_at,
   };
@@ -58,6 +68,17 @@ export async function fetchProgramme(opts: { from: string; to: string; equipe?: 
   return (data ?? []).map(mapOt);
 }
 
+/** Fiches reçues sur une période (date « OT reçu le », à défaut date du programme) — pour les points */
+export async function fetchPourPoints(from: string, to: string): Promise<ProgrammeOT[]> {
+  const { data, error } = await supabase
+    .from('programme_ot')
+    .select('*')
+    .or(`and(date_recu.gte.${from},date_recu.lte.${to}),and(date_recu.is.null,date_programme.gte.${from},date_programme.lte.${to})`)
+    .limit(5000);
+  if (error) throw dbError(error, 'Chargement des points impossible');
+  return (data ?? []).map(mapOt);
+}
+
 /** N° OT déjà distribués parmi ceux du PDF (pour ne pas les renvoyer) */
 export async function existingNumeros(numeros: string[]): Promise<Map<string, { equipe: string; date: string }>> {
   const out = new Map<string, { equipe: string; date: string }>();
@@ -79,6 +100,8 @@ export async function distribuer(
     numero_ot: o.numeroOt,
     nature: o.nature,
     sous_type: o.sousType,
+    type_ot: o.typeOt,
+    type_ligne: o.typeLigne,
     date_recu: o.dateRecu,
     date_programme: dateProgramme,
     fgp: o.fgp,
@@ -109,17 +132,55 @@ export async function distribuer(
   return data?.length ?? 0;
 }
 
-export async function setStatut(id: string, statut: OtStatut, par: string, commentaire = ''): Promise<void> {
+export interface Cloture {
+  statut: OtStatut;
+  motif?: string;
+  commentaire?: string;
+  decharge?: boolean | null;
+  scanne?: boolean | null;
+  cstChange?: boolean;
+  nouveauDis?: string;
+  nouvelOnt?: string;
+  poteaux?: number;
+}
+
+/** Clôture d'une fiche par le chef (fait / non fait), ou remise « à faire » (tout est effacé). */
+export async function cloturer(id: string, c: Cloture, par: string): Promise<void> {
+  const reset = c.statut === 'a_faire';
   const { error } = await supabase
     .from('programme_ot')
     .update({
-      statut,
-      commentaire: statut === 'a_faire' ? '' : commentaire,
-      traite_par_nom: statut === 'a_faire' ? null : par,
-      traite_le: statut === 'a_faire' ? null : new Date().toISOString(),
+      statut: c.statut,
+      motif: reset ? '' : (c.motif ?? ''),
+      commentaire: reset ? '' : (c.commentaire ?? ''),
+      decharge: reset || c.statut !== 'fait' ? null : (c.decharge ?? null),
+      scanne: reset || c.statut !== 'fait' ? null : (c.scanne ?? null),
+      cst_change: !reset && c.statut === 'fait' && !!c.cstChange,
+      nouveau_dis: !reset && c.cstChange ? (c.nouveauDis ?? '') : '',
+      nouvel_ont: !reset && c.cstChange ? (c.nouvelOnt ?? '') : '',
+      poteaux: reset ? 0 : Math.max(0, Math.round(c.poteaux ?? 0)),
+      traite_par_nom: reset ? null : par,
+      traite_le: reset ? null : new Date().toISOString(),
     })
     .eq('id', id);
   if (error) throw dbError(error, 'Mise à jour impossible');
+}
+
+/** Fiches qui comptent des poteaux (pour les statistiques) */
+export async function fetchPoteauxProgramme(): Promise<{ fgp: string; equipe: string; nature: string; poteaux: number; date: string }[]> {
+  const { data, error } = await supabase
+    .from('programme_ot')
+    .select('fgp, equipe, nature, poteaux, date_programme, traite_le')
+    .gt('poteaux', 0)
+    .limit(5000);
+  if (error) return []; // colonne pas encore créée : les statistiques restent celles des situations
+  return (data ?? []).map((r) => ({
+    fgp: (r.fgp as string) ?? '',
+    equipe: (r.equipe as string) ?? '',
+    nature: r.nature as string,
+    poteaux: Number(r.poteaux) || 0,
+    date: ((r.traite_le as string) ?? (r.date_programme as string) ?? '').slice(0, 10),
+  }));
 }
 
 export async function reassign(ids: string[], equipe: string): Promise<void> {
@@ -141,4 +202,52 @@ export function subscribeProgramme(key: string, onChange: () => void): () => voi
   return () => {
     supabase.removeChannel(channel);
   };
+}
+
+// ─── Liaison avec les scans réseau (vue programme_ot_scan) ───────────────────
+export type ScanEtat = 'SCANNE' | 'NON SCANE' | 'ABSENT';
+export interface ScanOT {
+  avant: ScanEtat | null; // dans le dernier import AVANT la réception de l'OT
+  avantLe: string | null;
+  dernier: ScanEtat | null; // dans le dernier import
+  dernierLe: string | null;
+}
+
+/** État de scan des ONT de ces fiches (vide si la liaison n'est pas encore installée) */
+export async function fetchScanOts(ids: string[]): Promise<Map<string, ScanOT>> {
+  const out = new Map<string, ScanOT>();
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data, error } = await supabase
+      .from('programme_ot_scan')
+      .select('id, scan_avant_result, scan_avant_import, scan_dernier_result, scan_dernier_import')
+      .in('id', ids.slice(i, i + 150));
+    if (error) return out;
+    (data ?? []).forEach((r) =>
+      out.set(r.id as string, {
+        avant: (r.scan_avant_result as ScanEtat) ?? null,
+        avantLe: (r.scan_avant_import as string) ?? null,
+        dernier: (r.scan_dernier_result as ScanEtat) ?? null,
+        dernierLe: (r.scan_dernier_import as string) ?? null,
+      }),
+    );
+  }
+  return out;
+}
+
+/** Dernier import du fichier de scan */
+export async function fetchDernierImportScan(): Promise<{ id: string; importedAt: string } | null> {
+  const { data, error } = await supabase.from('scan_import_history').select('id, imported_at').order('imported_at', { ascending: false }).limit(1).maybeSingle();
+  if (error || !data) return null;
+  return { id: data.id as string, importedAt: data.imported_at as string };
+}
+
+/** Fiches faites (ou reçues) entre deux instants, toutes équipes — pour le rapport de scan */
+export async function fetchFaitesEntre(fromIso: string, toIso: string): Promise<ProgrammeOT[]> {
+  const { data, error } = await supabase
+    .from('programme_ot')
+    .select('*')
+    .or(`and(statut.eq.fait,traite_le.gte.${fromIso},traite_le.lte.${toIso}),and(nature.eq.derangement,date_recu.gte.${fromIso.slice(0, 10)},date_recu.lte.${toIso.slice(0, 10)})`)
+    .limit(5000);
+  if (error) throw dbError(error, 'Chargement du rapport impossible');
+  return (data ?? []).map(mapOt);
 }

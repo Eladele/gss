@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { getEquipeColor } from '@/utils';
 import {
@@ -20,6 +20,7 @@ import {
 import { Card, CardHeader, CardTitle, Button, Select, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
 import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
 import type { SituationNature } from '@/types';
+import { fetchPoteauxProgramme } from '@/lib/programmeService';
 
 type NatureFilter = 'all' | SituationNature;
 
@@ -114,10 +115,37 @@ export default function StatistiquesPage() {
     [situations, period],
   );
 
+  // Poteaux saisis par les chefs d'équipe à la clôture des fiches du programme
+  // (« Besoin poteau », « Besoin 2 poteaux 350 m », poteaux posés). Une fiche ne compte
+  // pas si la situation du même FGP compte déjà ses poteaux (pas de double comptage).
+  const [progPoteaux, setProgPoteaux] = useState<Awaited<ReturnType<typeof fetchPoteauxProgramme>>>([]);
+  useEffect(() => {
+    let alive = true;
+    fetchPoteauxProgramme().then((rows) => alive && setProgPoteaux(rows));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const progScoped = useMemo(() => {
+    const dejaComptes = new Set(
+      scoped.filter((s) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)) > 0).map((s) => s.fgp.trim().replace(/^0+/, '')),
+    );
+    return progPoteaux.filter((p) => {
+      if (!matchesNature({ type: p.nature === 'derangement' ? 'DRG' : 'CPL' }, nature)) return false;
+      if (!inPeriod(p.date, period)) return false;
+      if (fEquipe && p.equipe.toLowerCase() !== fEquipe.toLowerCase()) return false;
+      if (fVille && villeForEquipe(p.equipe, equipes) !== fVille) return false;
+      return !dejaComptes.has(p.fgp.trim().replace(/^0+/, ''));
+    });
+  }, [progPoteaux, scoped, nature, period, fEquipe, fVille, equipes]);
+
   const total = scoped.length;
   // Compte les poteaux depuis la colonne dédiée (nouveaux imports) avec repli sur
-  // l'extraction du motif (anciennes situations importées avant l'ajout de la colonne).
-  const totalPoteaux = scoped.reduce((sum, s) => sum + (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)), 0);
+  // l'extraction du motif (anciennes situations importées avant l'ajout de la colonne),
+  // plus les poteaux du programme.
+  const totalPoteaux =
+    scoped.reduce((sum, s) => sum + (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)), 0) +
+    progScoped.reduce((sum, p) => sum + p.poteaux, 0);
   const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
   const dansDelai = total - horsDelai;
   const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
@@ -148,10 +176,16 @@ export default function StatistiquesPage() {
       if (nb > 0) byVilleMap[v].nbFgp += 1;
       byVilleMap[v].poteaux += nb;
     });
+    progScoped.forEach((p) => {
+      const v = villeForEquipe(p.equipe, equipes);
+      if (!byVilleMap[v]) byVilleMap[v] = { nbFgp: 0, poteaux: 0 };
+      byVilleMap[v].nbFgp += 1;
+      byVilleMap[v].poteaux += p.poteaux;
+    });
     return Object.entries(byVilleMap)
       .map(([ville, d]) => ({ ville, nbFgp: d.nbFgp, poteaux: d.poteaux }))
       .sort((a, b) => b.poteaux - a.poteaux);
-  }, [scoped, equipes]);
+  }, [scoped, equipes, progScoped]);
 
   const delaiDetailRows = useMemo(() => {
     if (!delaiDetail) return [];
@@ -639,8 +673,8 @@ export default function StatistiquesPage() {
           <CardTitle> Poteaux posés — par ville</CardTitle>
         </CardHeader>
         <p className="px-5 -mt-1 pb-2 text-[11px] text-slate-400">
-          Compte les poteaux (colonne dédiée, ou extraits du motif si absente) des situations de la période/filtres en cours, regroupés
-          par ville.
+          Compte les poteaux (colonne dédiée, ou extraits du motif si absente) des situations de la période/filtres en cours, plus les
+          poteaux saisis par les chefs d’équipe sur les fiches du programme, regroupés par ville.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

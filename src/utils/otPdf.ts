@@ -7,6 +7,8 @@ export interface ParsedOT {
   numeroOt: string; // "10/26 0103029"
   nature: OtNature;
   sousType: string; // "Création première ligne", "Transfert local", "Probleme de connexion"…
+  typeOt: string; // CPL, CLS, TRL, RLR, CST, ANS ou DRG ('' si inconnu)
+  typeLigne: 'FGP' | 'TPH'; // ligne fibre (FGP) ou téléphone (TPH)
   dateRecu: string | null; // YYYY-MM-DD
   fgp: string; // numéro de ligne (FGP)
   clientCode: string;
@@ -22,7 +24,7 @@ export interface ParsedOT {
   ontSerials: string[]; // 48575443B2FCC9AE
   defaut: string; // dérangement : défaut constaté
   abonnement: string; // installation : « Abonnement FTTH 100 Mbps »
-  cableFibreM: number | null; // installation : longueur du câble fibre en mètres
+  cableFibreM: number | null; // installation : longueur de câble fibre prévue (m)
   miseEnService: string; // installation : « 21/10/26 à 10:40 »
   warnings: string[]; // champs introuvables, à vérifier
 }
@@ -50,9 +52,13 @@ export interface TextItemLike {
   height?: number;
 }
 
-/** Regroupe les morceaux de texte par ligne (même ordonnée), puis de gauche à droite.
- *  Exporté pour pouvoir le tester hors navigateur. */
+/** Regroupe les morceaux de texte par ligne (même ordonnée) et les place à leur colonne,
+ *  comme sur la fiche imprimée (police à chasse fixe) : on sait ainsi ce qui est dans
+ *  la colonne « NOUVELLE CONSTITUTION ». Exporté pour pouvoir le tester hors navigateur. */
 export function itemsToLines(items: TextItemLike[]): string[] {
+  // largeur d'un caractère : médiane sur la page (≈ 6,5 pt sur les fiches Mauritel)
+  const widths = items.filter((i) => i.str && i.str.trim().length > 2).map((i) => i.width / i.str.length).sort((a, b) => a - b);
+  const cw = widths.length ? widths[Math.floor(widths.length / 2)] : 6.5;
   const rows: { y: number; parts: { x: number; w: number; s: string }[] }[] = [];
   for (const it of items) {
     if (!it.str || !it.str.trim()) continue;
@@ -68,8 +74,9 @@ export function itemsToLines(items: TextItemLike[]): string[] {
     let out = '';
     let end = -Infinity;
     for (const part of r.parts) {
-      const gap = part.x - end;
-      if (out) out += gap > 12 ? '    ' : gap > 1 ? ' ' : '';
+      const col = Math.round(part.x / cw);
+      if (out.length < col) out = out.padEnd(col, ' ');
+      else if (out && part.x - end > 1) out += ' ';
       out += part.s;
       end = part.x + part.w;
     }
@@ -117,9 +124,13 @@ function parseBlock(block: string[]): ParsedOT {
   const numeroOt = clean(text.match(RE_NO)?.[1] ?? '');
   const dateRecu = toIsoDate(text.match(/OT\s+re[çc]u\s+le\s+([\d/]+)/i)?.[1] ?? '');
 
-  // FGP : « Ligne : FGP 077490 » (dérangement) ou « Ligne ....: Fibre GPON 082151 » (installation)
-  const fgp = text.match(/FGP\s+(\d{3,})/i)?.[1] ?? text.match(/GPON\s+(\d{3,})/i)?.[1] ?? '';
-  if (!fgp) warnings.push('FGP introuvable');
+  // N° de ligne : « Ligne : FGP 077490 » (dérangement), « Ligne ....: Fibre GPON 082151 »
+  // (installation) ou « Ligne ....: Téléphone 45240200 » (TPH, ex. ajout de ligne / ANS)
+  const tph = text.match(/Ligne\s*[.:]*\s*:?\s*T[ée]l[ée]phone\s+(\d{6,})/i)?.[1] ?? text.match(/\bTPH\s+(\d{6,})/i)?.[1];
+  const fibre = text.match(/FGP\s+(\d{3,})/i)?.[1] ?? text.match(/GPON\s+(\d{3,})/i)?.[1];
+  const typeLigne: 'FGP' | 'TPH' = !fibre && tph ? 'TPH' : 'FGP';
+  const fgp = fibre ?? tph ?? '';
+  if (!fgp) warnings.push('N° de ligne (FGP / TPH) introuvable');
 
   // Client : code + nom sur la même ligne, infos libres sur les lignes suivantes
   const iClient = find(/^\s*Client\s*:/i);
@@ -139,8 +150,6 @@ function parseBlock(block: string[]): ParsedOT {
   const iUser = find(/^\s*Utilisateur\s*:/i);
   const zoneContacts = block.slice(Math.max(iClient, 0), iUser > 0 ? iUser : undefined).join('\n');
   const derLine = block.find((l) => /Contact\s+d[ée]rangement/i.test(l)) ?? '';
-  const telephones = uniq([...(derLine.match(RE_PHONE) ?? []), ...(zoneContacts.match(RE_PHONE) ?? [])]).filter((t) => t !== clientCode);
-  if (!telephones.length) warnings.push('Aucun numéro de téléphone');
 
   // Adresse : de « Adresse d'installation » jusqu'à la constitution / la ligne
   const iAdr = find(/Adresse\s+d.installation/i);
@@ -153,32 +162,59 @@ function parseBlock(block: string[]): ParsedOT {
     }
   }
   const adresse = adr.join(' · ');
+  // numéros écrits dans l'adresse (« CONTACT 44469999 ») : ajoutés en dernier
+  const telephones = uniq([...(derLine.match(RE_PHONE) ?? []), ...(zoneContacts.match(RE_PHONE) ?? []), ...(adresse.match(RE_PHONE) ?? [])]).filter(
+    (t) => t !== clientCode && t !== fgp,
+  );
+  if (!telephones.length) warnings.push('Aucun numéro de téléphone');
 
-  // DIS / ONT — en dérangement, colonnes « ancienne » et « nouvelle » constitution sur la même ligne
-  const dis = [...text.matchAll(RE_DIS)].map((m) => ({ full: `${m[1].toUpperCase()}${m[2]}-${m[3]}`, zone: m[1].toUpperCase(), pco: m[2], port: m[3] }));
-  const nouveau = dis[dis.length - 1];
-  const ancien = dis[0];
+  // DIS / ONT — en dérangement, deux colonnes : « ANCIENNE » (gauche) et « NOUVELLE »
+  // constitution (droite). Seule la colonne de droite compte ; la gauche ne sert qu'à
+  // signaler un changement de DIS.
+  const iCons = find(/NOUVELLE\s+CONSTITUTION/i);
+  const colDroite = iCons >= 0 ? block[iCons].search(/NOUVELLE/i) - 4 : -1;
+  const consLines = iCons >= 0 ? block.slice(iCons + 1) : block;
+  const scan = (re: RegExp) =>
+    consLines.flatMap((l) => [...l.matchAll(new RegExp(re.source, 'gi'))].map((m) => ({ m, droite: colDroite < 0 || (m.index ?? 0) >= colDroite })));
+  const toDis = (m: RegExpMatchArray) => ({ full: `${m[1].toUpperCase()}${m[2]}-${m[3]}`, zone: m[1].toUpperCase(), pco: m[2], port: m[3] });
+  const disAll = scan(RE_DIS);
+  const disRef = disAll.filter((d) => d.droite).pop() ?? disAll[disAll.length - 1];
+  const nouveau = disRef ? toDis(disRef.m) : undefined;
+  const ancienM = disAll.find((d) => !d.droite);
+  const ancien = ancienM ? toDis(ancienM.m) : undefined;
   if (!nouveau) warnings.push('DIS introuvable');
-  const ontSerials = uniq([...text.matchAll(RE_ONT)].map((m) => m[1].toUpperCase()));
+  const ontAll = scan(RE_ONT);
+  const ontDroite = ontAll.filter((o) => o.droite);
+  const ontSerials = uniq((ontDroite.length ? ontDroite : ontAll).map((o) => o.m[1].toUpperCase()));
   if (!ontSerials.length) warnings.push('Numéro de série ONT introuvable');
 
   const zone = nouveau?.zone ?? adresse.match(RE_ZONE)?.[1]?.toUpperCase() ?? '';
   if (!zone) warnings.push('Zone introuvable');
+
+  // Câble fibre (installation) : « Cable fibre obtique   100 » dans les articles prévus sur devis,
+  // ou « 150 metres » sous SERVICES SUPPLEMENTAIRES
+  let cableFibreM: number | null = null;
+  if (!isDer) {
+    const art = text.match(/C[aâ]ble\s+(?:de\s+)?fibre\s+o\w*\s+(\d{1,4})\b/i);
+    const iServ = find(/SERVICES\s+SUPPL/i);
+    const iFin = find(/CONSTITUTION|Mise\s+en\s+service/i);
+    const serv = iServ >= 0 ? block.slice(iServ, iFin > iServ ? iFin : undefined).join('\n') : '';
+    const met = serv.match(/(?<![\d/])(\d{1,4})\s*(?:m[eè]tres?|ml|m)\b/i);
+    const v = Number(art?.[1] ?? met?.[1]);
+    cableFibreM = v > 0 ? v : null;
+  }
 
   const defaut = isDer ? clean(text.match(/D[ée]faut\s+constat[ée]\s*:\s*(.*?)(?:\s+depuis\b|\n|$)/i)?.[1] ?? '') : '';
   const sousType = isDer
     ? defaut || 'Dérangement'
     : clean(block[0].match(/OT\s+R[ée]seau\s*:\s*(.+)$/i)?.[1] ?? 'Installation');
 
-  const cableMatch = text.match(/c[âa]ble(?:\s+fibre)?(?:\s+optique)?\s*[:.]?\s*(\d+)\s*(?:m\b|m[èe]tres?)?/i)
-    ?? text.match(/longueur(?:\s+du)?\s+c[âa]ble\s*[:.]?\s*(\d+)/i)
-    ?? text.match(/(\d+)\s*(?:m\b|m[èe]tres?)\s+(?:de\s+)?c[âa]ble/i);
-  const cableFibreM = cableMatch ? parseInt(cableMatch[1], 10) : null;
-
   return {
     numeroOt,
     nature,
     sousType,
+    typeOt: isDer ? 'DRG' : typeOtFrom(sousType),
+    typeLigne,
     dateRecu,
     fgp,
     clientCode,
@@ -193,11 +229,23 @@ function parseBlock(block: string[]): ParsedOT {
     ancienDis: ancien && nouveau && ancien.full !== nouveau.full ? ancien.full : '',
     ontSerials,
     defaut,
-    cableFibreM,
     abonnement: clean(text.match(/Nature\s+abonnement\s*:\s*(.+)/i)?.[1] ?? ''),
+    cableFibreM,
     miseEnService: clean(text.match(/Mise\s+en\s+service\s+le\s+(.+)/i)?.[1] ?? ''),
     warnings,
   };
+}
+
+/** « Création première ligne » → CPL, « Ajout nouvelle ligne » → CLS, etc. */
+export function typeOtFrom(sousType: string): string {
+  const s = sousType.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/creation\s+premi/.test(s)) return 'CPL';
+  if (/re-?creation|resili/.test(s)) return 'RLR';
+  if (/ajout\s+(nouvelle\s+)?ligne/.test(s)) return 'CLS';
+  if (/transfert/.test(s)) return 'TRL';
+  if (/changement\s+(de\s+)?constitution|\bconstitution\b/.test(s)) return 'CST';
+  if (/numero\s+suppl|ajout\s+num|supplementaire/.test(s)) return 'ANS';
+  return '';
 }
 
 /** Lit un fichier PDF et renvoie ses fiches OT. */
@@ -207,16 +255,21 @@ export async function parseOtPdf(file: File): Promise<ParsedOT[]> {
 }
 
 /** Message WhatsApp du programme d'une équipe (à coller dans le groupe de l'équipe). */
-export function programmeWhatsApp(equipe: string, date: string, ots: Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'dis' | 'ontSerials' | 'adresse' | 'sousType'>[]): string {
+export function programmeWhatsApp(
+  equipe: string,
+  date: string,
+  ots: Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'dis' | 'ontSerials' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>[],
+): string {
   const d = date.split('-').reverse().join('/');
   const der = ots.filter((o) => o.nature === 'derangement');
   const ins = ots.filter((o) => o.nature === 'installation');
   const line = (o: (typeof ots)[number], i: number) =>
     [
-      `${i + 1}. FGP ${o.fgp} — ${o.clientNom}`,
+      `${i + 1}. ${o.typeLigne || 'FGP'} ${o.fgp}${o.typeOt ? ' (' + o.typeOt + ')' : ''} — ${o.clientNom}`,
       o.telephones.length ? `   Tél : ${o.telephones.join(' / ')}` : '',
       `   ${o.dis ? 'DIS ' + o.dis : ''}${o.ontSerials[0] ? ' · ONT ' + o.ontSerials[0] : ''}`,
       o.nature === 'derangement' && o.sousType ? `   Défaut : ${o.sousType}` : '',
+      o.nature === 'installation' && o.cableFibreM ? `   Câble fibre : ${o.cableFibreM} m` : '',
     ]
       .filter((x) => x.trim())
       .join('\n');

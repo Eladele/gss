@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useT
 import { TrendArea } from '@/components/charts';
 import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
 import type { ScanRecord } from '@/types';
+import { RapportScanProgramme } from '@/components/programme/RapportScanProgramme';
 
 // Trois intervalles de signal (Rx Optical Power, dBm) :
 //  Excellent : -10 à -22   ·  Moyen : -22,1 à -25   ·  Dégradé : -25 à -35 (et au-delà)
@@ -378,6 +379,9 @@ export default function ScansPage() {
         fichier précédent — colonnes attendues : ZONE, STT, RESULT, Scan time, Port ID, ONU ID, ONU Name, Software Version, SN/MAC, Time
         Added to NMS, Rx Optical Power(dBm), Ranging(m), Remarque.
       </p>
+
+      {/* ── Programme : installations de la semaine non scannées, par équipe (se met à jour à chaque import) ── */}
+      <RapportScanProgramme importId={scanHistory[0]?.id} />
 
       {/* ── Comparaison avec le fichier précédent (toujours affichée) ── */}
       <Card className="border-blue-200 bg-blue-50/40">

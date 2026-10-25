@@ -1,158 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { statusBorderColor } from '@/utils';
-import { StatCard, TypeBadge, ZoneChip, StatusBadge, NOKSheet, EmptyState } from '@/components/ui';
-import { useToast } from '@/components/ui';
-import type { ProgrammeOT, Situation } from '@/types';
+import { StatCard, EmptyState, useToast } from '@/components/ui';
+import type { ProgrammeOT } from '@/types';
 import { OtCard } from '@/components/programme/OtCard';
-import { fetchProgramme, setStatut, subscribeProgramme } from '@/lib/programmeService';
+import { cloturer, fetchPourPoints, fetchProgramme, fetchScanOts, subscribeProgramme, type Cloture, type ScanOT } from '@/lib/programmeService';
+import { ExternalLink, ScanLine } from 'lucide-react';
+import { ClotureSheet } from '@/components/programme/ClotureSheet';
+import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
+import { classement, delaiOT } from '@/utils/points';
 import { errMsg } from '@/utils';
 
-// Liste historique des situations de l'équipe (onglet « Situations »)
-function SituationsDuJour() {
-  const user = useAppStore((s) => s.user)!;
-  const situations = useAppStore((s) => s.situations);
-  const markOK = useAppStore((s) => s.markOK);
-  const markNonOK = useAppStore((s) => s.markNonOK);
-  const { showToast } = useToast();
-
-  const [nokFgp, setNokFgp] = useState('');
-  const [nokOpen, setNokOpen] = useState(false);
-
-  const teamName = user.teamName;
-  const mySits: Situation[] = teamName ? situations.filter((s) => s.equipe?.toLowerCase() === teamName.toLowerCase()) : situations;
-
-  // Sort: urgent > pending > non_ok > ok
-  const ORDER: Record<string, number> = { urgent: 0, pending: 1, in_progress: 2, non_ok: 3, ok: 4 };
-  const sorted = [...mySits].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
-
-  const total = mySits.length;
-  const ok = mySits.filter((s) => s.status === 'ok').length;
-  const nok = mySits.filter((s) => s.status === 'non_ok').length;
-  const pend = mySits.filter((s) => s.status === 'pending' || s.status === 'urgent').length;
-
-  const handleOK = (fgp: string) => {
-    markOK(fgp);
-    showToast(`FGP ${fgp} — OK enregistré `, 'success');
-  };
-  const handleNOKConfirm = (comment: string) => {
-    markNonOK(nokFgp, comment);
-    setNokOpen(false);
-    showToast(`FGP ${nokFgp} — NON OK enregistré`, 'warning');
-  };
-
-  const now = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-
-  return (
-    <div className="space-y-4 animate-fade-in max-w-lg mx-auto">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-black text-slate-900">Programme du Jour</h1>
-        <p className="text-slate-400 text-sm">
-          Équipe <strong className="text-slate-600">{teamName || 'Toutes'}</strong> · {new Date().toLocaleDateString('fr-FR')}
-        </p>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <StatCard value={total} label="Total" icon="" accent="#546E7A" />
-        <StatCard value={ok} label="OK" icon="" accent="#2E7D32" />
-        <StatCard value={nok} label="NON OK" icon="" accent="#C62828" />
-        <StatCard value={pend} label="Restant" icon="" accent="#1565C0" />
-      </div>
-
-      {/* Cards */}
-      {sorted.length === 0 ? (
-        <EmptyState icon="" text="Aucune situation pour votre équipe" />
-      ) : (
-        <div className="space-y-3">
-          {sorted.map((s) => {
-            const isDone = s.status === 'ok' || s.status === 'non_ok';
-            return (
-              <div
-                key={s.id}
-                className={`bg-white rounded-xl border-l-4 border border-slate-200 shadow-sm overflow-hidden animate-fade-in ${statusBorderColor(s.status)}`}
-              >
-                <div className="px-4 pt-4 pb-2 flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg font-bold text-slate-800">{s.fgp}</span>
-                      {s.isUrgent && <span className="text-xs font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded"> URGENT</span>}
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <TypeBadge type={s.type} />
-                      <ZoneChip zone={s.zone} />
-                    </div>
-                  </div>
-                  <StatusBadge status={s.status} />
-                </div>
-
-                {/* Urgent comment */}
-                {(s.isUrgent || s.status === 'urgent') && s.motif && (
-                  <p className="px-4 py-1.5 text-xs text-orange-700 bg-orange-50 border-t border-orange-100">{s.motif}</p>
-                )}
-
-                {/* NON OK comment */}
-                {s.status === 'non_ok' && s.comment && (
-                  <p className="px-4 py-1.5 text-xs text-red-600 bg-red-50 border-t border-red-100 italic">{s.comment}</p>
-                )}
-
-                {/* OK time */}
-                {s.status === 'ok' && <p className="px-4 py-1.5 text-xs text-green-600 font-semibold"> Complété — {now}</p>}
-
-                {/* Actions */}
-                {!isDone && (
-                  <div className="px-3 pb-3 pt-2 grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => handleOK(s.fgp)}
-                      className="py-3 bg-green-600 hover:bg-green-700 text-white font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm"
-                    >
-                      OK
-                    </button>
-                    <button
-                      onClick={() => {
-                        setNokFgp(s.fgp);
-                        setNokOpen(true);
-                      }}
-                      className="py-3 bg-red-600 hover:bg-red-700 text-white font-bold text-sm rounded-xl transition-all active:scale-95 shadow-sm"
-                    >
-                      NON OK
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <NOKSheet open={nokOpen} fgp={nokFgp} onClose={() => setNokOpen(false)} onConfirm={handleNOKConfirm} />
-    </div>
-  );
-}
-
-// ─── Programme du chef : fiches OT distribuées + situations ──────────────────
+// ─── Programme du chef d'équipe : uniquement les fiches OT distribuées ────────
 export default function ProgrammePage() {
-  const [tab, setTab] = useState<'fiches' | 'situations'>('fiches');
   return (
-    <div className="space-y-4 max-w-lg mx-auto">
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
-        {(
-          [
-            ['fiches', 'Fiches OT'],
-            ['situations', 'Situations'],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors ${tab === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === 'fiches' ? <FichesOT /> : <SituationsDuJour />}
+    <div className="max-w-lg mx-auto">
+      <FichesOT />
     </div>
   );
 }
@@ -168,15 +30,23 @@ function FichesOT() {
   const [view, setView] = useState<'a_faire' | 'termine'>('a_faire');
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
-  const [nok, setNok] = useState<ProgrammeOT | null>(null);
+  const [sheet, setSheet] = useState<{ ot: ProgrammeOT; mode: 'fait' | 'non_fait' } | null>(null);
+  const [scans, setScans] = useState<Map<string, ScanOT>>(new Map());
 
   useEffect(() => {
     if (!team) return;
     let alive = true;
+    // fiches à faire + celles des 14 derniers jours (pour les installations restées non scannées)
+    const from = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
     const load = () =>
-      fetchProgramme({ from: today, to: today, equipe: team })
+      fetchProgramme({ from, to: today, equipe: team })
         .then(
-          (rows) => alive && (setOts(rows), setError('')),
+          (rows) => {
+            if (!alive) return;
+            setOts(rows);
+            setError('');
+            fetchScanOts(rows.map((r) => r.id)).then((m) => alive && setScans(m));
+          },
           (e) => alive && setError(errMsg(e)),
         )
         .finally(() => alive && setLoaded(true));
@@ -191,14 +61,34 @@ function FichesOT() {
     };
   }, [team, today]);
 
-  const change = async (ot: ProgrammeOT, statut: ProgrammeOT['statut'], commentaire = '') => {
+  const change = async (ot: ProgrammeOT, c: Cloture) => {
     setBusy(ot.id);
     // mise à jour immédiate à l'écran, annulée si l'enregistrement échoue
-    setOts((cur) => cur.map((o) => (o.id === ot.id ? { ...o, statut, commentaire, traiteParNom: user.name, traiteLe: new Date().toISOString() } : o)));
+    const reset = c.statut === 'a_faire';
+    setOts((cur) =>
+      cur.map((o) =>
+        o.id === ot.id
+          ? {
+              ...o,
+              statut: c.statut,
+              motif: reset ? '' : (c.motif ?? ''),
+              commentaire: reset ? '' : (c.commentaire ?? ''),
+              decharge: c.statut === 'fait' ? (c.decharge ?? null) : null,
+              scanne: c.statut === 'fait' ? (c.scanne ?? null) : null,
+              cstChange: c.statut === 'fait' && !!c.cstChange,
+              nouveauDis: c.cstChange ? (c.nouveauDis ?? '') : '',
+              nouvelOnt: c.cstChange ? (c.nouvelOnt ?? '') : '',
+              poteaux: reset ? 0 : (c.poteaux ?? 0),
+              traiteParNom: reset ? null : user.name,
+              traiteLe: reset ? null : new Date().toISOString(),
+            }
+          : o,
+      ),
+    );
     try {
-      await setStatut(ot.id, statut, user.name, commentaire);
-      if (statut === 'fait') showToast(`FGP ${ot.fgp} — fait`, 'success');
-      if (statut === 'non_fait') showToast(`FGP ${ot.fgp} — non fait, le superviseur est prévenu`, 'warning');
+      await cloturer(ot.id, c, user.name);
+      if (c.statut === 'fait') showToast(`${ligneLabel(ot)} — fait`, 'success');
+      if (c.statut === 'non_fait') showToast(`${ligneLabel(ot)} — non fait, le superviseur est prévenu`, 'warning');
     } catch (e) {
       setOts((cur) => cur.map((o) => (o.id === ot.id ? ot : o)));
       showToast(errMsg(e), 'error');
@@ -218,7 +108,7 @@ function FichesOT() {
     // en retard d'abord, puis dérangements avant installations, puis par zone / PCO
     return [...filtered].sort(
       (a, b) =>
-        a.dateProgramme.localeCompare(b.dateProgramme) ||
+        delaiOT(a).echeance.localeCompare(delaiOT(b).echeance) ||
         (a.nature === b.nature ? 0 : a.nature === 'derangement' ? -1 : 1) ||
         (a.zone + a.pco).localeCompare(b.zone + b.pco),
     );
@@ -228,15 +118,58 @@ function FichesOT() {
   if (!loaded) return <p className="py-10 text-center text-sm text-slate-400">Chargement du programme…</p>;
 
   const der = aFaire.filter((o) => o.nature === 'derangement').length;
+  // Installations faites mais non scannées dans un fichier importé APRÈS l'installation
+  // (le fichier de scan fait foi, même si la case « Scanné » a été cochée)
+  const aScanner = ots.filter((o) => {
+    const sc = scans.get(o.id);
+    return (
+      o.nature === 'installation' &&
+      o.statut === 'fait' &&
+      !!sc?.dernier &&
+      sc.dernier !== 'SCANNE' &&
+      !!sc.dernierLe &&
+      !!o.traiteLe &&
+      sc.dernierLe > o.traiteLe
+    );
+  });
   return (
     <div className="space-y-4 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-black text-slate-900">Programme du jour</h1>
+        <div className="flex items-start justify-between gap-2">
+          <h1 className="text-2xl font-black text-slate-900">Programme du jour</h1>
+          <a
+            href={DECHARGE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+          >
+            <ExternalLink className="w-4 h-4" /> Décharge
+          </a>
+        </div>
         <p className="text-slate-400 text-sm">
           Équipe <strong className="text-slate-600">{team}</strong> · {new Date().toLocaleDateString('fr-FR')}
         </p>
       </div>
       {error && <p className="text-sm text-red-700 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+      <PointsEquipe team={team} />
+      {aScanner.length > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50/60 p-3 space-y-2">
+          <p className="flex items-center gap-2 text-sm font-bold text-red-800">
+            <ScanLine className="w-4 h-4" /> {aScanner.length} installation{aScanner.length > 1 ? 's' : ''} à scanner
+          </p>
+          <p className="text-[11px] text-red-700">Non scannée{aScanner.length > 1 ? 's' : ''} dans le dernier fichier de scan importé après l’installation.</p>
+          {aScanner.map((o) => (
+            <div key={o.id} className="bg-white rounded-lg px-3 py-2 text-sm border border-red-100">
+              <p className="font-semibold text-slate-800 truncate">
+                {ligneLabel(o)} · {o.clientNom}
+              </p>
+              <p className="text-[11px] text-slate-500 font-mono">
+                ONT {o.ontSerials.join(' / ') || '—'} · {o.dis}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3">
         <StatCard value={aFaire.length} label="À faire" icon="" accent="#1565C0" />
         <StatCard value={der} label="Dérangements" icon="" accent="#E65100" />
@@ -275,23 +208,68 @@ function FichesOT() {
             <OtCard
               key={o.id}
               ot={o}
+              scan={scans.get(o.id)}
               busy={busy === o.id}
-              onFait={() => change(o, 'fait')}
-              onNonFait={() => setNok(o)}
-              onReset={() => change(o, 'a_faire')}
+              onFait={() => setSheet({ ot: o, mode: 'fait' })}
+              onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}
+              onReset={() => change(o, { statut: 'a_faire' })}
             />
           ))}
         </div>
       )}
-      <NOKSheet
-        open={!!nok}
-        fgp={nok?.fgp ?? ''}
-        onClose={() => setNok(null)}
-        onConfirm={(c) => {
-          if (nok) change(nok, 'non_fait', c);
-          setNok(null);
-        }}
-      />
+      {sheet && (
+        <ClotureSheet
+          key={sheet.ot.id + sheet.mode}
+          ot={sheet.ot}
+          mode={sheet.mode}
+          onClose={() => setSheet(null)}
+          onConfirm={(c) => {
+            change(sheet.ot, c);
+            setSheet(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Points de l'équipe cette semaine et son rang parmi toutes les équipes */
+function PointsEquipe({ team }: { team: string }) {
+  const [txt, setTxt] = useState<{ points: number; rang: number; nb: number; pct: number; retard: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const now = new Date();
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    fetchPourPoints(monday.toISOString().slice(0, 10), now.toISOString().slice(0, 10)).then(
+      (ots) => {
+        if (!alive) return;
+        const rows = classement(ots);
+        const me = rows.find((r) => r.equipe.toLowerCase() === team.toLowerCase());
+        setTxt(me ? { points: me.points, rang: me.rang, nb: rows.length, pct: me.pctDansDelai, retard: me.retard } : null);
+      },
+      () => {},
+    );
+    return () => {
+      alive = false;
+    };
+  }, [team]);
+  if (!txt) return null;
+  return (
+    <div className="rounded-xl bg-slate-900 text-white px-4 py-3 flex items-center gap-4">
+      <div>
+        <p className="text-3xl font-black tabular-nums leading-none">{txt.points}</p>
+        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">points cette semaine</p>
+      </div>
+      <div className="text-sm">
+        <p>
+          <b>{txt.rang === 1 ? '1re' : `${txt.rang}e`}</b> sur {txt.nb} équipe{txt.nb > 1 ? 's' : ''} · {txt.pct} % dans le délai
+        </p>
+        <p className="text-xs text-slate-400">
+          1 point par fiche faite dans le délai (installation 48 h, dérangement 24 h)
+          {txt.retard ? ` · ${txt.retard} en retard` : ''}
+        </p>
+      </div>
     </div>
   );
 }

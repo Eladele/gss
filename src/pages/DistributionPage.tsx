@@ -5,12 +5,13 @@ import { Button, Card, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
 import { parseOtPdf, programmeWhatsApp, type ParsedOT } from '@/utils/otPdf';
 import { deleteOts, distribuer, existingNumeros, fetchProgramme, reassign, subscribeProgramme } from '@/lib/programmeService';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel } from '@/utils/programme';
+import { ClotureResume } from '@/components/programme/OtCard';
 import type { ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
 
 type Item = ParsedOT & { key: string; equipe: string; sourceFichier: string; deja?: { equipe: string; date: string }; include: boolean };
-type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM'>;
+type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
 
 const todayISO = () => {
   const d = new Date();
@@ -33,7 +34,8 @@ function RowCells({ o }: { o: Row }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${NATURE_CLASS[o.nature]}`}>{NATURE_LABEL[o.nature]}</span>
-          <span className="text-sm font-bold text-slate-800">FGP {o.fgp || '—'}</span>
+          {o.typeOt && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{o.typeOt}</span>}
+          <span className="text-sm font-bold text-slate-800">{ligneLabel(o)}</span>
           <span className="text-sm text-slate-700 truncate">{o.clientNom}</span>
         </div>
         <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
@@ -358,11 +360,16 @@ export default function DistributionPage() {
                 <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
               </div>
               {list.map((o) => (
-                <div key={o.id} className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0">
-                  <RowCells o={o} />
+                <div key={o.id} className="flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0">
+                  <div className="min-w-0 flex-1 flex flex-col gap-1">
+                    <div className="flex">
+                      <RowCells o={o} />
+                    </div>
+                    {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
+                  </div>
                   <div className="flex flex-col items-end gap-1">
                     <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${STATUT_OT[o.statut].cls}`}>{STATUT_OT[o.statut].label}</span>
-                    {o.statut === 'non_fait' && o.commentaire && <span className="text-[11px] text-red-700 max-w-[180px] truncate">{o.commentaire}</span>}
+
                     {o.statut === 'a_faire' && (
                       <div className="flex items-center gap-1">
                         <Select
@@ -372,7 +379,7 @@ export default function DistributionPage() {
                           onChange={async (e) => {
                             try {
                               await reassign([o.id], e.target.value);
-                              showToast(`FGP ${o.fgp} envoyé à ${e.target.value}`, 'success');
+                              showToast(`${ligneLabel(o)} envoyé à ${e.target.value}`, 'success');
                             } catch (err) {
                               showToast(errMsg(err), 'error');
                             }
