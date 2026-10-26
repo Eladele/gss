@@ -17,7 +17,6 @@ function signalLevel(rx: number | null | undefined): SignalLevel {
   if (rx >= -25) return 'moyen';
   return 'degrade';
 }
-const SIGNAL_RANK: Record<SignalLevel, number> = { excellent: 3, moyen: 2, degrade: 1, absent: 0 };
 const SIGNAL_LABELS: Record<SignalLevel, string> = {
   excellent: 'Excellent (-10 à -22 dBm)',
   moyen: 'Moyen (-22,1 à -25 dBm)',
@@ -45,15 +44,6 @@ function formatScanDate(iso?: string): string {
   return d.toLocaleDateString('fr-FR') + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
-function scanKey(s: Partial<ScanRecord>): string {
-  // ONU Name est unique dans le système (vérifié : ~99.99% unique sur 10k+ lignes,
-  // contrairement à ONU ID qui ne compte que quelques dizaines de valeurs distinctes,
-  // donc inutilisable comme clé) → clé de comparaison prioritaire.
-  // Repli sur SN/MAC puis sur Zone+Port si ONU Name est absent.
-  if (s.onuName && s.onuName.trim()) return `onu:${s.onuName.trim()}`;
-  return (s.snMac && s.snMac.trim()) || `${s.zone}|${s.portId ?? ''}`;
-}
-
 interface ImportDiff {
   nouveaux: number;
   nouveauxScanne: number;
@@ -63,51 +53,6 @@ interface ImportDiff {
   passesScanne: number;
   signalDegrade: number;
   signalAmeliore: number;
-}
-
-// Calcule le diff ET marque chaque ligne du nouveau fichier comme 'new' / 'existing'
-// (persisté en base ensuite, pour un filtrage fiable même après un refresh).
-function computeDiffAndTag(oldRows: ScanRecord[], newRows: Partial<ScanRecord>[]): ImportDiff {
-  const oldMap = new Map(oldRows.map((r) => [scanKey(r), r]));
-  const diff: ImportDiff = {
-    nouveaux: 0,
-    nouveauxScanne: 0,
-    nouveauxNonScanne: 0,
-    disparus: 0,
-    passesNonScanne: 0,
-    passesScanne: 0,
-    signalDegrade: 0,
-    signalAmeliore: 0,
-  };
-  const newKeys = new Set<string>();
-
-  newRows.forEach((row) => {
-    const key = scanKey(row);
-    newKeys.add(key);
-    const old = oldMap.get(key);
-    if (!old) {
-      diff.nouveaux++;
-      if (row.result === 'SCANNE') diff.nouveauxScanne++;
-      else diff.nouveauxNonScanne++;
-      row.changeType = 'new';
-      return;
-    }
-    row.changeType = 'existing';
-    if (old.result === 'SCANNE' && row.result === 'NON SCANE') diff.passesNonScanne++;
-    if (old.result === 'NON SCANE' && row.result === 'SCANNE') diff.passesScanne++;
-    // Le signal ne peut être comparé que si l'ONU est réellement scanné des deux côtés
-    // (un ONU NON SCANNE n'a pas de nouvelle mesure — son signal n'a pas "changé", il est juste inconnu).
-    if (old.result === 'SCANNE' && row.result === 'SCANNE') {
-      const oldLevel = signalLevel(old.rxPower);
-      const newLevel = signalLevel(row.rxPower ?? null);
-      if (SIGNAL_RANK[newLevel] < SIGNAL_RANK[oldLevel]) diff.signalDegrade++;
-      else if (SIGNAL_RANK[newLevel] > SIGNAL_RANK[oldLevel]) diff.signalAmeliore++;
-    }
-  });
-  oldMap.forEach((_row, key) => {
-    if (!newKeys.has(key)) diff.disparus++;
-  });
-  return diff;
 }
 
 // Lit un fichier .xlsx de scan et renvoie les lignes normalisées (réutilisé par
@@ -197,7 +142,6 @@ export default function ScansPage() {
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
-  const [diff, setDiff] = useState<ImportDiff | null>(null);
   const [comparedTotals, setComparedTotals] = useState<{ previous: number; current: number } | null>(null);
   // Après un refresh, `diff` (local) est vide — on retombe sur le dernier diff persisté en base
   const EMPTY_DIFF: ImportDiff = {
@@ -212,8 +156,9 @@ export default function ScansPage() {
   };
   // La carte reste toujours affichée (ne disparaît jamais) — repli sur le diff persisté,
   // puis sur un diff vide si aucune comparaison n'a encore été calculée.
-  const displayedDiff = diff ?? scanHistory[0]?.diff ?? EMPTY_DIFF;
-  const hasRealDiff = Boolean(diff ?? scanHistory[0]?.diff);
+  // Comparaison calculée par la base (vue scan_import_stats), ONT par ONT
+  const displayedDiff: ImportDiff = scanHistory[0]?.diff ?? EMPTY_DIFF;
+  const hasRealDiff = Boolean(scanHistory[0]?.diff);
 
   useEffect(() => {
     if (scans.length === 0) loadScans();
@@ -288,37 +233,18 @@ export default function ScansPage() {
 
   const parseFile = async (file: File) => {
     setLoading(true);
-    setDiff(null);
-    const previousScans = scans; // snapshot avant remplacement, pour calculer la différence
+    const previousScans = scans; // pour afficher « ancien fichier → nouveau fichier »
     try {
       const rows = await parseScanExcelFile(file);
-
-      // Diff + marquage "nouveau"/"existant" par ligne (persisté avec l'import)
-      const computedDiff = computeDiffAndTag(previousScans, rows);
       setComparedTotals({ previous: previousScans.length, current: rows.length });
 
-      // Snapshot pour le suivi semaine par semaine (% scanné hors résiliés, signal, + diff)
-      // — créé AVANT l'insertion des scans, pour obtenir l'id d'import à leur associer
-      // (conserve l'historique complet au lieu de remplacer la table à chaque import).
-      const newExcellent = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'excellent').length;
-      const newMoyen = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'moyen').length;
-      const newDegrade = rows.filter((r) => signalLevel(r.rxPower ?? null) === 'degrade').length;
-      const newScanne = rows.filter((r) => r.result === 'SCANNE').length;
-      const newResilies = rows.filter(isResilie).length;
-      const newImportId = await recordScanSnapshot({
-        total: rows.length,
-        scanne: newScanne,
-        nonScanne: rows.length - newScanne,
-        excellent: newExcellent,
-        moyen: newMoyen,
-        degrade: newDegrade,
-        resilies: newResilies,
-        diff: computedDiff,
-      });
+      // Entrée d'historique créée d'abord (id d'import à associer aux lignes). Les compteurs
+      // (% scanné hors résiliés, signal) et la comparaison avec l'import précédent sont
+      // recalculés par la base à partir des lignes importées : ils ne peuvent pas être faux.
+      const newImportId = await recordScanSnapshot({ fileName: file.name });
       if (!newImportId) throw new Error("Échec de la création de l'entrée d'historique — import annulé");
 
       const count = await importScans(rows, newImportId);
-      setDiff(computedDiff);
 
       showToast(`${count} lignes importées (historique conservé)`, 'success');
     } catch (err: any) {
@@ -376,9 +302,9 @@ export default function ScansPage() {
         </div>
       </div>
       <p className="text-xs text-slate-400 -mt-3">
-        Chaque import <strong>remplace entièrement</strong> la table (photo la plus récente du réseau) et se compare automatiquement au
-        fichier précédent — colonnes attendues : ZONE, STT, RESULT, Scan time, Port ID, ONU ID, ONU Name, Software Version, SN/MAC, Time
-        Added to NMS, Rx Optical Power(dBm), Ranging(m), Remarque.
+        Chaque import s’ajoute à l’historique (le dernier fait foi) et se compare automatiquement au fichier précédent, ONT par numéro
+        de série — colonnes reconnues : ZONE, STT, RESULT ou SCANNE, Scan time ou DATE SCAN, Port ID, ONU ID, ONU Name ou FGP, Software
+        Version, SN/MAC, Time Added to NMS, Rx Optical Power(dBm), Ranging(m), Remarque.
       </p>
 
       {/* ── Programme : installations de la semaine non scannées, par équipe (se met à jour à chaque import) ── */}
@@ -389,7 +315,7 @@ export default function ScansPage() {
         <div className="p-4">
           <p className="text-sm font-bold text-blue-800 mb-1">
             Comparaison avec le fichier de la semaine précédente
-            {!diff && scanHistory[0] && (
+            {scanHistory[0] && (
               <span className="text-xs font-normal text-blue-500 ml-2">
                 (dernier import : {new Date(scanHistory[0].importedAt).toLocaleString('fr-FR')})
               </span>
@@ -412,7 +338,7 @@ export default function ScansPage() {
             </p>
           )}
           <p className="text-xs text-blue-700/80 mb-3">
-            Chaque ONU est identifié par son <strong>ONU NAME</strong> (identifiant unique dans le système) et comparé au fichier importé la
+            Chaque ONU est identifié par son <strong>numéro de série (SN/MAC)</strong> et comparé au fichier importé la
             semaine précédente : <strong>Nouveaux ONU</strong> = présents dans ce fichier mais absents de l'ancien, qu'ils soient scannés ou
             non · <strong>ONU disparus</strong> = présents avant, absents maintenant (retirés/hors périmètre du scan) ·{' '}
             <strong>Passés NON SCANNE</strong> = étaient scannés avant, ne le sont plus (à surveiller) · <strong>Repassés SCANNE</strong> =
@@ -422,7 +348,7 @@ export default function ScansPage() {
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <DiffStat
-              label="Total nouveaux ONU NAME"
+              label="Total nouveaux ONU"
               sub={`dont ${displayedDiff.nouveauxScanne ?? 0} scannés · ${displayedDiff.nouveauxNonScanne ?? 0} non scannés`}
               value={displayedDiff.nouveaux}
               color="#1565C0"
@@ -432,7 +358,7 @@ export default function ScansPage() {
                 setFEquipe('');
               }}
             />
-            <DiffStat label="Total ONU NAME disparus" value={displayedDiff.disparus} color="#546E7A" />
+            <DiffStat label="Total ONU disparus" value={displayedDiff.disparus} color="#546E7A" />
             <DiffStat label="Passés NON SCANNE" value={displayedDiff.passesNonScanne} color="#C62828" />
             <DiffStat label="Repassés SCANNE" value={displayedDiff.passesScanne} color="#2E7D32" />
             <DiffStat label="Signal dégradé" value={displayedDiff.signalDegrade} color="#E9A93B" />

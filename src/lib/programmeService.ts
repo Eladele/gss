@@ -1,12 +1,19 @@
 import { supabase } from './supabase';
 import type { OtStatut, ProgrammeOT } from '@/types';
 import type { ParsedOT } from '@/utils/otPdf';
+import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts } from './refs';
 
-// Les fiches OT du programme sont des lignes de la table `situations` dont `numero_ot`
-// est renseigné (voir supabase_fusion_programme_situations.sql pour la correspondance
-// des colonnes). Ce service garde l'interface « fiche OT » utilisée par les pages.
+// Les fiches OT du programme sont des situations dont `numero_ot` est renseigné.
+// Une information n'est stockée qu'une fois (voir supabase_normalisation.sql) :
+//   - client, téléphones, adresse, DIS → table lignes (une par FGP / TPH)
+//   - numéro de série ONT → table onts (situations.ont_id / nouvel_ont_id)
+//   - équipe → team_id, personnes → profiles
+// Lecture par la vue situations_detail, écriture dans la table situations.
 const TABLE = 'situations';
+const VUE = 'situations_detail';
 const OUVERT = ['pending', 'in_progress', 'urgent'];
+
+type Par = { id: string; name: string };
 
 const versStatus: Record<OtStatut, string> = { a_faire: 'pending', fait: 'ok', non_fait: 'non_ok' };
 const versStatut = (status: string): OtStatut => (status === 'ok' ? 'fait' : status === 'non_ok' ? 'non_fait' : 'a_faire');
@@ -34,7 +41,7 @@ function mapOt(r: any): ProgrammeOT {
     port: r.port ?? '',
     dis: r.dis ?? '',
     ancienDis: r.ancien_dis ?? '',
-    ontSerials: r.ont_serials ?? [],
+    ontSerials: r.ont_sn ? [r.ont_sn] : [],
     defaut: r.defaut ?? '',
     abonnement: r.abonnement ?? '',
     cableFibreM: r.cable_fibre_m ?? null,
@@ -44,13 +51,13 @@ function mapOt(r: any): ProgrammeOT {
     motif: r.motif_cloture ?? '',
     commentaire: r.comment ?? '',
     decharge: r.decharge ?? null,
-    scanne: r.scan_statut === 'SCANNE' ? true : r.scan_statut === 'NON SCANE' ? false : null,
-    cstChange: !!r.cst_change,
+    scanne: r.scan_declare ?? null,
+    cstChange: !!(r.nouveau_dis || r.nouvel_ont_sn),
     nouveauDis: r.nouveau_dis ?? '',
-    nouvelOnt: r.nouvel_ont ?? '',
+    nouvelOnt: r.nouvel_ont_sn ?? '',
     poteaux: Number(r.poteau) || 0,
     // clôturée depuis la page Situations (markOK) : pas de traite_le → date de mise à jour
-    traiteParNom: r.traite_par_nom ?? r.closed_by ?? null,
+    traiteParNom: r.traite_par_nom ?? null,
     traiteLe: r.traite_le ?? (statut !== 'a_faire' ? (r.updated_at ?? null) : null),
     distribueParNom: r.distribue_par_nom ?? null,
     assigneLe: r.assigne_le ?? r.created_at ?? null,
@@ -62,7 +69,7 @@ function mapOt(r: any): ProgrammeOT {
 
 function dbError(error: { code?: string; message?: string } | null, fallback: string): Error {
   if (error?.code === '42703' || error?.code === '42P01')
-    return new Error('Les colonnes du programme ne sont pas encore dans « situations » (exécuter supabase_fusion_programme_situations.sql).');
+    return new Error('La base n’est pas à jour (exécuter supabase_normalisation.sql).');
   return new Error(error?.message || fallback);
 }
 
@@ -70,7 +77,7 @@ function dbError(error: { code?: string; message?: string } | null, fallback: st
  *  toutes les fiches encore « à faire » + celles de la période. */
 export async function fetchProgramme(opts: { from: string; to: string; equipe?: string }): Promise<ProgrammeOT[]> {
   let q = supabase
-    .from(TABLE)
+    .from(VUE)
     .select('*')
     .not('numero_ot', 'is', null)
     .order('date_programme', { ascending: false })
@@ -78,7 +85,9 @@ export async function fetchProgramme(opts: { from: string; to: string; equipe?: 
     .order('zone')
     .limit(2000);
   if (opts.equipe) {
-    q = q.ilike('equipe', opts.equipe).or(`status.in.(${OUVERT.join(',')}),and(date_programme.gte.${opts.from},date_programme.lte.${opts.to})`);
+    const teamId = await teamIdFor(opts.equipe);
+    if (!teamId) return [];
+    q = q.eq('team_id', teamId).or(`status.in.(${OUVERT.join(',')}),and(date_programme.gte.${opts.from},date_programme.lte.${opts.to})`);
   } else {
     q = q.gte('date_programme', opts.from).lte('date_programme', opts.to);
   }
@@ -90,7 +99,7 @@ export async function fetchProgramme(opts: { from: string; to: string; equipe?: 
 /** Fiches reçues sur une période (date « OT reçu le », à défaut date du programme) — pour les points */
 export async function fetchPourPoints(from: string, to: string): Promise<ProgrammeOT[]> {
   const { data, error } = await supabase
-    .from(TABLE)
+    .from(VUE)
     .select('*')
     .not('numero_ot', 'is', null)
     .or(`and(date_recu.gte.${from},date_recu.lte.${to}),and(date_recu.is.null,date_programme.gte.${from},date_programme.lte.${to})`)
@@ -103,7 +112,7 @@ export async function fetchPourPoints(from: string, to: string): Promise<Program
 export async function existingNumeros(numeros: string[]): Promise<Map<string, { equipe: string; date: string }>> {
   const out = new Map<string, { equipe: string; date: string }>();
   for (let i = 0; i < numeros.length; i += 200) {
-    const { data, error } = await supabase.from(TABLE).select('numero_ot, equipe, date_programme').in('numero_ot', numeros.slice(i, i + 200));
+    const { data, error } = await supabase.from(VUE).select('numero_ot, equipe, date_programme').in('numero_ot', numeros.slice(i, i + 200));
     if (error) throw dbError(error, 'Vérification des doublons impossible');
     (data ?? []).forEach((r) => out.set(r.numero_ot as string, { equipe: (r.equipe as string) ?? '', date: (r.date_programme as string) ?? '' }));
   }
@@ -126,7 +135,7 @@ export async function situationsOuvertes(fgps: string[]): Promise<Map<string, Si
   const liste = [...new Set(fgps.filter(Boolean))];
   for (let i = 0; i < liste.length; i += 200) {
     const { data, error } = await supabase
-      .from(TABLE)
+      .from(VUE)
       .select('id, fgp, type, zone, equipe, nature')
       .in('fgp', liste.slice(i, i + 200))
       .is('numero_ot', null)
@@ -142,56 +151,62 @@ export async function situationsOuvertes(fgps: string[]): Promise<Map<string, Si
   return out;
 }
 
-/** Colonnes OT communes (nouvelle situation ou situation complétée) */
-function colonnesOt(o: ParsedOT & { equipe: string; sourceFichier: string }, dateProgramme: string, par: string) {
-  return {
-    equipe: o.equipe,
-    numero_ot: o.numeroOt,
-    sous_type: o.sousType,
-    type_ligne: o.typeLigne,
-    date_recu: o.dateRecu,
-    date_programme: dateProgramme,
-    client_code: o.clientCode,
-    client_nom: o.clientNom,
-    client_info: o.clientInfo,
-    telephones: o.telephones,
-    adresse: o.adresse,
-    pco: o.pco,
-    port: o.port,
-    dis: o.dis,
-    ancien_dis: o.ancienDis,
-    ont_serials: o.ontSerials,
-    defaut: o.defaut,
-    abonnement: o.abonnement,
-    cable_fibre_m: o.cableFibreM,
-    mise_en_service: o.miseEnService,
-    distribue_par_nom: par,
-    source_fichier: o.sourceFichier,
-  };
-}
-
 /** Distribue les fiches : un OT complète la situation ouverte existante de son FGP,
- *  sinon une nouvelle situation est créée. Deux requêtes au plus : la base envoie une
- *  seule notification par équipe. Renvoie { crees, completees }. */
+ *  sinon une nouvelle situation est créée. La ligne (client, DIS) et l'ONT sont
+ *  enregistrés une seule fois et reliés à la situation. Deux requêtes au plus sur les
+ *  situations : la base envoie une seule notification par équipe. */
 export async function distribuer(
   ots: (ParsedOT & { equipe: string; sourceFichier: string })[],
   dateProgramme: string,
-  par: string,
+  par: Par,
 ): Promise<{ crees: number; completees: number }> {
-  const existantes = await situationsOuvertes(ots.map((o) => o.fgp));
+  const [existantes, lignes, equipes] = await Promise.all([
+    situationsOuvertes(ots.map((o) => o.fgp)),
+    upsertLignes(
+      ots.map((o) => ({
+        fgp: o.fgp,
+        zone: o.zone,
+        typeLigne: o.typeLigne,
+        dis: o.dis,
+        clientCode: o.clientCode,
+        clientNom: o.clientNom,
+        clientInfo: o.clientInfo,
+        telephones: o.telephones,
+        adresse: o.adresse,
+        abonnement: o.abonnement,
+        miseEnService: o.miseEnService,
+      })),
+    ),
+    teamIdsFor(ots.map((o) => o.equipe)),
+  ]);
+  const onts = await upsertOnts(ots.filter((o) => o.ontSerials[0]).map((o) => ({ sn: o.ontSerials[0], ligneId: lignes.get(o.fgp.trim()) })));
+
+  const colonnesOt = (o: (typeof ots)[number]) => ({
+    team_id: equipes.get(o.equipe) ?? null,
+    numero_ot: o.numeroOt,
+    sous_type: o.sousType,
+    date_recu: o.dateRecu,
+    date_programme: dateProgramme,
+    ancien_dis: o.ancienDis,
+    ont_id: o.ontSerials[0] ? (onts.get(normOnt(o.ontSerials[0])) ?? null) : null,
+    defaut: o.defaut,
+    cable_fibre_m: o.cableFibreM,
+    distribue_par: par.id,
+    source_fichier: o.sourceFichier,
+  });
+
   const aCompleter: Record<string, unknown>[] = [];
   const aCreer: Record<string, unknown>[] = [];
   for (const o of ots) {
     const ex = existantes.get(`${o.fgp}|${o.nature}`);
     const type = o.typeOt || (o.nature === 'derangement' ? 'DRG' : 'CPL');
     if (ex) {
-      aCompleter.push({ id: ex.id, fgp: ex.fgp, type: ex.type || type, zone: ex.zone || o.zone, ...colonnesOt(o, dateProgramme, par), cree_par_ot: false });
+      aCompleter.push({ id: ex.id, type: ex.type || type, ...colonnesOt(o), cree_par_ot: false });
     } else {
       const debut = o.dateRecu ?? dateProgramme;
       aCreer.push({
-        fgp: o.fgp,
+        ligne_id: lignes.get(o.fgp.trim()) ?? null,
         type,
-        zone: o.zone || '',
         motif: o.defaut || o.sousType || '',
         date_depo: debut,
         date_message: debut,
@@ -201,7 +216,7 @@ export async function distribuer(
         nature: o.nature,
         is_urgent: false,
         poteau: 0,
-        ...colonnesOt(o, dateProgramme, par),
+        ...colonnesOt(o),
         cree_par_ot: true,
       });
     }
@@ -209,6 +224,7 @@ export async function distribuer(
   let completees = 0;
   let crees = 0;
   if (aCompleter.length) {
+    // mise à jour des situations existantes (upsert sur id : une seule requête)
     const { data, error } = await supabase.from(TABLE).upsert(aCompleter, { onConflict: 'id' }).select('id');
     if (error) throw dbError(error, 'Distribution impossible');
     completees = data?.length ?? 0;
@@ -234,11 +250,17 @@ export interface Cloture {
 }
 
 /** Clôture d'une fiche par le chef (fait / non fait), ou remise « à faire » (tout est effacé).
- *  « Fait » renseigne aussi la date de mise en service et closed_by, comme un OK de la page Situations. */
-export async function cloturer(id: string, c: Cloture, par: string): Promise<void> {
+ *  « Fait » renseigne aussi la date de mise en service et la personne (traite_par), comme un OK de la page Situations. */
+export async function cloturer(id: string, c: Cloture, par: Par): Promise<void> {
   const reset = c.statut === 'a_faire';
   const fait = c.statut === 'fait';
   const now = new Date().toISOString();
+  // nouvel ONT posé lors d'un changement de constitution : enregistré dans onts
+  let nouvelOntId: string | null = null;
+  if (fait && c.cstChange && normOnt(c.nouvelOnt)) {
+    const onts = await upsertOnts([{ sn: c.nouvelOnt as string }]);
+    nouvelOntId = onts.get(normOnt(c.nouvelOnt)) ?? null;
+  }
   const { error } = await supabase
     .from(TABLE)
     .update({
@@ -246,14 +268,14 @@ export async function cloturer(id: string, c: Cloture, par: string): Promise<voi
       motif_cloture: reset ? '' : (c.motif ?? ''),
       comment: reset ? '' : (c.commentaire ?? ''),
       decharge: fait ? (c.decharge ?? null) : null,
-      scan_statut: fait && c.scanne != null ? (c.scanne ? 'SCANNE' : 'NON SCANE') : null,
-      cst_change: fait && !!c.cstChange,
+      // déclaration du chef ; le statut réel vient du fichier de scan
+      scan_declare: fait ? (c.scanne ?? null) : null,
+      // la ligne prend le nouveau DIS / ONT (règle automatique de la base)
       nouveau_dis: fait && c.cstChange ? (c.nouveauDis ?? '') : '',
-      nouvel_ont: fait && c.cstChange ? (c.nouvelOnt ?? '') : '',
+      nouvel_ont_id: nouvelOntId,
       poteau: reset ? 0 : Math.max(0, Math.round(c.poteaux ?? 0)),
-      traite_par_nom: reset ? null : par,
+      traite_par: reset ? null : par.id,
       traite_le: reset ? null : now,
-      closed_by: fait ? par : null,
       date_mise_en_service: fait ? now.slice(0, 10) : null,
       updated_at: now,
     })
@@ -262,7 +284,7 @@ export async function cloturer(id: string, c: Cloture, par: string): Promise<voi
 }
 
 export async function reassign(ids: string[], equipe: string): Promise<void> {
-  const { error } = await supabase.from(TABLE).update({ equipe }).in('id', ids);
+  const { error } = await supabase.from(TABLE).update({ team_id: await teamIdFor(equipe) }).in('id', ids);
   if (error) throw dbError(error, 'Réaffectation impossible');
 }
 
@@ -273,7 +295,7 @@ export async function deleteOts(ids: string[]): Promise<void> {
   if (del.error) throw dbError(del.error, 'Suppression impossible');
   const det = await supabase
     .from(TABLE)
-    .update({ numero_ot: null, date_programme: null, distribue_par_nom: null, assigne_le: null })
+    .update({ numero_ot: null, date_programme: null, distribue_par: null, assigne_le: null })
     .in('id', ids)
     .eq('cree_par_ot', false);
   if (det.error) throw dbError(det.error, 'Suppression impossible');
@@ -336,7 +358,7 @@ export async function fetchDernierImportScan(): Promise<{ id: string; importedAt
 /** Fiches faites (ou dérangements reçus) entre deux instants, toutes équipes — pour le rapport de scan */
 export async function fetchFaitesEntre(fromIso: string, toIso: string): Promise<ProgrammeOT[]> {
   const { data, error } = await supabase
-    .from(TABLE)
+    .from(VUE)
     .select('*')
     .not('numero_ot', 'is', null)
     .or(

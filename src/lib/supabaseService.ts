@@ -1,7 +1,25 @@
 import { supabase } from './supabase';
+import { invalidateTeams, normNom, teamIdFor, teamIdsFor, upsertLignes } from './refs';
 import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier, NoeudReseau } from '@/types';
 
+// ─── RÉFÉRENCES ──────────────────────────────────────────────────────────────
+// La base relie chaque enregistrement à son équipe (team_id) et à la personne qui a agi
+// (profiles.id) ; l'application continue de manipuler des noms. Les noms sont lus par
+// jointure (une seule source), et un nom saisi est converti en identifiant à l'écriture.
+
+const EQUIPE = 'team:teams!team_id(name)';
+
+/** { team_id } pour un nom d'équipe ; {} si le nom n'est pas fourni (champ inchangé) */
+async function colEquipe(nom: string | null | undefined): Promise<{ team_id?: string | null }> {
+  if (nom === undefined) return {};
+  return { team_id: await teamIdFor(nom) };
+}
+
 // ─── SITUATIONS ──────────────────────────────────────────────────────────────
+// Lecture : vue situations_detail (situation + ligne FGP + équipe + noms).
+// Écriture : table situations (ligne_id, team_id, …).
+
+const DEDUP = 'date_message,type,ligne_id,service_destination,date_depo,motif';
 
 export async function fetchSituations(): Promise<Situation[]> {
   // Supabase limite les SELECT à 1000 lignes par requête par défaut — sans pagination,
@@ -11,7 +29,7 @@ export async function fetchSituations(): Promise<Situation[]> {
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
-      .from('situations')
+      .from('situations_detail')
       .select('*')
       .order('created_at', { ascending: false })
       .order('id', { ascending: true })
@@ -28,8 +46,8 @@ export async function fetchSituations(): Promise<Situation[]> {
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {
-  const { id: _omit, ...payload } = toDbSituation(sit);
-  const { error } = await supabase.from('situations').upsert(payload, { onConflict: 'date_message,type,fgp,service_destination,zone,date_depo,motif' });
+  const [row] = await toDbSituations([sit]);
+  const { error } = await supabase.from('situations').upsert(row, { onConflict: DEDUP });
   if (error) console.error('upsertSituation:', error);
 }
 
@@ -42,22 +60,22 @@ export async function updateSituationStatus(
     poteau?: number;
     equipe?: string;
     motif?: string;
-    rxDbm?: number | null;
-    rangingM?: number | null;
-    scanStatut?: string | null;
-    closedBy?: string | null;
+    /** profil qui clôture (id) — le nom affiché vient de profiles */
+    closedById?: string | null;
   },
 ): Promise<void> {
-  const payload: Record<string, any> = { status, comment, updated_at: new Date().toISOString() };
+  // Rx, ranging et statut réseau ne sont plus enregistrés ici : ils viennent du fichier de scan
+  const now = new Date().toISOString();
+  const payload: Record<string, any> = { status, comment, updated_at: now };
   if (dateClt) payload.date_mise_en_service = dateClt;
   if (extra) {
     if (extra.poteau !== undefined) payload.poteau = extra.poteau;
-    if (extra.equipe !== undefined) payload.equipe = extra.equipe;
+    if (extra.equipe !== undefined) Object.assign(payload, await colEquipe(extra.equipe));
     if (extra.motif !== undefined) payload.motif = extra.motif;
-    if (extra.rxDbm !== undefined) payload.rx_dbm = extra.rxDbm;
-    if (extra.rangingM !== undefined) payload.ranging_m = extra.rangingM;
-    if (extra.scanStatut !== undefined) payload.scan_statut = extra.scanStatut;
-    if (extra.closedBy !== undefined) payload.closed_by = extra.closedBy;
+    if (extra.closedById) {
+      payload.traite_par = extra.closedById;
+      payload.traite_le = now;
+    }
   }
   const { error } = await supabase.from('situations').update(payload).eq('id', id);
   if (error) {
@@ -76,11 +94,21 @@ export async function insertSituationsBulk(rows: Situation[]): Promise<void> {
     // avec "invalid input syntax for type uuid". On laisse Postgres générer le vrai UUID ;
     // le upsert se base sur la clé composite (onConflict, cf. contrainte situations_dedup_key
     // en base) pour la déduplication, pas sur `id`.
-    const chunk = rows.slice(i, i + CHUNK).map((r) => {
-      const { id: _omit, ...rest } = toDbSituation(r);
-      return rest;
+    let chunk: Record<string, unknown>[];
+    try {
+      chunk = await toDbSituations(rows.slice(i, i + CHUNK));
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      continue;
+    }
+    // deux lignes du même lot avec la même clé : la dernière l'emporte (sinon tout le lot échoue)
+    const parCle = new Map<string, Record<string, unknown>>();
+    chunk.forEach((r, k) => {
+      const cle = DEDUP.split(',').map((c) => r[c]);
+      parCle.set(cle.some((v) => v == null) ? `#${k}` : JSON.stringify(cle), r);
     });
-    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: 'date_message,type,fgp,service_destination,zone,date_depo,motif' });
+    chunk = [...parCle.values()];
+    const { error } = await supabase.from('situations').upsert(chunk, { onConflict: DEDUP });
     if (error) {
       console.error('insertSituationsBulk chunk:', error);
       lastError = error.message;
@@ -105,8 +133,26 @@ export async function deleteSituation(id: string): Promise<void> {
 
 // ─── EQUIPES ─────────────────────────────────────────────────────────────────
 
+// Chef = employé (teams.chef_id) ; à défaut, le compte « chef » rattaché à l'équipe.
+// Membres = employés de l'équipe (employees.team_id).
+const EQUIPE_SELECT = '*, chef:employees!chef_id(name), membres:employees!team_id(name), comptes:profiles(name, role)';
+
+/** Chef d'équipe : employé de ce nom, créé (poste « Chef d'équipe ») s'il n'existe pas */
+async function chefId(nom: string | undefined, teamId: string): Promise<string | null> {
+  const n = normNom(nom);
+  if (!n) return null;
+  const { data } = await supabase.from('employees').select('id, name, team_id');
+  const trouve = (data ?? []).find((e) => normNom(e.name as string) === n);
+  if (trouve) {
+    if (!trouve.team_id) await supabase.from('employees').update({ team_id: teamId }).eq('id', trouve.id);
+    return trouve.id as string;
+  }
+  const ins = await supabase.from('employees').insert({ name: (nom ?? '').trim(), poste: "Chef d'équipe", team_id: teamId, actif: true }).select('id').single();
+  return (ins.data?.id as string) ?? null;
+}
+
 export async function fetchEquipes(): Promise<Equipe[]> {
-  const { data, error } = await supabase.from('teams').select('*').order('name');
+  const { data, error } = await supabase.from('teams').select(EQUIPE_SELECT).order('name');
   if (error) {
     console.error('fetchEquipes:', error);
     return [];
@@ -119,10 +165,9 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
     .from('teams')
     .insert({
       name: equipe.name,
-      leader_name: equipe.leader,
       color: equipe.color,
       zones: equipe.zones ?? [],
-      elements: equipe.elements ?? [],
+      ...(equipe.ville ? { ville: equipe.ville } : {}),
     })
     .select()
     .single();
@@ -131,6 +176,9 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
     console.error('createEquipe team error:', error);
     return null;
   }
+  invalidateTeams();
+  const chef = await chefId(equipe.leader, newTeam.id);
+  if (chef) await supabase.from('teams').update({ chef_id: chef }).eq('id', newTeam.id);
 
   // Create profile for the leader via Edge Function (service_role) —
   // the client no longer inserts into `profiles` directly, and each leader
@@ -147,29 +195,36 @@ export async function createEquipe(equipe: Partial<Equipe>): Promise<Equipe | nu
     }
   }
 
-  return mapEquipe(newTeam);
+  const { data: complet } = await supabase.from('teams').select(EQUIPE_SELECT).eq('id', newTeam.id).single();
+  return mapEquipe(complet ?? newTeam);
 }
 
 export async function updateEquipe(id: string, patch: Partial<Equipe>): Promise<void> {
   const payload: Record<string, any> = {};
   if (patch.name !== undefined) payload.name = patch.name;
-  if (patch.leader !== undefined) payload.leader_name = patch.leader;
   if (patch.color !== undefined) payload.color = patch.color;
-  if (patch.elements !== undefined) payload.elements = patch.elements;
   if (patch.ville !== undefined) payload.ville = patch.ville;
+  // les membres se gèrent depuis la fiche de chaque employé (employees.team_id)
+  if (patch.leader !== undefined) payload.chef_id = await chefId(patch.leader, id);
   const { error } = await supabase.from('teams').update(payload).eq('id', id);
   if (error) console.error('updateEquipe:', error);
+  invalidateTeams();
 }
 
 export async function deleteEquipe(id: string): Promise<void> {
   const { error } = await supabase.from('teams').delete().eq('id', id);
   if (error) console.error('deleteEquipe:', error);
+  invalidateTeams();
 }
 
 // ─── IMPORT HISTORY ──────────────────────────────────────────────────────────
 
 export async function fetchImportHistory(): Promise<ImportRecord[]> {
-  const { data, error } = await supabase.from('import_history').select('*').order('created_at', { ascending: false }).limit(50);
+  const { data, error } = await supabase
+    .from('import_history')
+    .select('*, auteur:profiles!importe_par(name)')
+    .order('created_at', { ascending: false })
+    .limit(50);
   if (error) {
     console.error('fetchImportHistory:', error);
     return [];
@@ -177,16 +232,16 @@ export async function fetchImportHistory(): Promise<ImportRecord[]> {
   return (data ?? []).map(mapImportRecord);
 }
 
-export async function insertImportRecord(record: Omit<ImportRecord, 'id'>): Promise<ImportRecord | null> {
+export async function insertImportRecord(record: Omit<ImportRecord, 'id'> & { byId?: string | null }): Promise<ImportRecord | null> {
   const { data, error } = await supabase
     .from('import_history')
     .insert({
       file_name: record.fileName,
       import_date: record.date,
       row_count: record.count,
-      imported_by: record.by,
+      importe_par: record.byId ?? null,
     })
-    .select()
+    .select('*, auteur:profiles!importe_par(name)')
     .single();
   if (error) {
     console.error('insertImportRecord:', error);
@@ -208,10 +263,10 @@ export async function deleteImportRecord(id: string): Promise<void> {
 function mapSituation(row: any): Situation {
   return {
     id: row.id,
-    fgp: row.fgp,
+    fgp: row.fgp ?? '',
     type: row.type,
-    zone: row.zone,
-    equipe: row.equipe,
+    zone: row.zone ?? '',
+    equipe: row.equipe ?? '',
     motif: row.motif ?? '',
     dateDepo: row.date_depo ?? '',
     dateClt: row.date_mise_en_service ?? '',
@@ -226,20 +281,21 @@ function mapSituation(row: any): Situation {
    conformite: row.conformite ?? undefined,
     importId: row.import_id ?? undefined,
     poteau: row.poteau != null ? Number(row.poteau) : 0,
-    rxDbm: row.rx_dbm != null ? Number(row.rx_dbm) : undefined,
-    rangingM: row.ranging_m != null ? Number(row.ranging_m) : undefined,
-    scanStatut: row.scan_statut ?? undefined,
-    closedBy: row.closed_by ?? undefined,
+    closedBy: row.traite_par_nom ?? undefined,
   };
 }
 
-function toDbSituation(s: Situation) {
-  return {
-    id: s.id,
-    fgp: s.fgp,
+/** Situations de l'application → lignes de la table : la ligne FGP (avec sa zone) est
+ *  créée si besoin, le nom d'équipe devient team_id. */
+async function toDbSituations(list: Situation[]): Promise<Record<string, unknown>[]> {
+  const [lignes, equipes] = await Promise.all([
+    upsertLignes(list.map((s) => ({ fgp: s.fgp, zone: s.zone }))),
+    teamIdsFor(list.map((s) => s.equipe)),
+  ]);
+  return list.map((s) => ({
+    ligne_id: lignes.get((s.fgp ?? '').trim()) ?? null,
+    team_id: equipes.get(s.equipe ?? '') ?? null,
     type: s.type,
-    zone: s.zone,
-    equipe: s.equipe,
     motif: s.motif,
     date_depo: s.dateDepo || null,
     date_mise_en_service: s.dateClt || null,
@@ -254,7 +310,7 @@ function toDbSituation(s: Situation) {
    conformite: s.conformite ?? null,
     import_id: s.importId ?? null,
     poteau: s.poteau ?? 0,
-  };
+  }));
 }
 
 // Les équipes en base ont parfois des codes bruts (NKTT, NDB...) au lieu du vrai nom
@@ -270,13 +326,15 @@ function normalizeVille(raw?: string | null): string {
 }
 
 function mapEquipe(row: any): Equipe {
+  const compteChef = ((row.comptes ?? []) as { name: string; role: string }[]).find((p) => p.role === 'chef');
   return {
     id: row.id,
     name: row.name,
-    leader: row.leader_name ?? row.name,
+    leader: row.chef?.name ?? compteChef?.name ?? '',
+    chefId: row.chef_id ?? null,
     zones: row.zones ?? [],
     color: row.color ?? '#1565C0',
-    elements: row.elements ?? [],
+    elements: ((row.membres ?? []) as { name: string }[]).map((m) => m.name),
     ville: normalizeVille(row.ville) as Equipe['ville'],
   };
 }
@@ -293,7 +351,7 @@ function mapEmployee(row: any): Employee {
     telephone: row.telephone ?? '',
     nni: row.nni ?? '',
     ville: row.ville ?? '',
-    equipeNom: row.equipe_nom ?? '',
+    equipeNom: row.team?.name ?? '',
     dateEmbauche: row.date_embauche ?? '',
     actif: row.actif ?? true,
     createdAt: row.created_at,
@@ -307,7 +365,7 @@ function mapVehicle(row: any): Vehicle {
     immatriculation: row.immatriculation ?? '',
     statut: row.statut ?? 'active',
     statutDepuis: row.statut_depuis ?? row.created_at,
-    equipeNom: row.equipe_nom ?? '',
+    equipeNom: row.team?.name ?? '',
     chauffeurId: row.chauffeur_id ?? undefined,
     notes: row.notes ?? '',
     createdAt: row.created_at,
@@ -319,7 +377,7 @@ function mapMateriel(row: any): Materiel {
     id: row.id,
     code: row.code ?? '',
     nom: row.nom,
-    equipeNom: row.equipe_nom ?? '',
+    equipeNom: row.team?.name ?? '',
     quantite: row.quantite != null ? Number(row.quantite) : 1,
     etat: row.etat ?? 'bon',
     notes: row.notes ?? '',
@@ -336,7 +394,7 @@ function mapLeave(row: any): LeaveRecord {
     dateFin: row.date_fin,
     jours: row.jours ?? 0,
     motif: row.motif ?? '',
-    createdBy: row.created_by ?? '',
+    createdBy: row.auteur?.name ?? '',
     createdAt: row.created_at,
   };
 }
@@ -347,7 +405,7 @@ function mapImportRecord(row: any): ImportRecord {
     fileName: row.file_name,
     date: row.import_date ?? row.created_at,
     count: row.row_count,
-    by: row.imported_by,
+    by: row.auteur?.name ?? '',
   };
 }
 
@@ -381,7 +439,7 @@ export async function removeZoneFromTeam(teamId: string, zone: string): Promise<
 }
 
 export async function reassignSituationEquipe(id: string, equipe: string): Promise<void> {
-  const { error } = await supabase.from('situations').update({ equipe, updated_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await supabase.from('situations').update({ ...(await colEquipe(equipe)), updated_at: new Date().toISOString() }).eq('id', id);
   if (error) console.error('reassignSituationEquipe:', error);
 }
 
@@ -416,7 +474,7 @@ export async function saveDirectorSignature(base64: string | null): Promise<void
 // ─── EMPLOYÉS ──────────────────────────────────────────────────────────────────
 
 export async function fetchEmployees(): Promise<Employee[]> {
-  const { data, error } = await supabase.from('employees').select('*').order('name');
+  const { data, error } = await supabase.from('employees').select(`*, ${EQUIPE}`).order('name');
   if (error) {
     console.error('fetchEmployees:', error);
     return [];
@@ -437,11 +495,11 @@ export async function createEmployee(emp: Partial<Employee>): Promise<Employee |
       telephone: emp.telephone,
       nni: emp.nni,
       ville: emp.ville,
-      equipe_nom: emp.equipeNom,
+      ...(await colEquipe(emp.equipeNom)),
       date_embauche: emp.dateEmbauche || null,
       actif: emp.actif ?? true,
     })
-    .select()
+    .select(`*, ${EQUIPE}`)
     .single();
   if (error) {
     console.error('createEmployee:', error);
@@ -463,7 +521,7 @@ export async function updateEmployee(id: string, emp: Partial<Employee>): Promis
       telephone: emp.telephone,
       nni: emp.nni,
       ville: emp.ville,
-      equipe_nom: emp.equipeNom,
+      ...(await colEquipe(emp.equipeNom)),
       date_embauche: emp.dateEmbauche || null,
       actif: emp.actif,
     })
@@ -603,7 +661,7 @@ function mapChantier(row: any): Chantier {
     nom: row.nom,
     zone: row.zone ?? undefined,
     ville: row.ville ?? undefined,
-    equipeNom: row.equipe_nom ?? undefined,
+    equipeNom: row.team?.name ?? undefined,
     typeDeploiement: row.type_deploiement === 'souterrain' ? 'souterrain' : 'aerien',
     statut: row.statut,
     dateDebut: row.date_debut ?? undefined,
@@ -637,12 +695,12 @@ function mapChantier(row: any): Chantier {
   };
 }
 
-function toDbChantier(c: Partial<Chantier>): Record<string, any> {
+async function toDbChantier(c: Partial<Chantier>): Promise<Record<string, any>> {
   const payload: Record<string, any> = {};
   if (c.nom !== undefined) payload.nom = c.nom;
   if (c.zone !== undefined) payload.zone = c.zone || null;
   if (c.ville !== undefined) payload.ville = c.ville || null;
-  if (c.equipeNom !== undefined) payload.equipe_nom = c.equipeNom || null;
+  if (c.equipeNom !== undefined) Object.assign(payload, await colEquipe(c.equipeNom));
   if (c.typeDeploiement !== undefined) payload.type_deploiement = c.typeDeploiement;
   if (c.statut !== undefined) payload.statut = c.statut;
   if (c.dateDebut !== undefined) payload.date_debut = c.dateDebut || null;
@@ -677,7 +735,7 @@ function toDbChantier(c: Partial<Chantier>): Record<string, any> {
 }
 
 export async function fetchChantiers(): Promise<Chantier[]> {
-  const { data, error } = await supabase.from('chantiers').select('*').order('created_at', { ascending: false });
+  const { data, error } = await supabase.from('chantiers').select(`*, ${EQUIPE}`).order('created_at', { ascending: false });
   if (error) {
     console.error('fetchChantiers:', error);
     return [];
@@ -688,8 +746,8 @@ export async function fetchChantiers(): Promise<Chantier[]> {
 export async function createChantier(c: Partial<Chantier>): Promise<Chantier | null> {
   const { data, error } = await supabase
     .from('chantiers')
-    .insert(toDbChantier(c))
-    .select()
+    .insert(await toDbChantier(c))
+    .select(`*, ${EQUIPE}`)
     .single();
   if (error) {
     console.error('createChantier:', error);
@@ -699,7 +757,7 @@ export async function createChantier(c: Partial<Chantier>): Promise<Chantier | n
 }
 
 export async function updateChantier(id: string, c: Partial<Chantier>): Promise<void> {
-  const { error } = await supabase.from('chantiers').update(toDbChantier(c)).eq('id', id);
+  const { error } = await supabase.from('chantiers').update(await toDbChantier(c)).eq('id', id);
   if (error) {
     console.error('updateChantier:', error);
     throw new Error(error.message);
@@ -787,7 +845,10 @@ export async function deleteReseauNoeud(id: string): Promise<void> {
 // ─── CONGÉS ────────────────────────────────────────────────────────────────────
 
 export async function fetchLeaves(): Promise<LeaveRecord[]> {
-  const { data, error } = await supabase.from('employee_leaves').select('*').order('date_debut', { ascending: false });
+  const { data, error } = await supabase
+    .from('employee_leaves')
+    .select('*, auteur:profiles!cree_par(name)')
+    .order('date_debut', { ascending: false });
   if (error) {
     console.error('fetchLeaves:', error);
     return [];
@@ -795,7 +856,7 @@ export async function fetchLeaves(): Promise<LeaveRecord[]> {
   return (data ?? []).map(mapLeave);
 }
 
-export async function createLeave(leave: Partial<LeaveRecord>): Promise<LeaveRecord | null> {
+export async function createLeave(leave: Partial<LeaveRecord> & { createdById?: string | null }): Promise<LeaveRecord | null> {
   const { data, error } = await supabase
     .from('employee_leaves')
     .insert({
@@ -805,9 +866,9 @@ export async function createLeave(leave: Partial<LeaveRecord>): Promise<LeaveRec
       date_fin: leave.dateFin,
       jours: leave.jours,
       motif: leave.motif ?? '',
-      created_by: leave.createdBy ?? '',
+      cree_par: leave.createdById ?? null,
     })
-    .select()
+    .select('*, auteur:profiles!cree_par(name)')
     .single();
   if (error) {
     console.error('createLeave:', error);
@@ -838,7 +899,7 @@ export async function deleteLeave(id: string): Promise<void> {
 // ─── VÉHICULES ─────────────────────────────────────────────────────────────────
 
 export async function fetchVehicles(): Promise<Vehicle[]> {
-  const { data, error } = await supabase.from('vehicles').select('*').order('type');
+  const { data, error } = await supabase.from('vehicles').select(`*, ${EQUIPE}`).order('type');
   if (error) {
     console.error('fetchVehicles:', error);
     return [];
@@ -854,11 +915,11 @@ export async function createVehicle(v: Partial<Vehicle>): Promise<Vehicle | null
       immatriculation: v.immatriculation,
       statut: v.statut ?? 'active',
       statut_depuis: v.statutDepuis ?? new Date().toISOString(),
-      equipe_nom: v.equipeNom,
+      ...(await colEquipe(v.equipeNom)),
       chauffeur_id: v.chauffeurId || null,
       notes: v.notes ?? '',
     })
-    .select()
+    .select(`*, ${EQUIPE}`)
     .single();
   if (error) {
     console.error('createVehicle:', error);
@@ -872,7 +933,7 @@ export async function updateVehicle(id: string, v: Partial<Vehicle>): Promise<vo
     type: v.type,
     immatriculation: v.immatriculation,
     statut: v.statut,
-    equipe_nom: v.equipeNom,
+    ...(await colEquipe(v.equipeNom)),
     chauffeur_id: v.chauffeurId || null,
     notes: v.notes,
   };
@@ -890,7 +951,7 @@ export async function deleteVehicle(id: string): Promise<void> {
 // ─── MATÉRIEL / OUTILLAGE DES ÉQUIPES ──────────────────────────────────────────
 
 export async function fetchMateriels(): Promise<Materiel[]> {
-  const { data, error } = await supabase.from('materiels').select('*').order('nom');
+  const { data, error } = await supabase.from('materiels').select(`*, ${EQUIPE}`).order('nom');
   if (error) {
     console.error('fetchMateriels:', error);
     return [];
@@ -904,12 +965,12 @@ export async function createMateriel(m: Partial<Materiel>): Promise<Materiel | n
     .insert({
       code: m.code || null,
       nom: m.nom,
-      equipe_nom: m.equipeNom || null,
+      ...(await colEquipe(m.equipeNom ?? null)),
       quantite: m.quantite ?? 1,
       etat: m.etat ?? 'bon',
       notes: m.notes ?? '',
     })
-    .select()
+    .select(`*, ${EQUIPE}`)
     .single();
   if (error) {
     console.error('createMateriel:', error);
@@ -924,7 +985,7 @@ export async function updateMateriel(id: string, m: Partial<Materiel>): Promise<
     .update({
       code: m.code,
       nom: m.nom,
-      equipe_nom: m.equipeNom || null,
+      ...(await colEquipe(m.equipeNom ?? null)),
       quantite: m.quantite,
       etat: m.etat,
       notes: m.notes,
@@ -983,7 +1044,8 @@ async function fetchScansPaginated(filterImportId?: string | null): Promise<Scan
   const all: ScanRecord[] = [];
   const PAGE = 1000;
   for (let from = 0; ; from += PAGE) {
-    let query = supabase.from('scan_results').select('*').order('id', { ascending: true }).range(from, from + PAGE - 1);
+    // vue scan_resultats : résultat de l'import + équipement (onts) + FGP (lignes)
+    let query = supabase.from('scan_resultats').select('*').order('id', { ascending: true }).range(from, from + PAGE - 1);
     if (filterImportId) query = query.eq('import_id', filterImportId);
     const { data, error } = await query;
     if (error) {
@@ -1012,43 +1074,42 @@ export async function fetchScansByImportId(importId: string): Promise<ScanRecord
   return fetchScansPaginated(importId);
 }
 
-// Insertion en lots (le fichier source peut contenir 10 000+ lignes), taguée
-// avec l'import auquel ces lignes appartiennent — ne remplace plus rien,
-// s'ajoute aux imports précédents pour conserver l'historique complet.
+// Import par paquets : la fonction SQL importer_scans enregistre l'équipement une seule
+// fois (table onts, avec sa ligne FGP) et, pour cet import, uniquement ce qui change
+// (résultat, date du scan, Rx, ranging, remarque). Un même ONT deux fois dans le
+// fichier n'est compté qu'une fois (la ligne « scanné » l'emporte).
 export async function bulkInsertScans(rows: Partial<ScanRecord>[], importId: string): Promise<number> {
-  const CHUNK = 500;
+  const CHUNK = 1000;
   let inserted = 0;
   let lastError: string | null = null;
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK).map((r) => ({
-      zone: r.zone,
-      stt: r.stt,
-      result: r.result ?? 'NON SCANE',
-      scan_time: r.scanTime || null,
+      sn: r.snMac ?? null,
+      fgp: r.onuName ?? null,
+      zone: r.zone ?? null,
+      stt: r.stt ?? null,
       port_id: r.portId ?? null,
       onu_id: r.onuId ?? null,
-      onu_name: r.onuName ?? null,
       software_version: r.softwareVersion ?? null,
-      sn_mac: r.snMac ?? null,
-      time_added_to_nms: r.timeAddedToNms || null,
+      time_added: r.timeAddedToNms || null,
+      result: r.result ?? 'NON SCANE',
+      scan_time: r.scanTime || null,
       rx_power: r.rxPower ?? null,
       ranging: r.ranging ?? null,
       remarque: r.remarque ?? null,
-      change_type: r.changeType ?? null,
-      import_id: importId,
     }));
-    const { error, count } = await supabase.from('scan_results').insert(chunk, { count: 'exact' });
+    const { data, error } = await supabase.rpc('importer_scans', { p_import: importId, p_lignes: chunk });
     if (error) {
       console.error('bulkInsertScans chunk:', error);
       lastError = error.message;
       continue;
     }
-    inserted += count ?? chunk.length;
+    inserted += typeof data === 'number' ? data : chunk.length;
   }
   // Si RIEN n'a été inséré alors qu'on avait des lignes à importer, c'est un échec réel
-  // (ex: colonne manquante côté base) — on le signale au lieu de laisser croire à un succès.
+  // (ex: migration pas encore exécutée) — on le signale au lieu de laisser croire à un succès.
   if (inserted === 0 && rows.length > 0) {
-    throw new Error(lastError ?? "Aucune ligne n'a pu être importée (vérifiez le schéma de la table scan_results)");
+    throw new Error(lastError ?? "Aucune ligne n'a pu être importée (exécuter supabase_normalisation.sql)");
   }
   return inserted;
 }
@@ -1079,7 +1140,9 @@ export async function deleteScan(id: string): Promise<void> {
 export interface ScanImportSnapshot {
   id: string;
   importedAt: string;
+  fileName?: string;
   total: number;
+  resilies?: number;
   scanne: number;
   nonScanne: number;
   excellent: number;
@@ -1102,7 +1165,9 @@ function mapScanSnapshot(row: any): ScanImportSnapshot {
   return {
     id: row.id,
     importedAt: row.imported_at,
+    fileName: row.file_name ?? '',
     total: row.total ?? 0,
+    resilies: row.resilies ?? 0,
     scanne: row.scanne ?? 0,
     nonScanne: row.non_scanne ?? 0,
     excellent: row.excellent ?? 0,
@@ -1126,7 +1191,16 @@ function mapScanSnapshot(row: any): ScanImportSnapshot {
 }
 
 export async function fetchScanImportHistory(): Promise<ScanImportSnapshot[]> {
-  const { data, error } = await supabase.from('scan_import_history').select('*').order('imported_at', { ascending: false }).limit(20);
+  // vue scan_import_stats : compteurs et comparaison recalculés depuis scan_results.
+  // On choisit d'abord les 20 derniers imports : la vue ne calcule alors que ceux-là.
+  const derniers = await supabase.from('scan_import_history').select('id').order('imported_at', { ascending: false }).limit(20);
+  if (derniers.error) {
+    console.error('fetchScanImportHistory:', derniers.error);
+    return [];
+  }
+  const ids = (derniers.data ?? []).map((r) => r.id as string);
+  if (!ids.length) return [];
+  const { data, error } = await supabase.from('scan_import_stats').select('*').in('id', ids).order('imported_at', { ascending: false });
   if (error) {
     console.error('fetchScanImportHistory:', error);
     return [];
@@ -1134,61 +1208,18 @@ export async function fetchScanImportHistory(): Promise<ScanImportSnapshot[]> {
   return (data ?? []).map(mapScanSnapshot);
 }
 
-export async function insertScanImportSnapshot(stats: {
-  total: number;
-  scanne: number;
-  nonScanne: number;
-  excellent: number;
-  moyen: number;
-  degrade: number;
-  resilies?: number;
-  diff?: {
-    nouveaux: number;
-    nouveauxScanne: number;
-    nouveauxNonScanne: number;
-    disparus: number;
-    passesNonScanne: number;
-    passesScanne: number;
-    signalDegrade: number;
-    signalAmeliore: number;
-  } | null;
-}): Promise<string | null> {
-  const denom = stats.total - (stats.resilies ?? 0);
-  const pctScanne = denom ? Math.round((stats.scanne / denom) * 1000) / 10 : 0;
-
-  const basePayload = {
-    total: stats.total,
-    scanne: stats.scanne,
-    non_scanne: stats.nonScanne,
-    excellent: stats.excellent,
-    moyen: stats.moyen,
-    degrade: stats.degrade,
-    pct_scanne: pctScanne,
-  };
-  const fullPayload = {
-    ...basePayload,
-    diff_nouveaux: stats.diff?.nouveaux ?? null,
-    diff_nouveaux_scanne: stats.diff?.nouveauxScanne ?? null,
-    diff_nouveaux_non_scanne: stats.diff?.nouveauxNonScanne ?? null,
-    diff_disparus: stats.diff?.disparus ?? null,
-    diff_passes_non_scanne: stats.diff?.passesNonScanne ?? null,
-    diff_passes_scanne: stats.diff?.passesScanne ?? null,
-    diff_signal_degrade: stats.diff?.signalDegrade ?? null,
-    diff_signal_ameliore: stats.diff?.signalAmeliore ?? null,
-  };
-
-  // 1ère tentative : payload complet (avec les colonnes diff_*)
-  const { data, error } = await supabase.from('scan_import_history').insert(fullPayload).select('id').single();
+/** Crée l'entrée d'historique d'un import de scan et renvoie son id. Les compteurs
+ *  (total, % scanné, comparaison) ne sont plus enregistrés : la vue scan_import_stats
+ *  les recalcule à partir des lignes importées, ils ne peuvent donc pas être faux. */
+export async function insertScanImportSnapshot(infos: { fileName?: string; byId?: string | null } = {}): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('scan_import_history')
+    .insert({ file_name: infos.fileName ?? '', importe_par: infos.byId ?? null })
+    .select('id')
+    .single();
   if (error) {
-    // Colonnes diff_* probablement absentes côté base (migration pas encore exécutée) —
-    // on réessaie avec les colonnes de base uniquement, sans bloquer l'import.
-    console.warn('insertScanImportSnapshot: colonnes diff_* indisponibles, repli sur le payload de base', error.message);
-    const { data: data2, error: error2 } = await supabase.from('scan_import_history').insert(basePayload).select('id').single();
-    if (error2) {
-      console.error('insertScanImportSnapshot (repli):', error2);
-      return null;
-    }
-    return data2?.id ?? null;
+    console.error('insertScanImportSnapshot:', error);
+    return null;
   }
   return data?.id ?? null;
 }

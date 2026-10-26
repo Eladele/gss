@@ -106,6 +106,7 @@ type Tab = 'dashboard' | 'employes' | 'historique' | 'export';
 
 export default function CongesPage() {
     const employees          = useAppStore((s) => s.employees);
+    const equipes            = useAppStore((s) => s.equipes);
     const leaves             = useAppStore((s) => s.leaves);
     const loans              = useAppStore((s) => s.loans);
     const loadEmployees      = useAppStore((s) => s.loadEmployees);
@@ -816,7 +817,10 @@ export default function CongesPage() {
                         </div>
                         <div>
                             <label className="text-xs font-semibold text-slate-500 block mb-1.5">Équipe (RH)</label>
-                            <Input value={empForm.equipeNom ?? ''} onChange={e => setEmpForm(f => ({ ...f, equipeNom: e.target.value }))} />
+                            <Select className="w-full" value={empForm.equipeNom ?? ''} onChange={e => setEmpForm(f => ({ ...f, equipeNom: e.target.value }))}>
+                                <option value="">— Aucune —</option>
+                                {equipes.map(eq => <option key={eq.id} value={eq.name}>{eq.name}</option>)}
+                            </Select>
                         </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">

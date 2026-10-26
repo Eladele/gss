@@ -274,9 +274,11 @@ export interface OKSheetValues {
   equipe: string;
   motif: string;
   dateClt: string;
+  // Lecture seule : dernier fichier de scan (scan_results), jamais saisi à la main
   rxDbm: number | '';
   rangingM: number | '';
   scanStatut: 'SCANNE' | 'NON SCANE';
+  scanTrouve?: boolean;
 }
 
 export function OKSheet({
@@ -363,39 +365,20 @@ export function OKSheet({
             />
           </div>
 
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Statut réseau</label>
-            <select
-              className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
-              value={values.scanStatut}
-              onChange={(e) => set('scanStatut', e.target.value as OKSheetValues['scanStatut'])}
-            >
-              <option value="SCANNE">Scanné</option>
-              <option value="NON SCANE">Non scanné</option>
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1">Rx (dBm)</label>
-              <input
-                type="number"
-                step="0.01"
-                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
-                value={values.rxDbm}
-                onChange={(e) => set('rxDbm', e.target.value === '' ? '' : Number(e.target.value))}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1">Ranging (m)</label>
-              <input
-                type="number"
-                step="0.01"
-                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
-                value={values.rangingM}
-                onChange={(e) => set('rangingM', e.target.value === '' ? '' : Number(e.target.value))}
-              />
-            </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold text-slate-500 mb-1.5">Réseau — dernier fichier de scan</p>
+            {values.scanTrouve === false ? (
+              <p className="text-sm text-slate-500">FGP absent du dernier fichier de scan.</p>
+            ) : (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                <span className={values.scanStatut === 'SCANNE' ? 'font-semibold text-green-700' : 'font-semibold text-red-700'}>
+                  {values.scanStatut === 'SCANNE' ? 'Scanné' : 'Non scanné'}
+                </span>
+                <span className="text-slate-600">Rx : {values.rxDbm === '' ? '—' : `${values.rxDbm} dBm`}</span>
+                <span className="text-slate-600">Ranging : {values.rangingM === '' ? '—' : `${values.rangingM} m`}</span>
+              </div>
+            )}
+            <p className="text-[10px] text-slate-400 mt-1">Mis à jour à chaque import du fichier de scan — non modifiable ici.</p>
           </div>
         </div>
 

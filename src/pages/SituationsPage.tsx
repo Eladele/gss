@@ -225,7 +225,7 @@ export default function SituationsPage() {
   const removeSituation = useAppStore((s) => s.removeSituation);
 
   const openOkSheet = (s: (typeof situations)[number]) => {
-    const sc = scanByFgp.get(s.fgp);
+    const sc = scanByFgp.get(normalizeKey(s.fgp));
     const defaultPoteau = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
     const today = new Date().toISOString().slice(0, 10);
     setOkMode('close');
@@ -236,9 +236,10 @@ export default function SituationsPage() {
       equipe: s.equipe || '',
       motif: s.motif || '',
       dateClt: s.dateClt || today,
-      rxDbm: s.rxDbm ?? sc?.rxPower ?? '',
-      rangingM: s.rangingM ?? sc?.ranging ?? '',
-      scanStatut: s.scanStatut ?? sc?.result ?? 'NON SCANE',
+      rxDbm: sc?.rxPower ?? '',
+      rangingM: sc?.ranging ?? '',
+      scanStatut: sc?.result ?? 'NON SCANE',
+      scanTrouve: !!sc,
     });
     setOkOpen(true);
   };
@@ -246,7 +247,7 @@ export default function SituationsPage() {
   // Modifier une situation SANS changer son statut (OK ou NON OK déjà décidé) —
   // réutilise le même formulaire que la clôture, juste sans le forcer à 'ok'.
   const openEditSheet = (s: (typeof situations)[number]) => {
-    const sc = scanByFgp.get(s.fgp);
+    const sc = scanByFgp.get(normalizeKey(s.fgp));
     const defaultPoteau = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
     setOkMode('edit');
     setOkId(s.id);
@@ -256,9 +257,10 @@ export default function SituationsPage() {
       equipe: s.equipe || '',
       motif: s.motif || '',
       dateClt: s.dateClt || '',
-      rxDbm: s.rxDbm ?? sc?.rxPower ?? '',
-      rangingM: s.rangingM ?? sc?.ranging ?? '',
-      scanStatut: s.scanStatut ?? sc?.result ?? 'NON SCANE',
+      rxDbm: sc?.rxPower ?? '',
+      rangingM: sc?.ranging ?? '',
+      scanStatut: sc?.result ?? 'NON SCANE',
+      scanTrouve: !!sc,
     });
     setOkOpen(true);
   };
@@ -269,9 +271,6 @@ export default function SituationsPage() {
       equipe: values.equipe,
       motif: values.motif,
       dateClt: values.dateClt,
-      rxDbm: values.rxDbm === '' ? undefined : values.rxDbm,
-      rangingM: values.rangingM === '' ? undefined : values.rangingM,
-      scanStatut: values.scanStatut,
     };
     try {
       if (okMode === 'edit') {

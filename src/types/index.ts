@@ -24,10 +24,11 @@ export interface User {
 export interface Equipe {
   id: string;
   name: string;
-  leader: string;
+  leader: string; // chef d'équipe (employé teams.chef_id, à défaut le compte chef de l'équipe)
+  chefId?: string | null;
   zones: string[];
   color: string;
-  elements?: string[];
+  elements?: string[]; // noms des employés de l'équipe (employees.team_id)
   ville?: Ville;
 }
 
@@ -51,10 +52,9 @@ export interface Situation {
   conformite?: ConformiteDelai;
   importId?: string; // relie la situation à sa ligne d'historique d'import (suppression en cascade)
   poteau?: number; // nombre de poteaux posés pour cette intervention (colonne POTEAU du fichier)
-  rxDbm?: number; // Rx (dBm) confirmé à la clôture OK
-  rangingM?: number; // Ranging (m) confirmé à la clôture OK
-  scanStatut?: 'SCANNE' | 'NON SCANE'; // statut réseau confirmé à la clôture OK
-  closedBy?: string; // nom de la personne ayant clôturé (marqué OK) la situation
+  // Rx, ranging et statut réseau ne sont pas stockés sur la situation : ils viennent
+  // uniquement du fichier de scan (scan_results), via le FGP.
+  closedBy?: string; // nom de la personne ayant clôturé la situation (profiles)
 }
 
 export interface Notification {
@@ -341,7 +341,7 @@ export interface ProgrammeOT {
   motif: string; // motif choisi à la clôture (liste « fait » ou « non fait »)
   commentaire: string;
   decharge: boolean | null; // décharge signée (fait)
-  scanne: boolean | null; // ONT scanné (fait)
+  scanne: boolean | null; // déclaration du chef « scanné » (la preuve est dans le fichier de scan)
   cstChange: boolean; // fait avec changement de constitution
   nouveauDis: string;
   nouvelOnt: string;

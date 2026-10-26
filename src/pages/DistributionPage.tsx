@@ -127,7 +127,7 @@ export default function DistributionPage() {
     if (missingTeam.length) return showToast(`Choisissez une équipe pour ${missingTeam.length} fiche${missingTeam.length > 1 ? 's' : ''}`, 'error');
     setSending(true);
     try {
-      const { crees, completees } = await distribuer(toSend, dateProgramme, user.name);
+      const { crees, completees } = await distribuer(toSend, dateProgramme, user);
       const n = crees + completees;
       showToast(
         `${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''}${completees ? ` (dont ${completees} situation${completees > 1 ? 's' : ''} existante${completees > 1 ? 's' : ''} complétée${completees > 1 ? 's' : ''})` : ''} : les chefs d’équipe sont prévenus`,

@@ -28,6 +28,7 @@ function joursDepuis(iso?: string): number {
 export default function VehiculesPage() {
   const vehicles = useAppStore((s) => s.vehicles);
   const employees = useAppStore((s) => s.employees);
+  const equipes = useAppStore((s) => s.equipes);
   const loadVehicles = useAppStore((s) => s.loadVehicles);
   const addVehicle = useAppStore((s) => s.addVehicle);
   const editVehicle = useAppStore((s) => s.editVehicle);
@@ -243,11 +244,18 @@ export default function VehiculesPage() {
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-500 block mb-1.5">Équipe assignée</label>
-              <Input
+              <Select
+                className="w-full"
                 value={form.equipeNom ?? ''}
                 onChange={(e) => setForm((f) => ({ ...f, equipeNom: e.target.value }))}
-                placeholder="ARAFAT, ROSSO..."
-              />
+              >
+                <option value="">— Aucune —</option>
+                {equipes.map((eq) => (
+                  <option key={eq.id} value={eq.name}>
+                    {eq.name}
+                  </option>
+                ))}
+              </Select>
             </div>
           </div>
           <div>

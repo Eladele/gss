@@ -86,7 +86,7 @@ function FichesOT() {
       ),
     );
     try {
-      await cloturer(ot.id, c, user.name);
+      await cloturer(ot.id, c, user);
       if (c.statut === 'fait') showToast(`${ligneLabel(ot)} — fait`, 'success');
       if (c.statut === 'non_fait') showToast(`${ligneLabel(ot)} — non fait, le superviseur est prévenu`, 'warning');
     } catch (e) {

@@ -173,7 +173,12 @@ export default function EquipesPage() {
 
             // Relation réelle Équipe ↔ Employés (module RH), basée sur employees.equipeNom
             const members = employees.filter((e) => (e.equipeNom ?? '').trim().toLowerCase() === eq.name.trim().toLowerCase());
-            const chef = members.find((e) => (e.poste ?? '').toLowerCase().includes('chef')) ?? null;
+            // chef = employé désigné sur l'équipe (teams.chef_id), sinon le poste « Chef d'équipe »
+            const chef =
+              members.find((e) => e.id === eq.chefId) ??
+              employees.find((e) => e.id === eq.chefId) ??
+              members.find((e) => (e.poste ?? '').toLowerCase().includes('chef')) ??
+              null;
             const techniciens = members.filter((e) => e.id !== chef?.id);
 
             // Relation réelle Équipe ↔ Matériel, basée sur materiels.equipeNom

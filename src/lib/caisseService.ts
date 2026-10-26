@@ -15,7 +15,11 @@ function mapCaisse(r: any): Caisse {
   };
 }
 
+// Les noms viennent de profiles (une seule source) : aucune copie dans caisse_operations
+const OP_SELECT = '*, demandeur:profiles!demande_par(name), traiteur:profiles!traite_par(name)';
+
 function mapOperation(r: any): CaisseOperation {
+  const source = r.source ?? 'app';
   return {
     id: r.id,
     caisseId: r.caisse_id,
@@ -28,8 +32,10 @@ function mapOperation(r: any): CaisseOperation {
     trsId: r.trs_id ?? null,
     statut: r.statut,
     demandeParId: r.demande_par ?? null,
-    demandeParNom: r.demande_par_nom ?? null,
-    traiteParNom: r.traite_par_nom ?? null,
+    demandeParNom: r.demandeur?.name ?? (source === 'charge_fixe' ? 'Charge fixe' : null),
+    // opérations reprises de WhatsApp / Bankily : validées sans compte de l'application
+    traiteParNom:
+      r.traiteur?.name ?? (r.statut === 'validee' && source !== 'app' && source !== 'charge_fixe' ? 'Reprise historique' : null),
     traiteLe: r.traite_le ?? null,
     motifRejet: r.motif_rejet ?? null,
     note: r.note ?? '',
@@ -108,7 +114,7 @@ export async function fetchOperations(): Promise<CaisseOperation[]> {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('caisse_operations')
-      .select('*')
+      .select(OP_SELECT)
       .order('date_op', { ascending: false })
       .order('created_at', { ascending: false })
       .range(from, from + PAGE - 1);
@@ -153,12 +159,12 @@ export async function insertOperations(
     note: o.note ?? '',
     statut: o.statut,
     source: o.source ?? 'app',
-    demande_par: by.id,
-    demande_par_nom: by.name,
+    // (« auto » pour une charge fixe sans titulaire : pas de demandeur)
+    demande_par: /^[0-9a-f-]{36}$/i.test(by.id) ? by.id : null,
     // Une opération créée déjà validée (alimentation par la comptable) est traitée par son auteur
-    ...(o.statut === 'validee' ? { traite_par: by.id, traite_par_nom: by.name, traite_le: now } : {}),
+    ...(o.statut === 'validee' ? { traite_par: by.id, traite_le: now } : {}),
   }));
-  const { data, error } = await supabase.from('caisse_operations').insert(rows).select();
+  const { data, error } = await supabase.from('caisse_operations').insert(rows).select(OP_SELECT);
   if (error) throw dbError(error, 'Enregistrement impossible');
   return (data ?? []).map(mapOperation);
 }
@@ -195,7 +201,6 @@ export async function decideOperations(
     .update({
       statut: decision,
       traite_par: by.id,
-      traite_par_nom: by.name,
       traite_le: new Date().toISOString(),
       motif_rejet: decision === 'rejetee' ? extra.motif || null : null,
       ...(extra.trsId ? { trs_id: extra.trsId } : {}),

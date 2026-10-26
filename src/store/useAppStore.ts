@@ -88,9 +88,6 @@ interface AppState {
       equipe?: string;
       motif?: string;
       dateClt?: string;
-      rxDbm?: number;
-      rangingM?: number;
-      scanStatut?: 'SCANNE' | 'NON SCANE';
     },
   ) => Promise<void>;
   markNonOK: (id: string, comment: string) => Promise<void>;
@@ -101,9 +98,6 @@ interface AppState {
       equipe?: string;
       motif?: string;
       dateClt?: string;
-      rxDbm?: number;
-      rangingM?: number;
-      scanStatut?: 'SCANNE' | 'NON SCANE';
     },
   ) => Promise<void>;
   removeSituation: (id: string) => Promise<void>;
@@ -187,25 +181,8 @@ interface AppState {
   loadScanHistory: () => Promise<void>;
   removeScanSnapshot: (id: string) => Promise<void>; // supprime aussi les scans rattachés à cet import (cascade)
   clearAllScans: () => Promise<void>;
-  recordScanSnapshot: (stats: {
-    total: number;
-    scanne: number;
-    nonScanne: number;
-    excellent: number;
-    moyen: number;
-    degrade: number;
-    resilies?: number;
-    diff?: {
-      nouveaux: number;
-      nouveauxScanne: number;
-      nouveauxNonScanne: number;
-      disparus: number;
-      passesNonScanne: number;
-      passesScanne: number;
-      signalDegrade: number;
-      signalAmeliore: number;
-    } | null;
-  }) => Promise<string | null>; // renvoie l'id du nouvel import créé
+  // Crée l'entrée d'historique d'un import de scan (les compteurs sont recalculés par la base)
+  recordScanSnapshot: (infos?: { fileName?: string }) => Promise<string | null>; // renvoie l'id du nouvel import créé
 }
 
 export const useAppStore = create<AppState>()(
@@ -271,6 +248,7 @@ export const useAppStore = create<AppState>()(
         if (!previous) return;
         const newDateClt = details?.dateClt || previous.dateClt || today;
         const closedByName = get().user?.name;
+        const closedById = get().user?.id;
         // Optimistic update — la "DATE MISE EN SERVICE" est posée automatiquement
         // à la date système dès qu'une situation (installation ou dérangement) passe OK,
         // sauf si une date a été saisie dans le formulaire de clôture.
@@ -287,9 +265,6 @@ export const useAppStore = create<AppState>()(
                   poteau: details?.poteau ?? sit.poteau,
                   equipe: details?.equipe ?? sit.equipe,
                   motif: details?.motif ?? sit.motif,
-                  rxDbm: details?.rxDbm ?? sit.rxDbm,
-                  rangingM: details?.rangingM ?? sit.rangingM,
-                  scanStatut: details?.scanStatut ?? sit.scanStatut,
                   closedBy: closedByName ?? sit.closedBy,
                 }
               : sit,
@@ -300,10 +275,7 @@ export const useAppStore = create<AppState>()(
             poteau: details?.poteau,
             equipe: details?.equipe,
             motif: details?.motif,
-            rxDbm: details?.rxDbm ?? null,
-            rangingM: details?.rangingM ?? null,
-            scanStatut: details?.scanStatut ?? null,
-            closedBy: closedByName ?? null,
+            closedById: closedById ?? null,
           });
         } catch (err: unknown) {
           // Échec réel en base — on annule la mise à jour visuelle pour ne pas laisser
@@ -331,9 +303,6 @@ export const useAppStore = create<AppState>()(
                   poteau: details?.poteau ?? sit.poteau,
                   equipe: details?.equipe ?? sit.equipe,
                   motif: details?.motif ?? sit.motif,
-                  rxDbm: details?.rxDbm ?? sit.rxDbm,
-                  rangingM: details?.rangingM ?? sit.rangingM,
-                  scanStatut: details?.scanStatut ?? sit.scanStatut,
                 }
               : sit,
           ),
@@ -343,9 +312,6 @@ export const useAppStore = create<AppState>()(
             poteau: details?.poteau,
             equipe: details?.equipe,
             motif: details?.motif,
-            rxDbm: details?.rxDbm ?? null,
-            rangingM: details?.rangingM ?? null,
-            scanStatut: details?.scanStatut ?? null,
           });
         } catch (err: unknown) {
           set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
@@ -376,7 +342,7 @@ export const useAppStore = create<AppState>()(
           ),
         }));
         try {
-          await updateSituationStatus(id, 'non_ok', comment);
+          await updateSituationStatus(id, 'non_ok', comment, undefined, { closedById: get().user?.id ?? null });
           get().addNotification('NON OK détecté', `FGP ${previous.fgp} — ${previous.zone} — ${comment}`, 'nok');
         } catch (err: unknown) {
           set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));
@@ -425,6 +391,7 @@ export const useAppStore = create<AppState>()(
           date: new Date().toLocaleString('fr-FR'),
           count: rows.length,
           by: get().user?.name || 'Inconnu',
+          byId: get().user?.id ?? null,
         };
         try {
           // Persist to Supabase D'ABORD — si ça échoue, on ne met pas à jour l'UI ni
@@ -568,7 +535,7 @@ setDirectorSignature: async (base64) => {
       },
 
       addLeave: async (leave) => {
-        const withAuthor = { ...leave, createdBy: get().user?.name || 'Inconnu' };
+        const withAuthor = { ...leave, createdBy: get().user?.name || 'Inconnu', createdById: get().user?.id ?? null };
         const newLeave = await createLeave(withAuthor);
         if (newLeave) {
           set((s) => ({ leaves: [newLeave, ...s.leaves] }));
@@ -740,7 +707,8 @@ setDirectorSignature: async (base64) => {
         // Ne vide plus la table : chaque import s'ajoute aux précédents, tagué avec
         // son propre importId, pour conserver l'historique complet.
         const inserted = await bulkInsertScans(rows, importId);
-        await get().loadScans();
+        // compteurs et comparaison de l'import : recalculés par la base après l'insertion
+        await Promise.all([get().loadScans(), get().loadScanHistory()]);
         get().addNotification('Scan réseau importé', `${inserted} lignes importées.`, 'import');
         return inserted;
       },
@@ -770,8 +738,8 @@ setDirectorSignature: async (base64) => {
         set({ scans: [] });
       },
 
-      recordScanSnapshot: async (stats) => {
-        const newId = await insertScanImportSnapshot(stats);
+      recordScanSnapshot: async (infos) => {
+        const newId = await insertScanImportSnapshot({ fileName: infos?.fileName, byId: get().user?.id ?? null });
         await get().loadScanHistory();
         return newId;
       },
