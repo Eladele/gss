@@ -4,13 +4,20 @@ import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
 import { parseOtPdf, programmeWhatsApp, type ParsedOT } from '@/utils/otPdf';
-import { deleteOts, distribuer, existingNumeros, fetchProgramme, reassign, subscribeProgramme } from '@/lib/programmeService';
+import { deleteOts, distribuer, existingNumeros, fetchProgramme, reassign, situationsOuvertes, subscribeProgramme } from '@/lib/programmeService';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel } from '@/utils/programme';
 import { ClotureResume } from '@/components/programme/OtCard';
 import type { ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
 
-type Item = ParsedOT & { key: string; equipe: string; sourceFichier: string; deja?: { equipe: string; date: string }; include: boolean };
+type Item = ParsedOT & {
+  key: string;
+  equipe: string;
+  sourceFichier: string;
+  deja?: { equipe: string; date: string };
+  existante?: { equipe: string; type: string }; // situation Excel ouverte que l'OT va compléter
+  include: boolean;
+};
 type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
 
 const todayISO = () => {
@@ -88,10 +95,12 @@ export default function DistributionPage() {
       // Même OT présent deux fois (deux PDF qui se recoupent) → une seule fiche
       const seen = new Set(items.map((i) => i.numeroOt));
       const fresh = parsed.filter((p) => p.numeroOt && !seen.has(p.numeroOt) && (seen.add(p.numeroOt), true));
-      const deja = await existingNumeros(fresh.map((p) => p.numeroOt));
+      const [deja, ouvertes] = await Promise.all([existingNumeros(fresh.map((p) => p.numeroOt)), situationsOuvertes(fresh.map((p) => p.fgp))]);
       fresh.forEach((p) => {
         const d = deja.get(p.numeroOt);
         if (d) Object.assign(p, { deja: d, include: false });
+        const ex = ouvertes.get(`${p.fgp}|${p.nature}`);
+        if (ex && !d) Object.assign(p, { existante: { equipe: ex.equipe ?? '', type: ex.type }, equipe: p.equipe || ex.equipe || '' });
       });
       setItems((cur) => [...cur, ...fresh]);
       const nbDeja = fresh.filter((p) => p.deja).length;
@@ -118,8 +127,12 @@ export default function DistributionPage() {
     if (missingTeam.length) return showToast(`Choisissez une équipe pour ${missingTeam.length} fiche${missingTeam.length > 1 ? 's' : ''}`, 'error');
     setSending(true);
     try {
-      const n = await distribuer(toSend, dateProgramme, user.name);
-      showToast(`${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''} : les chefs d’équipe sont prévenus`, 'success');
+      const { crees, completees } = await distribuer(toSend, dateProgramme, user.name);
+      const n = crees + completees;
+      showToast(
+        `${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''}${completees ? ` (dont ${completees} situation${completees > 1 ? 's' : ''} existante${completees > 1 ? 's' : ''} complétée${completees > 1 ? 's' : ''})` : ''} : les chefs d’équipe sont prévenus`,
+        'success',
+      );
       setItems([]);
       setHistDate(dateProgramme);
     } catch (e) {
@@ -283,6 +296,11 @@ export default function DistributionPage() {
                             </option>
                           ))}
                         </Select>
+                      )}
+                      {i.existante && !i.deja && (
+                        <span className="text-[11px] text-blue-700" title="Une situation ouverte de ce FGP existe déjà (import Excel) : l’OT la complète au lieu d’en créer une nouvelle">
+                          Complète la situation existante{i.existante.equipe ? ` (${i.existante.equipe})` : ''}
+                        </span>
                       )}
                       {i.warnings.length > 0 && !i.deja && (
                         <span className="inline-flex items-center gap-1 text-[11px] text-amber-700" title={i.warnings.join(', ')}>

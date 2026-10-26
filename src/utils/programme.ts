@@ -64,4 +64,4 @@ export const poteauxDuMotif = (motif: string, liste: MotifDef[]) => liste.find((
 export const ligneLabel = (o: { typeLigne?: string; fgp: string }) => `${o.typeLigne || 'FGP'} ${o.fgp || '—'}`;
 
 /** Application décharge (ouverte dans un nouvel onglet) */
-export const DECHARGE_URL = 'https://41.188.123.36/';
+export const DECHARGE_URL = 'https://41.188.123.36/ftth-intervention/nouvelle';
