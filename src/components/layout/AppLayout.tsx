@@ -43,7 +43,7 @@ import ZonesPage from '@/pages/ZonesPage';
 import NotificationsPage from '@/pages/NotificationsPage';
 import ProfilPage from '@/pages/ProfilPage';
 import StatistiquesPage from '@/pages/StatistiquesPage';
-// import EmployesPage from '@/pages/EmployesPage';
+import EmployesPage from '@/pages/EmployesPage';
 import VehiculesPage from '@/pages/VehiculesPage';
 import MaterielsPage from '@/pages/MaterielsPage';
 import ScansPage from '@/pages/ScansPage';
@@ -68,7 +68,7 @@ type Page =
   | 'notifications'
   | 'profil'
   | 'statistiques'
-  // | 'employes'
+  | 'employes'
   | 'vehicules'
   | 'materiels'
   | 'scans'
@@ -122,7 +122,7 @@ const RH_GROUP: NavGroup = {
   group: 'rh-group',
   label: 'RH',
   children: [
-    // { id: 'employes', label: 'Employés' },
+    { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'equipes', label: 'Équipes' },
@@ -161,7 +161,7 @@ const NAV: Record<Role, NavItem[]> = {
   // (pas de Situations, Réseau, Déploiement).
   rh: [
     { id: 'caisses', label: 'Caisses' },
-    // { id: 'employes', label: 'Employés' },
+    { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
     { id: 'notifications', label: 'Notifications' },
@@ -203,7 +203,7 @@ const PAGE_TITLES: Record<Page, string> = {
   notifications: 'Notifications',
   profil: 'Mon Profil',
   statistiques: 'Statistiques',
-  // employes: 'Gestion Employés',
+  employes: 'Gestion Employés',
   conges: 'Gestion Congés',
   prets: 'Prêts Employés',
   vehicules: 'Gestion Véhicules',
@@ -228,7 +228,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   notifications: Bell,
   profil: User,
   statistiques: BarChart3,
-  // employes: UserCheck,
+  employes: UserCheck,
   conges: FileText,
   prets: Wallet,
   vehicules: Car,
@@ -287,6 +287,7 @@ export default function AppLayout() {
     });
 
   const PageMap: Record<Page, React.ReactNode> = {
+    employes: <EmployesPage />,
     dashboard: <Dashboard onNavigate={setPage} />,
     situations: <SituationsPage />,
     'chef-situations': <ChefSituationsPage />,
@@ -366,12 +367,11 @@ export default function AppLayout() {
           onClick={() => setMenuOpen(false)}
         />
       )}
-      
+
       {/* Mobile Drawer Menu */}
       <div
-        className={`md:hidden fixed inset-y-0 left-0 w-64 bg-white shadow-2xl flex flex-col z-50 transform transition-transform duration-300 ease-in-out ${
-          menuOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        className={`md:hidden fixed inset-y-0 left-0 w-64 bg-white shadow-2xl flex flex-col z-50 transform transition-transform duration-300 ease-in-out ${menuOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
       >
         <div className="h-14 border-b border-slate-100 flex items-center justify-between px-4">
           <div className="flex items-center gap-3">
@@ -438,11 +438,10 @@ export default function AppLayout() {
                   setPage(item.id);
                   setMenuOpen(false);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${
-                  page === item.id
+                className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${page === item.id
                     ? 'bg-blue-50 text-blue-700 font-semibold'
                     : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
-                }`}
+                  }`}
               >
                 {Icon && <Icon className={`w-5 h-5 ${page === item.id ? 'text-blue-600' : 'text-slate-400'}`} />}
                 {item.label}
@@ -622,26 +621,26 @@ export default function AppLayout() {
               .filter((item) => item.id === 'menu' || allowedPages(user.role).includes(item.id as Page))
               .filter((item, _i, arr) => item.id !== 'prets' || arr.length <= 4)
               .map((item) => {
-              const Icon = item.icon;
-              const isActive = page === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={item.onClick ? item.onClick : () => setPage(item.id as Page)}
-                  className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 text-[10px] font-medium transition-colors ${isActive ? 'text-blue-700' : 'text-slate-400 hover:text-slate-600'}`}
-                >
-                  <span className="relative">
-                    <Icon className={`w-5 h-5 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
-                    {item.badge ? (
-                      <span className="absolute -top-1.5 -right-2 w-4 h-4 bg-red-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center">
-                        {item.badge}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span>{item.label}</span>
-                </button>
-              );
-            })
+                const Icon = item.icon;
+                const isActive = page === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={item.onClick ? item.onClick : () => setPage(item.id as Page)}
+                    className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 text-[10px] font-medium transition-colors ${isActive ? 'text-blue-700' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    <span className="relative">
+                      <Icon className={`w-5 h-5 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
+                      {item.badge ? (
+                        <span className="absolute -top-1.5 -right-2 w-4 h-4 bg-red-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center">
+                          {item.badge}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })
           )}
         </div>
       </nav>
