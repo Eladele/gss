@@ -140,12 +140,13 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
   const cZone = col(['ZONE']);
   const cStt = col(['STT']);
   // Formats connus pour la colonne résultat : "RESULT"/"RESULTA" (contient le mot),
-  // ou un en-tête exactement "SCAN" (observé dans certains exports GSS).
-  const cResult = colExact('SCAN') >= 0 ? colExact('SCAN') : col(['RESULT']);
+  // ou un en-tête exactement "SCAN" / "SCANNE" / "SCANNÉ" / "STATUT" (exports GSS).
+  const cResult = [colExact('SCAN'), colExact('SCANNE'), colExact('SCANNÉ'), col(['RESULT']), colExact('STATUT'), col(['STATUT SCAN', 'ETAT SCAN'])].find((i) => i >= 0) ?? -1;
   const cScanTime = col(['SCAN TIME', 'DATE SCAN']);
   const cPort = col(['PORT ID']);
   const cOnuId = col(['ONU ID']);
-  const cOnuName = col(['ONU NAME']);
+  // "ONU Name" contient le FGP ; certains exports ont directement une colonne "FGP"
+  const cOnuName = col(['ONU NAME']) >= 0 ? col(['ONU NAME']) : colExact('FGP');
   const cSw = col(['SOFTWARE VERSION']);
   const cSn = col(['SN/MAC', 'SN MAC']);
   const cAdded = col(['TIME ADDED']);
@@ -166,7 +167,7 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
       result:
         // Accepte "SCANNE" (format 1) et "SCAN" (format 2, colonne RESULTA) comme
         // équivalents — "NON SCANNE"/"NON SCAN" restent explicitement exclus.
-        cResult >= 0 && /SCAN(NE)?$/i.test(String(row[cResult] ?? '')) && !/NON/i.test(String(row[cResult] ?? ''))
+        cResult >= 0 && /^(SCAN(N[EÉ])?|OUI|OK)$/i.test(String(row[cResult] ?? '').trim())
           ? 'SCANNE'
           : 'NON SCANE',
       scanTime: cScanTime >= 0 ? toIso(row[cScanTime]) : undefined,

@@ -86,7 +86,7 @@ export function itemsToLines(items: TextItemLike[]): string[] {
 
 // ─── 2. Lignes → fiches OT ─────────────────────────────────────────────────
 const RE_NO = /No\s+(\d{2}\/\d{2}\s+\d{5,9})/;
-const RE_PHONE = /(?<!\d)[234]\d{7}(?!\d)/g;
+const RE_PHONE = /(?<!\d)(?:(?:\+|00)?222[\s.-]?)?[234]\d{7}(?!\d)/g;
 const RE_ZONE = /\b([A-Z]{2}\d[A-Z]\d{2})/i;
 const RE_DIS = /DIS\s+([A-Z]{2}\d[A-Z]\d{2})(\d+\/\d+)-(\d+)/gi;
 const RE_ONT = /ONT\s+([0-9A-F]{12,16})\b/gi;
@@ -162,10 +162,11 @@ function parseBlock(block: string[]): ParsedOT {
     }
   }
   const adresse = adr.join(' · ');
-  // numéros écrits dans l'adresse (« CONTACT 44469999 ») : ajoutés en dernier
-  const telephones = uniq([...(derLine.match(RE_PHONE) ?? []), ...(zoneContacts.match(RE_PHONE) ?? []), ...(adresse.match(RE_PHONE) ?? [])]).filter(
-    (t) => t !== clientCode && t !== fgp,
-  );
+  // numéros écrits dans l'adresse (« CONTACT 44469999 ») : ajoutés en dernier (normalisés à 8 chiffres)
+  const normTel = (t: string) => t.replace(/^(?:\+|00)?222[\s.-]?/, '').replace(/\D/g, '');
+  const telephones = uniq(
+    [...(derLine.match(RE_PHONE) ?? []), ...(zoneContacts.match(RE_PHONE) ?? []), ...(adresse.match(RE_PHONE) ?? [])].map(normTel),
+  ).filter((t) => t !== clientCode && t !== fgp);
   if (!telephones.length) warnings.push('Aucun numéro de téléphone');
 
   // DIS / ONT — en dérangement, deux colonnes : « ANCIENNE » (gauche) et « NOUVELLE »
