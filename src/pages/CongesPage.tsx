@@ -42,9 +42,17 @@ function colorFor(seed: string) {
 function initials(name: string) {
     return name.split(' ').slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 }
+/** Nombre de jours entre deux dates ISO ou YYYY-MM (mois complet). */
 function daysBetween(a: string, b: string): number {
     if (!a || !b) return 0;
-    const d1 = new Date(a), d2 = new Date(b);
+    // Sélecteur mois → premier/dernier jour du mois
+    const toDate = (s: string) => s.length === 7 ? new Date(`${s}-01`) : new Date(s);
+    const d1 = toDate(a), d2 = toDate(b);
+    // Si mois seulement, compter tous les jours du mois de début
+    if (a.length === 7) {
+        const [yr, mo] = a.split('-').map(Number);
+        return new Date(yr, mo, 0).getDate(); // jours dans le mois
+    }
     return Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1);
 }
 function isOnLeaveToday(l: LeaveRecord): boolean {
@@ -102,19 +110,16 @@ function BtnAddConge({ onClick }: { onClick: () => void }) {
 }
 
 // ─── Section tabs ───────────────────────────────────────────────────────────
-type Tab = 'dashboard' | 'employes' | 'historique' | 'export';
+type Tab = 'dashboard' | 'historique' | 'export';
 
 export default function CongesPage() {
     const employees          = useAppStore((s) => s.employees);
-    const equipes            = useAppStore((s) => s.equipes);
     const leaves             = useAppStore((s) => s.leaves);
     const loans              = useAppStore((s) => s.loans);
     const loadEmployees      = useAppStore((s) => s.loadEmployees);
     const addLeave           = useAppStore((s) => s.addLeave);
     const editLeave          = useAppStore((s) => s.editLeave);
     const removeLeave        = useAppStore((s) => s.removeLeave);
-    const editEmployee       = useAppStore((s) => s.editEmployee);
-    const removeEmployee     = useAppStore((s) => s.removeEmployee);
     const directorSignature  = useAppStore((s) => s.directorSignature);
     const setDirectorSignature = useAppStore((s) => s.setDirectorSignature);
     const { showToast } = useToast();
@@ -128,10 +133,6 @@ export default function CongesPage() {
     const [dashSearch, setDashSearch] = useState('');
     const [dashVille, setDashVille]   = useState('');
 
-    // ── Filtres onglet Employés ───────────────────────────────────────────────
-    const [searchEmp, setSearchEmp]   = useState('');
-    const [empVille, setEmpVille]     = useState('');
-
     // ── Filtres historique ────────────────────────────────────────────────────
     const [filterType, setFilterType]         = useState<LeaveType | ''>('');
     const [filterMonth, setFilterMonth]       = useState('');
@@ -141,16 +142,12 @@ export default function CongesPage() {
     const [congeModal, setCongeModal]       = useState(false);
     const [congeEmployee, setCongeEmployee] = useState<Employee | null>(null);
     const [editingLeave, setEditingLeave]   = useState<LeaveRecord | null>(null);
+    // dateDebut / dateFin stockés en « YYYY-MM » (mois seulement)
     const [leaveForm, setLeaveForm]         = useState({ type: 'annuel' as LeaveType, dateDebut: '', dateFin: '', motif: '' });
-
-    // ── Modal employé (modifier) ──────────────────────────────────────────────
-    const [empModal, setEmpModal]       = useState(false);
-    const [editingEmp, setEditingEmp]   = useState<Employee | null>(null);
-    const [empForm, setEmpForm]         = useState<Partial<Employee>>({ actif: true });
 
     // ── Export ────────────────────────────────────────────────────────────────
     const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
-    const [exportOrdre, setExportOrdre] = useState('020/DG/GSS/2026');
+    const [exportOrdre, setExportOrdre] = useState(() => `020/DG/GSS/${new Date().getFullYear()}`);
     const FEUILLES_DISPO = ['BPM', 'Caisse', 'SGM', 'Récap'];
     const [feuilles, setFeuilles]       = useState<string[]>(FEUILLES_DISPO);
     const toggleFeuille = (f: string) =>
@@ -169,20 +166,22 @@ export default function CongesPage() {
         [...new Set(employees.map(e => e.ville).filter(Boolean))].sort() as string[]
     , [employees]);
 
-    /** Solde annuel restant */
+    /** Solde de congé annuel restant — cumul global tous mois confondus (22 jours au total) */
     const soldeFor = (empId: string) => {
-        const taken = leaves.filter(l => l.employeeId === empId && l.type === 'annuel').reduce((a, l) => a + l.jours, 0);
+        const taken = leaves
+            .filter(l => l.employeeId === empId && l.type === 'annuel')
+            .reduce((a, l) => a + l.jours, 0);
         return SOLDE_ANNUEL - taken;
     };
 
-    // ── KPIs ─────────────────────────────────────────────────────────────────
+    // ── KPIs ──────────────────────────────────────────────────────────────────
     const kpis = useMemo(() => {
-        const actifs    = employees.filter(e => e.actif);
-        const poste = (e: Employee) => (e.poste ?? '').toLowerCase();
+        const actifs = employees.filter(e => e.actif);
+        const poste  = (e: Employee) => (e.poste ?? '').toLowerCase();
         return {
-            enConge:      enCongeAujourdHui.length,
-            presents:     actifs.filter(e => !enCongeIds.has(e.id)).length,
-            totalConges:  leaves.length,
+            enConge:       enCongeAujourdHui.length,
+            presents:      actifs.filter(e => !enCongeIds.has(e.id)).length,
+            totalConges:   leaves.length,
             joursConsommes: leaves.filter(l => l.type === 'annuel').reduce((a, l) => a + l.jours, 0),
             chefs:        actifs.filter(e => poste(e).includes('chef')).length,
             techniciens:  actifs.filter(e => poste(e).includes('technicien')).length,
@@ -204,18 +203,6 @@ export default function CongesPage() {
             return true;
         });
     }, [employees, enCongeIds, dashVille, dashSearch]);
-
-    // ── Employés filtrés (onglet Employés) ────────────────────────────────────
-    const filteredEmployees = useMemo(() =>
-        employees.filter(e => {
-            if (empVille && e.ville !== empVille) return false;
-            if (!searchEmp) return true;
-            const q = searchEmp.toLowerCase();
-            return e.name.toLowerCase().includes(q) ||
-                (e.mle ?? '').includes(searchEmp) ||
-                (e.equipeNom ?? '').toLowerCase().includes(q);
-        })
-    , [employees, searchEmp, empVille]);
 
     // ── Congés filtrés (historique) ───────────────────────────────────────────
     const filteredLeaves = useMemo(() => {
@@ -239,8 +226,8 @@ export default function CongesPage() {
     }, [leaves, filterType, filterMonth, filterEmpSearch, employees]);
 
     // ── Handlers congé ────────────────────────────────────────────────────────
-    const openNewConge = (emp: Employee) => {
-        setCongeEmployee(emp);
+    const openNewConge = (emp?: Employee) => {
+        setCongeEmployee(emp ?? null);
         setEditingLeave(null);
         setLeaveForm({ type: 'annuel', dateDebut: '', dateFin: '', motif: '' });
         setCongeModal(true);
@@ -253,7 +240,7 @@ export default function CongesPage() {
     };
     const saveConge = async () => {
         if (!congeEmployee || !leaveForm.dateDebut || !leaveForm.dateFin) {
-            showToast('Dates de début et fin obligatoires', 'error'); return;
+            showToast('Employé, dates de début et fin obligatoires', 'error'); return;
         }
         const jours = daysBetween(leaveForm.dateDebut, leaveForm.dateFin);
         if (editingLeave) {
@@ -266,26 +253,14 @@ export default function CongesPage() {
         setCongeModal(false);
     };
 
-    // ── Handlers employé ──────────────────────────────────────────────────────
-    const openEditEmp = (emp: Employee) => {
-        setEditingEmp(emp);
-        setEmpForm({ ...emp });
-        setEmpModal(true);
-    };
-    const saveEmp = async () => {
-        if (!empForm.name?.trim()) { showToast('Le nom est obligatoire', 'error'); return; }
-        if (editingEmp) await editEmployee(editingEmp.id, empForm);
-        setEmpModal(false);
-        showToast('Employé mis à jour ✅', 'success');
-    };
-    const handleDeleteEmp = (emp: Employee) => {
-        if (confirm(`Supprimer ${emp.name} ? Cette action est irréversible.`)) {
-            removeEmployee(emp.id);
-            showToast(`${emp.name} supprimé`, 'success');
+    // ── Export ────────────────────────────────────────────────────────────────
+    const handleMonthChange = (val: string) => {
+        setExportMonth(val);
+        const yr = val.split('-')[0];
+        if (yr) {
+            setExportOrdre(prev => prev.replace(/\/\d{4}$/, `/${yr}`));
         }
     };
-
-    // ── Export ────────────────────────────────────────────────────────────────
     const exportOpts = () => ({ month: exportMonth, employees, leaves, loans, ordreBase: exportOrdre, feuilles, signatureBase64: directorSignature });
     const handlePreview = () => {
         if (!feuilles.length) { showToast('Sélectionnez au moins une feuille', 'error'); return; }
@@ -298,12 +273,11 @@ export default function CongesPage() {
         showToast('Fichier Excel généré ✅', 'success');
     };
 
-    // ── TAB CONFIG ────────────────────────────────────────────────────────────
+    // ── TAB CONFIG ────────────────────────────────────────────────────
     const TABS: { id: Tab; label: string; icon: string }[] = [
-        { id: 'dashboard',  label: 'Tableau de bord', icon: '📊' },
-        { id: 'export',     label: 'Export',           icon: '📤' },
-        { id: 'employes',   label: 'Employés',         icon: '👥' },
-        { id: 'historique', label: 'Historique',       icon: '📋' },
+        { id: 'dashboard',  label: 'Tableau de bord',       icon: '📊' },
+        { id: 'historique', label: 'Historique des congés', icon: '📋' },
+        { id: 'export',     label: 'Export Salaires (Excel)', icon: '📤' },
     ];
 
     return (
@@ -312,9 +286,9 @@ export default function CongesPage() {
             <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
                     <h1 className="text-2xl font-black text-slate-900">🌴 Gestion des Congés</h1>
-                    <p className="text-slate-400 text-sm">Suivi en temps réel — employés en congé, historique & export Excel</p>
+                    <p className="text-slate-400 text-sm">Suivi des absences & congés · export des salaires / ordres de virement</p>
                 </div>
-                <Button onClick={() => setTab('employes')} icon="➕">Nouveau congé</Button>
+                <Button onClick={() => openNewConge()} icon="➕">Nouveau congé</Button>
             </div>
 
             {/* ── Tabs ── */}
@@ -339,15 +313,15 @@ export default function CongesPage() {
                 <div className="space-y-5">
                     {/* KPIs — ligne 1 : présence */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        <StatCard value={kpis.enConge}       label="En congé aujourd'hui"    icon="🌴" accent="#E65100" />
-                        <StatCard value={kpis.presents}      label="Présents aujourd'hui"    icon="✅" accent="#2E7D32" />
-                        <StatCard value={kpis.totalConges}   label="Congés enregistrés"      icon="📋" accent="#1565C0" />
-                        <StatCard value={kpis.joursConsommes} label="Jours annuels consommés" icon="📅" accent="#8E24AA" />
+                        <StatCard value={kpis.enConge}        label="En congé aujourd'hui"   icon="🌴" accent="#E65100" />
+                        <StatCard value={kpis.presents}       label="Présents aujourd'hui"   icon="✅" accent="#2E7D32" />
+                        <StatCard value={kpis.totalConges}    label="Congés enregistrés"     icon="📋" accent="#1565C0" />
+                        <StatCard value={kpis.joursConsommes} label="Jours annuels pris"     icon="📅" accent="#8E24AA" />
                     </div>
                     {/* KPIs — ligne 2 : postes */}
                     <div className="grid grid-cols-3 gap-4">
-                        <StatCard value={kpis.chefs}       label="Chefs d'équipe"  icon="👑" accent="#E9A93B" />
-                        <StatCard value={kpis.techniciens} label="Techniciens"     icon="🔧" accent="#00838F" />
+                        <StatCard value={kpis.chefs}        label="Chefs d'équipe" icon="👑" accent="#E9A93B" />
+                        <StatCard value={kpis.techniciens}  label="Techniciens"    icon="🔧" accent="#00838F" />
                         <StatCard value={kpis.superviseurs} label="Superviseurs"   icon="🎯" accent="#546E7A" />
                     </div>
 
@@ -481,116 +455,10 @@ export default function CongesPage() {
                 </div>
             )}
 
-            {/* ══════════════════════════════════════════════════════
-                TAB 2 — EMPLOYÉS (modifier, supprimer, + congé)
-            ══════════════════════════════════════════════════════ */}
-            {tab === 'employes' && (
-                <Card>
-                    <CardHeader>
-                        <div className="flex items-center gap-2 flex-wrap w-full">
-                            <CardTitle>👥 Employés — solde & statut congé</CardTitle>
-                            <div className="ml-auto flex items-center gap-2 flex-wrap">
-                                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                                    <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                    </svg>
-                                    <input
-                                        className="bg-transparent text-sm focus:outline-none w-36"
-                                        placeholder="Nom, Mle, équipe..."
-                                        value={searchEmp}
-                                        onChange={e => setSearchEmp(e.target.value)}
-                                    />
-                                </div>
-                                <Select value={empVille} onChange={e => setEmpVille(e.target.value)} style={{ width: 'auto' }}>
-                                    <option value="">Toutes les villes</option>
-                                    {villes.map(v => <option key={v} value={v}>{v}</option>)}
-                                </Select>
-                                {(searchEmp || empVille) && (
-                                    <button onClick={() => { setSearchEmp(''); setEmpVille(''); }} className="text-xs text-blue-600 hover:underline">✕ Effacer</button>
-                                )}
-                                <span className="text-xs text-slate-400">{filteredEmployees.length} employé(s)</span>
-                            </div>
-                        </div>
-                    </CardHeader>
-                    {filteredEmployees.length === 0 ? (
-                        <EmptyState icon="👤" text="Aucun employé trouvé" />
-                    ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                                <thead>
-                                    <tr className="bg-slate-50 border-b border-slate-100">
-                                        {['Employé', 'Équipe / Ville', 'Statut', 'Solde annuel', 'Jours pris', 'Actions'].map(h => (
-                                            <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">{h}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredEmployees.map(e => {
-                                        const solde       = soldeFor(e.id);
-                                        const pris        = leaves.filter(l => l.employeeId === e.id && l.type === 'annuel').reduce((a, l) => a + l.jours, 0);
-                                        const enConge     = enCongeIds.has(e.id);
-                                        const congeActuel = enCongeAujourdHui.find(l => l.employeeId === e.id);
-                                        return (
-                                            <tr key={e.id} className={`border-b border-slate-50 transition-colors ${enConge ? 'bg-orange-50/30' : 'hover:bg-slate-50/50'}`}>
-                                                <td className="px-3 py-3">
-                                                    <div className="flex items-center gap-2.5">
-                                                        <div className="relative">
-                                                            <div className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ background: colorFor(e.name) }}>
-                                                                {initials(e.name)}
-                                                            </div>
-                                                            {enConge && <span className="absolute -bottom-0.5 -right-0.5 text-[10px]">🌴</span>}
-                                                        </div>
-                                                        <div>
-                                                            <p className="font-semibold text-slate-800">{e.name}</p>
-                                                            <p className="text-[11px] text-slate-400">{e.mle ? `Mle ${e.mle}` : '—'}</p>
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <p className="text-xs font-medium text-slate-700">{e.equipeNom || '—'}</p>
-                                                    <p className="text-[11px] text-slate-400">{e.ville || '—'}</p>
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    {enConge && congeActuel ? (
-                                                        <div>
-                                                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700">🌴 En congé</span>
-                                                            <p className="text-[10px] text-slate-400 mt-0.5">jusqu'au {formatDate(congeActuel.dateFin)}</p>
-                                                        </div>
-                                                    ) : (
-                                                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${e.actif ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
-                                                            {e.actif ? '✅ Présent' : 'Inactif'}
-                                                        </span>
-                                                    )}
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <div className="flex items-center gap-2">
-                                                        <div className="w-16 bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                                                            <div className={`h-full rounded-full ${solde < 0 ? 'bg-red-400' : solde < 5 ? 'bg-amber-400' : 'bg-green-400'}`}
-                                                                style={{ width: `${Math.max(0, Math.min(100, (solde / SOLDE_ANNUEL) * 100))}%` }} />
-                                                        </div>
-                                                        <span className={`text-xs font-bold ${solde < 0 ? 'text-red-600' : solde < 5 ? 'text-amber-600' : 'text-green-700'}`}>{solde}j</span>
-                                                    </div>
-                                                </td>
-                                                <td className="px-3 py-3 text-xs text-slate-500">{pris}j</td>
-                                                <td className="px-3 py-3">
-                                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                                        <BtnEdit onClick={() => openEditEmp(e)} />
-                                                        <BtnDelete onClick={() => handleDeleteEmp(e)} />
-                                                        <BtnAddConge onClick={() => openNewConge(e)} />
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-                </Card>
-            )}
+
 
             {/* ══════════════════════════════════════════════════════
-                TAB 3 — HISTORIQUE DES CONGÉS
+                TAB 2 — HISTORIQUE DES CONGÉS
             ══════════════════════════════════════════════════════ */}
             {tab === 'historique' && (
                 <div className="space-y-4">
@@ -676,11 +544,11 @@ export default function CongesPage() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="text-xs font-semibold text-slate-500 block mb-1.5">Mois d'export</label>
-                                    <Input type="month" value={exportMonth} onChange={e => setExportMonth(e.target.value)} />
+                                    <Input type="month" value={exportMonth} onChange={e => handleMonthChange(e.target.value)} />
                                 </div>
                                 <div>
                                     <label className="text-xs font-semibold text-slate-500 block mb-1.5">N° d'ordre</label>
-                                    <Input value={exportOrdre} onChange={e => setExportOrdre(e.target.value)} placeholder="020/DG/GSS/2026" />
+                                    <Input value={exportOrdre} onChange={e => setExportOrdre(e.target.value)} placeholder={`020/DG/GSS/${exportMonth.split('-')[0] || new Date().getFullYear()}`} />
                                 </div>
                             </div>
                             <div>
@@ -739,20 +607,43 @@ export default function CongesPage() {
                 title={`🌴 ${editingLeave ? 'Modifier le' : 'Nouveau'} congé${congeEmployee ? ` — ${congeEmployee.name}` : ''}`}
             >
                 <div className="space-y-4">
-                    {congeEmployee && (
-                        <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                            <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ background: colorFor(congeEmployee.name) }}>
-                                {initials(congeEmployee.name)}
+                    {congeEmployee && (() => {
+                        const solde = soldeFor(congeEmployee.id);
+                        return (
+                            <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                                <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0" style={{ background: colorFor(congeEmployee.name) }}>
+                                    {initials(congeEmployee.name)}
+                                </div>
+                                <div className="flex-1">
+                                    <p className="font-semibold text-slate-800">{congeEmployee.name}</p>
+                                    <p className="text-xs text-slate-500">
+                                        Solde de congé :&nbsp;
+                                        <strong className={solde < 0 ? 'text-red-600' : 'text-green-700'}>
+                                            {solde} jours restants
+                                        </strong>&nbsp;/ {SOLDE_ANNUEL}
+                                    </p>
+                                </div>
                             </div>
-                            <div>
-                                <p className="font-semibold text-slate-800">{congeEmployee.name}</p>
-                                <p className="text-xs text-slate-400">
-                                    Solde restant :&nbsp;
-                                    <strong className={soldeFor(congeEmployee.id) < 0 ? 'text-red-600' : 'text-green-700'}>
-                                        {soldeFor(congeEmployee.id)} jours
-                                    </strong>&nbsp;/ {SOLDE_ANNUEL}
-                                </p>
-                            </div>
+                        );
+                    })()}
+                    {!editingLeave && (
+                        <div>
+                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Employé *</label>
+                            <Select
+                                className="w-full"
+                                value={congeEmployee?.id ?? ''}
+                                onChange={(e) => {
+                                    const emp = employees.find((x) => x.id === e.target.value) ?? null;
+                                    setCongeEmployee(emp);
+                                }}
+                            >
+                                <option value="">-- Choisir un employé --</option>
+                                {employees.map((e) => (
+                                    <option key={e.id} value={e.id}>
+                                        {e.mle ? `${e.mle} — ` : ''}{e.name}
+                                    </option>
+                                ))}
+                            </Select>
                         </div>
                     )}
                     <div>
@@ -763,17 +654,19 @@ export default function CongesPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Date de début</label>
-                            <input type="date" className="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm" value={leaveForm.dateDebut} onChange={e => setLeaveForm(f => ({ ...f, dateDebut: e.target.value }))} />
+                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Mois de début</label>
+                            <input type="month" className="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm" value={leaveForm.dateDebut} onChange={e => setLeaveForm(f => ({ ...f, dateDebut: e.target.value, dateFin: f.dateFin || e.target.value }))} />
                         </div>
                         <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Date de fin</label>
-                            <input type="date" className="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm" value={leaveForm.dateFin} onChange={e => setLeaveForm(f => ({ ...f, dateFin: e.target.value }))} />
+                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Mois de fin</label>
+                            <input type="month" className="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm" value={leaveForm.dateFin} onChange={e => setLeaveForm(f => ({ ...f, dateFin: e.target.value }))} />
                         </div>
                     </div>
-                    {leaveForm.dateDebut && leaveForm.dateFin && (
+                    {leaveForm.dateDebut && (
                         <p className="text-xs bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-slate-500">
-                            Durée calculée : <strong className="text-blue-700">{daysBetween(leaveForm.dateDebut, leaveForm.dateFin)} jours</strong>
+                            Mois sélectionné : <strong className="text-blue-700">
+                                {new Date(leaveForm.dateDebut + '-01').toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
+                            </strong>
                         </p>
                     )}
                     <div>
@@ -783,73 +676,6 @@ export default function CongesPage() {
                     <div className="flex gap-3 justify-end pt-2">
                         <Button variant="outline" onClick={() => setCongeModal(false)}>Annuler</Button>
                         <Button onClick={saveConge}>{editingLeave ? 'Enregistrer les modifications' : 'Enregistrer le congé'}</Button>
-                    </div>
-                </div>
-            </Modal>
-
-            {/* ── Modal employé (modifier seulement) ── */}
-            <Modal open={empModal} onClose={() => setEmpModal(false)} title={`✏️ Modifier — ${editingEmp?.name ?? ''}`}>
-                <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Matricule</label>
-                            <Input value={empForm.mle ?? ''} onChange={e => setEmpForm(f => ({ ...f, mle: e.target.value }))} />
-                        </div>
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Nom complet *</label>
-                            <Input value={empForm.name ?? ''} onChange={e => setEmpForm(f => ({ ...f, name: e.target.value }))} />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Poste</label>
-                            <Input value={empForm.poste ?? ''} onChange={e => setEmpForm(f => ({ ...f, poste: e.target.value }))} />
-                        </div>
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Téléphone</label>
-                            <Input value={empForm.telephone ?? ''} onChange={e => setEmpForm(f => ({ ...f, telephone: e.target.value }))} />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Ville</label>
-                            <Input value={empForm.ville ?? ''} onChange={e => setEmpForm(f => ({ ...f, ville: e.target.value }))} placeholder="NKTT, NDB..." />
-                        </div>
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Équipe (RH)</label>
-                            <Select className="w-full" value={empForm.equipeNom ?? ''} onChange={e => setEmpForm(f => ({ ...f, equipeNom: e.target.value }))}>
-                                <option value="">— Aucune —</option>
-                                {equipes.map(eq => <option key={eq.id} value={eq.name}>{eq.name}</option>)}
-                            </Select>
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Banque</label>
-                            <Select className="w-full" value={empForm.banque ?? ''} onChange={e => setEmpForm(f => ({ ...f, banque: e.target.value || undefined }))}>
-                                <option value="">— Choisir —</option>
-                                {BANQUES.map(b => <option key={b} value={b}>{b}</option>)}
-                            </Select>
-                        </div>
-                        <div>
-                            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Montant net (MRU)</label>
-                            <Input type="number" value={empForm.montant ?? ''} onChange={e => setEmpForm(f => ({ ...f, montant: parseFloat(e.target.value) || undefined }))} />
-                        </div>
-                    </div>
-                    <div>
-                        <label className="text-xs font-semibold text-slate-500 block mb-1.5">RIB</label>
-                        <Input value={empForm.rib ?? ''} onChange={e => setEmpForm(f => ({ ...f, rib: e.target.value.replace(/\s+/g, '') }))} placeholder="23 chiffres sans espace" />
-                    </div>
-                    <div>
-                        <label className="text-xs font-semibold text-slate-500 block mb-1.5">Statut</label>
-                        <Select value={empForm.actif ? '1' : '0'} onChange={e => setEmpForm(f => ({ ...f, actif: e.target.value === '1' }))}>
-                            <option value="1">Actif</option>
-                            <option value="0">Inactif</option>
-                        </Select>
-                    </div>
-                    <div className="flex gap-3 justify-end pt-2">
-                        <Button variant="outline" onClick={() => setEmpModal(false)}>Annuler</Button>
-                        <Button onClick={saveEmp}>Enregistrer</Button>
                     </div>
                 </div>
             </Modal>

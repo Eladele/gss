@@ -1,30 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
+import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import { BANQUES } from '@/data';
-import { buildExportPreview, exportEmployesPresentsExcel } from '@/utils/leaves';
-import type { Employee, LeaveType, LeaveRecord } from '@/types';
-import { SignaturePad } from '@/components/signaturePad';
+import { exportEmployesListExcel } from '@/utils/leaves';
+import type { Employee } from '@/types';
 
-import type { ExportPreview } from '@/utils/leaves';
-import { ExportPreviewModal } from '@/components/ExportPreviewModal';
-import { DEFAULT_SIGNATURE } from '@/utils/signature';// ← ajouter cette ligne
-const LEAVE_LABELS: Record<LeaveType, string> = {
-  annuel: 'Congé annuel',
-  maladie: 'Congé maladie',
-  sans_solde: 'Sans solde',
-  exceptionnel: 'Exceptionnel',
-  maternite: 'Maternité',
-  autre: 'Autre',
-};
-const LEAVE_ICONS: Record<LeaveType, string> = {
-  annuel: '',
-  maladie: '',
-  sans_solde: '',
-  exceptionnel: '',
-  maternite: '',
-  autre: '',
-};
 const SOLDE_ANNUEL = 22; // jours de congé annuel de référence / an
 
 const POSTE_STYLES: Record<string, string> = {
@@ -34,18 +14,12 @@ const POSTE_STYLES: Record<string, string> = {
   cordinteur: 'bg-amber-100 text-amber-700',
   coordinateur: 'bg-amber-100 text-amber-700',
 };
+
 const AVATAR_PALETTE = ['#1565C0', '#2E7D32', '#E9A93B', '#8E24AA', '#00838F', '#C62828', '#546E7A'];
 function colorFor(seed: string) {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = seed.charCodeAt(i) + ((h << 5) - h);
   return AVATAR_PALETTE[Math.abs(h) % AVATAR_PALETTE.length];
-}
-
-function daysBetween(a: string, b: string): number {
-  if (!a || !b) return 0;
-  const d1 = new Date(a),
-    d2 = new Date(b);
-  return Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1);
 }
 
 export default function EmployesPage() {
@@ -56,11 +30,6 @@ export default function EmployesPage() {
   const addEmployee = useAppStore((s) => s.addEmployee);
   const editEmployee = useAppStore((s) => s.editEmployee);
   const removeEmployee = useAppStore((s) => s.removeEmployee);
-  const addLeave = useAppStore((s) => s.addLeave);
-  const editLeave = useAppStore((s) => s.editLeave);
-  const removeLeave = useAppStore((s) => s.removeLeave);
-  const directorSignature = useAppStore((s) => s.directorSignature); // ← ajouter
-  const setDirectorSignature = useAppStore((s) => s.setDirectorSignature);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -69,215 +38,238 @@ export default function EmployesPage() {
 
   const [search, setSearch] = useState('');
   const [fVille, setFVille] = useState('');
+  const [fStatut, setFStatut] = useState<'tous' | 'actif' | 'inactif'>('tous');
+  const [fBanque, setFBanque] = useState('');
+
   const [empModal, setEmpModal] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
   const [form, setForm] = useState<Partial<Employee>>({ actif: true });
+  const [saving, setSaving] = useState(false);
 
-  const [congeModal, setCongeModal] = useState(false);
-  const [congeEmployee, setCongeEmployee] = useState<Employee | null>(null);
-  const [leaveForm, setLeaveForm] = useState({ type: 'annuel' as LeaveType, dateDebut: '', dateFin: '', motif: '' });
-  const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [exportOrdre, setExportOrdre] = useState('020/DG/GSS/2026');
-  const [congeFilterMonth, setCongeFilterMonth] = useState('');
-  // Feuilles cochées pour l'export — toutes cochées par défaut (BPM/Caisse/SGM
-  // détectées dynamiquement selon les banques réellement utilisées + Récap).
-  const FEUILLES_DISPONIBLES = ['BPM', 'Caisse', 'SGM', 'Récap'];
-  const [feuillesSelectionnees, setFeuillesSelectionnees] = useState<string[]>(FEUILLES_DISPONIBLES);
-  const toggleFeuille = (f: string) =>
-    setFeuillesSelectionnees((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]));
-  const [sigModal, setSigModal] = useState(false);
-  const [preview, setPreview] = useState<ExportPreview | null>(null);// ← ajouter
-  const villes = useMemo(() => [...new Set(employees.map((e) => e.ville).filter(Boolean))].sort() as string[], [employees]);
-
-  const filtered = useMemo(
-    () =>
-      employees.filter((e) => {
-        if (fVille && e.ville !== fVille) return false;
-        if (!search) return true;
-        const q = search.toLowerCase();
-        return (
-          e.name.toLowerCase().includes(q) ||
-          (e.mle ?? '').includes(search) ||
-          (e.equipeNom ?? '').toLowerCase().includes(q) ||
-          (e.ville ?? '').toLowerCase().includes(q)
-        );
-      }),
-    [employees, search, fVille],
-  );
-
-  const soldeFor = (empId: string) => {
-    const taken = leaves.filter((l) => l.employeeId === empId && l.type === 'annuel').reduce((a, l) => a + l.jours, 0);
-    return SOLDE_ANNUEL - taken;
-  };
-
-  const counts = useMemo(
-    () => ({
-      total: employees.length,
-      actifs: employees.filter((e) => e.actif).length,
-      chefs: employees.filter((e) => (e.poste ?? '').toLowerCase().includes('chef')).length,
-      techniciens: employees.filter((e) => (e.poste ?? '').toLowerCase().includes('technicien')).length,
-    }),
+  const villes = useMemo(
+    () => [...new Set(employees.map((e) => e.ville).filter(Boolean))].sort() as string[],
     [employees],
   );
 
+  // Prêts actifs groupés par employé
+  const activeLoansByEmp = useMemo(() => {
+    const map = new Map<string, { count: number; totalMensualite: number; totalReste: number }>();
+    loans.forEach((l) => {
+      if (l.statut === 'actif' && l.reste > 0) {
+        const cur = map.get(l.employeeId) || { count: 0, totalMensualite: 0, totalReste: 0 };
+        cur.count += 1;
+        cur.totalMensualite += Math.min(l.mensualite, l.reste);
+        cur.totalReste += l.reste;
+        map.set(l.employeeId, cur);
+      }
+    });
+    return map;
+  }, [loans]);
+
+  // Solde de congé annuel restant — cumul global tous mois confondus (22 jours au total)
+  const soldeFor = (empId: string) => {
+    const taken = leaves
+      .filter((l) => l.employeeId === empId && l.type === 'annuel')
+      .reduce((a, l) => a + l.jours, 0);
+    return SOLDE_ANNUEL - taken;
+  };
+
+
+  const filtered = useMemo(() => {
+    return employees.filter((e) => {
+      if (fVille && e.ville !== fVille) return false;
+      if (fStatut === 'actif' && !e.actif) return false;
+      if (fStatut === 'inactif' && e.actif) return false;
+      if (fBanque && (e.banque || 'Caisse') !== fBanque) return false;
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return (
+        e.name.toLowerCase().includes(q) ||
+        (e.mle ?? '').toLowerCase().includes(q) ||
+        (e.poste ?? '').toLowerCase().includes(q) ||
+        (e.telephone ?? '').toLowerCase().includes(q) ||
+        (e.nni ?? '').toLowerCase().includes(q) ||
+        (e.equipeNom ?? '').toLowerCase().includes(q) ||
+        (e.ville ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [employees, search, fVille, fStatut, fBanque]);
+
+  const counts = useMemo(() => {
+    const total = employees.length;
+    const actifs = employees.filter((e) => e.actif).length;
+    const inactifs = total - actifs;
+    const chefs = employees.filter((e) => (e.poste ?? '').toLowerCase().includes('chef')).length;
+    const techniciens = employees.filter((e) => (e.poste ?? '').toLowerCase().includes('technicien')).length;
+    const masseSalariale = employees.filter((e) => e.actif).reduce((acc, e) => acc + (e.montant || 0), 0);
+    return { total, actifs, inactifs, chefs, techniciens, masseSalariale };
+  }, [employees]);
+
   const openNew = () => {
     setEditing(null);
-    setForm({ actif: true });
+    setForm({
+      actif: true,
+      mle: '',
+      name: '',
+      poste: 'Technicien',
+      telephone: '',
+      nni: '',
+      ville: 'NKTT',
+      equipeNom: '',
+      banque: 'Caisse',
+      rib: '',
+      montant: undefined,
+      dateEmbauche: new Date().toISOString().slice(0, 10),
+    });
     setEmpModal(true);
   };
+
   const openEdit = (emp: Employee) => {
     setEditing(emp);
-    setForm(emp);
+    setForm({ ...emp });
     setEmpModal(true);
   };
 
   const saveEmployee = async () => {
     if (!form.name?.trim()) {
-      showToast('Le nom est obligatoire', 'error');
+      showToast('Le nom complet est obligatoire', 'error');
       return;
     }
-    if (editing) await editEmployee(editing.id, form);
-    else await addEmployee(form);
-    setEmpModal(false);
-    showToast(editing ? 'Employé mis à jour ' : 'Employé ajouté ', 'success');
+    setSaving(true);
+    try {
+      if (editing) {
+        await editEmployee(editing.id, form);
+        showToast(`Employé ${form.name} mis à jour avec succès`, 'success');
+      } else {
+        await addEmployee(form);
+        showToast(`Nouvel employé ${form.name} créé avec succès`, 'success');
+      }
+      setEmpModal(false);
+      setEditing(null);
+    } catch (err: any) {
+      showToast('Erreur : ' + (err?.message || 'échec de l’enregistrement'), 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const [editingLeave, setEditingLeave] = useState<LeaveRecord | null>(null);
-
-  const openConge = (emp: Employee) => {
-    setCongeEmployee(emp);
-    setEditingLeave(null);
-    setLeaveForm({ type: 'annuel', dateDebut: '', dateFin: '', motif: '' });
-    setCongeModal(true);
-  };
-
-  const openEditConge = (leave: LeaveRecord, emp: Employee | undefined) => {
-    setCongeEmployee(emp ?? null);
-    setEditingLeave(leave);
-    setLeaveForm({ type: leave.type, dateDebut: leave.dateDebut, dateFin: leave.dateFin, motif: leave.motif ?? '' });
-    setCongeModal(true);
-  };
-
-  const saveConge = async () => {
-    if (!congeEmployee || !leaveForm.dateDebut || !leaveForm.dateFin) {
-      showToast('Dates de début et fin obligatoires', 'error');
+  const handleExportExcel = async () => {
+    if (!filtered.length) {
+      showToast('Aucun employé à exporter', 'error');
       return;
     }
-    const jours = daysBetween(leaveForm.dateDebut, leaveForm.dateFin);
-    if (editingLeave) {
-      await editLeave(editingLeave.id, { ...leaveForm, jours });
-      showToast('Congé modifié ', 'success');
-    } else {
-      await addLeave({ employeeId: congeEmployee.id, ...leaveForm, jours });
-      showToast('Congé enregistré ', 'success');
-    }
-    setCongeModal(false);
+    await exportEmployesListExcel(filtered);
+    showToast('Export Excel des employés téléchargé avec succès', 'success');
   };
-
-  const exportOpts = () => ({
-    month: exportMonth,
-    employees,
-    leaves,
-    loans,
-    ordreBase: exportOrdre,
-    feuilles: feuillesSelectionnees,
-    signatureBase64: directorSignature, // null → signature du DG par défaut
-  });
-
-  const handlePreviewPresents = () => {
-    if (feuillesSelectionnees.length === 0) {
-      showToast('Sélectionne au moins une feuille à exporter', 'error');
-      return;
-    }
-    setPreview(buildExportPreview(exportOpts()));
-  };
-
-  const handleExportPresents = async () => {
-    if (feuillesSelectionnees.length === 0) {
-      showToast('Sélectionne au moins une feuille à exporter', 'error');
-      return;
-    }
-    await exportEmployesPresentsExcel(exportOpts());
-    setPreview(null);
-    showToast('Fichier Excel des employés présents généré ', 'success');
-  };
-  const filteredLeaves = congeFilterMonth
-    ? leaves.filter((l) => {
-      if (!l.dateDebut || !l.dateFin) return false;
-      const [y, m] = congeFilterMonth.split('-').map(Number);
-      const start = new Date(y, m - 1, 1),
-        end = new Date(y, m, 0, 23, 59, 59);
-      const d1 = new Date(l.dateDebut),
-        d2 = new Date(l.dateFin);
-      return d1 <= end && d2 >= start;
-    })
-    : leaves;
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* ── Page Header ── */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-black text-slate-900">Gestion des Employés</h1>
-          <p className="text-slate-400 text-sm">Module indépendant (paie, congés) — réservé à l'administration</p>
+          <p className="text-slate-400 text-sm">
+            Annuaire du personnel GSS, fiches employés, salaires et suivi des statuts
+          </p>
         </div>
-        <Button icon="" onClick={openNew}>
-          Nouvel Employé
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleExportExcel}>
+            Exporter la liste (Excel)
+          </Button>
+          <Button onClick={openNew}>
+            Nouvel Employé
+          </Button>
+        </div>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard value={counts.total} label="Employés" icon="" accent="#1565C0" />
+      {/* ── KPIs ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+        <StatCard value={counts.total} label="Total employés" icon="" accent="#1565C0" />
         <StatCard value={counts.actifs} label="Actifs" icon="" accent="#2E7D32" />
         <StatCard value={counts.chefs} label="Chefs d'équipe" icon="" accent="#E9A93B" />
         <StatCard value={counts.techniciens} label="Techniciens" icon="" accent="#00838F" />
+        <StatCard
+          value={`${counts.masseSalariale.toLocaleString('fr-FR')} MRU`}
+          label="Masse salariale mensuelle"
+          icon=""
+          accent="#546E7A"
+        />
       </div>
 
+      {/* ── Table des employés ── */}
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2 flex-wrap w-full">
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 max-w-sm flex-1">
-              <span className="text-slate-400"></span>
-              <input
-                className="bg-transparent text-sm focus:outline-none flex-1"
-                placeholder="Nom, matricule, équipe, ville..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+          <div className="flex items-center justify-between gap-3 flex-wrap w-full">
+            <CardTitle>Liste du personnel ({filtered.length})</CardTitle>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 max-w-sm">
+                <input
+                  className="bg-transparent text-sm focus:outline-none w-52"
+                  placeholder="Nom, mle, équipe, téléphone..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+
+              <Select value={fVille} onChange={(e) => setFVille(e.target.value)} style={{ width: 'auto' }}>
+                <option value="">Toutes les villes</option>
+                {villes.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </Select>
+
+              <Select value={fBanque} onChange={(e) => setFBanque(e.target.value)} style={{ width: 'auto' }}>
+                <option value="">Toutes les banques</option>
+                <option value="BPM">BPM</option>
+                <option value="Caisse">Caisse</option>
+                <option value="SGM">SGM</option>
+              </Select>
+
+              <Select
+                value={fStatut}
+                onChange={(e) => setFStatut(e.target.value as any)}
+                style={{ width: 'auto' }}
+              >
+                <option value="tous">Tous les statuts</option>
+                <option value="actif">Actifs uniquement</option>
+                <option value="inactif">Inactifs uniquement</option>
+              </Select>
             </div>
-            <Select value={fVille} onChange={(e) => setFVille(e.target.value)} style={{ width: 'auto' }}>
-              <option value="">Toutes villes</option>
-              {villes.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </Select>
           </div>
         </CardHeader>
+
         {filtered.length === 0 ? (
-          <EmptyState icon="" text="Aucun employé enregistré" />
+          <EmptyState icon="" text="Aucun employé correspondant" />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100">
-                  {['Employé', 'Équipe / Ville', 'Poste', 'Téléphone', 'Montant (MRU)', 'Solde congé', 'Statut', 'Actions'].map((h) => (
-                    <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
-                      {h}
-                    </th>
-                  ))}
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase border-b border-slate-100">
+                <tr>
+                  <th className="px-3 py-3 text-left">Employé</th>
+                  <th className="px-3 py-3 text-left">Poste</th>
+                  <th className="px-3 py-3 text-left">Équipe / Ville</th>
+                  <th className="px-3 py-3 text-left">Téléphone</th>
+                  <th className="px-3 py-3 text-left">Banque & RIB</th>
+                  <th className="px-3 py-3 text-right">Salaire Net</th>
+                  <th className="px-3 py-3 text-center">Prêts en cours</th>
+                  <th className="px-3 py-3 text-center">Solde congé</th>
+                  <th className="px-3 py-3 text-center">Statut</th>
+                  <th className="px-3 py-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {filtered.map((e) => {
                   const solde = soldeFor(e.id);
                   const posteKey = (e.poste ?? '').toLowerCase();
                   const posteStyle = POSTE_STYLES[posteKey] ?? 'bg-slate-100 text-slate-600';
                   const avatarColor = colorFor(e.name);
+                  const loanInfo = activeLoansByEmp.get(e.id);
+
                   return (
-                    <tr key={e.id} className="border-b border-slate-50 hover:bg-slate-50/50">
-                      <td className="px-3 py-3">
+                    <tr key={e.id} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2.5">
                           <div
                             className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
@@ -292,48 +284,76 @@ export default function EmployesPage() {
                           </div>
                           <div>
                             <p className="font-semibold text-slate-800">{e.name}</p>
-                            <p className="text-[11px] text-slate-400">{e.mle ? `Mle ${e.mle}` : '—'}</p>
+                            <p className="text-[11px] text-slate-400">
+                              {e.mle ? `Mle ${e.mle}` : 'Sans matricule'}
+                              {e.nni ? ` · NNI: ${e.nni}` : ''}
+                            </p>
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5">
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${posteStyle}`}>
+                          {e.poste || '—'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5">
                         <p className="text-slate-700 text-xs font-medium">{e.equipeNom || '—'}</p>
                         <p className="text-[11px] text-slate-400">{e.ville || '—'}</p>
                       </td>
-                      <td className="px-3 py-3">
-                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${posteStyle}`}>{e.poste || '—'}</span>
+                      <td className="px-3 py-2.5 text-xs text-slate-600">{e.telephone || '—'}</td>
+                      <td className="px-3 py-2.5">
+                        <p className="font-medium text-slate-700 text-xs">{e.banque || 'Caisse'}</p>
+                        {e.rib ? (
+                          <p className="text-[11px] text-slate-400 font-mono">{e.rib}</p>
+                        ) : (
+                          <p className="text-[11px] text-slate-300 italic">Sans RIB</p>
+                        )}
                       </td>
-                      <td className="px-3 py-3 text-slate-500">{e.telephone || '—'}</td>
-                      <td className="px-3 py-3 text-slate-700">{e.montant ? e.montant.toLocaleString('fr-FR') : '—'}</td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5 text-right font-bold text-slate-800">
+                        {e.montant ? `${e.montant.toLocaleString('fr-FR')} MRU` : '—'}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        {loanInfo ? (
+                          <span
+                            className="inline-flex flex-col items-center px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold"
+                            title={`Reste total dû : ${loanInfo.totalReste.toLocaleString('fr-FR')} MRU`}
+                          >
+                            <span>{loanInfo.count} prêt{loanInfo.count > 1 ? 's' : ''}</span>
+                            <span className="text-[9px] font-normal text-amber-600">
+                              -{loanInfo.totalMensualite.toLocaleString('fr-FR')}/mois
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${solde < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                            solde < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                          }`}
                         >
-                          {solde}j
+                          {solde}j / {SOLDE_ANNUEL}
                         </span>
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-2.5 text-center">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${e.actif ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}
+                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                            e.actif ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+                          }`}
                         >
                           {e.actif ? 'Actif' : 'Inactif'}
                         </span>
                       </td>
-                      <td className="px-3 py-3">
-                        <div className="flex gap-1.5 flex-wrap items-center">
-                          <button
-                            onClick={() => openConge(e)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200 transition-all hover:shadow-sm"
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                            </svg>
-                            Congé
-                          </button>
+                      <td className="px-3 py-2.5 text-right">
+                        <div className="flex gap-1.5 justify-end">
                           <BtnEdit onClick={() => openEdit(e)} />
                           <BtnDelete
                             onClick={() => {
-                              if (confirm(`Supprimer ${e.name} ?`)) removeEmployee(e.id);
+                              if (confirm(`Supprimer définitivement l'employé ${e.name} ?`)) {
+                                removeEmployee(e.id);
+                                showToast(`${e.name} supprimé`, 'success');
+                              }
                             }}
                           />
                         </div>
@@ -347,147 +367,92 @@ export default function EmployesPage() {
         )}
       </Card>
 
-      {/* Historique des congés récents — cartes */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between w-full flex-wrap gap-2">
-            <CardTitle> Congés enregistrés</CardTitle>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Input type="month" value={exportMonth} onChange={(e) => setExportMonth(e.target.value)} className="w-auto" />
+      {/* ── Modal Création / Édition Employé ── */}
+      <Modal
+        open={empModal}
+        onClose={() => setEmpModal(false)}
+        title={editing ? `Modifier l'employé : ${editing.name}` : 'Créer un nouvel employé'}
+      >
+        <div className="space-y-3.5">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Matricule (Mle)</label>
               <Input
-                value={exportOrdre}
-                onChange={(e) => setExportOrdre(e.target.value)}
-                placeholder="N° d'ordre ex: 020/DG/GSS/2026"
-                className="w-48"
+                placeholder="Ex: 0142"
+                value={form.mle ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, mle: e.target.value }))}
               />
-              <Button variant="outline" onClick={() => setSigModal(true)}>
-                Modifier la signature
-              </Button>
-              <Button variant="outline" onClick={handlePreviewPresents}>
-                Aperçu avant export
-              </Button>
-              <Button variant="outline" icon="" onClick={handleExportPresents}>
-                Exporter employés présents (Excel)
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <div className="px-5 pb-2 flex items-center gap-3 flex-wrap">
-          <span className="text-[11px] font-semibold text-slate-500">Feuilles à exporter :</span>
-          {FEUILLES_DISPONIBLES.map((f) => (
-            <label key={f} className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
-              <input type="checkbox" checked={feuillesSelectionnees.includes(f)} onChange={() => toggleFeuille(f)} className="accent-blue-600" />
-              {f}
-            </label>
-          ))}
-        </div>
-        <p className="px-5 -mt-2 pb-1 text-[11px] text-slate-400">
-          Génère un fichier Excel au format "Ordre de virement" GSS (en-tête, motif, tableau, total, signature) — un onglet par banque (BPM,
-          Caisse, SGM), pour les employés qui ne sont PAS en congé sur le mois sélectionné.
-        </p>
-        <div className="px-5 pb-3 flex items-center gap-2">
-          <label className="text-[11px] font-semibold text-slate-500">Filtrer par mois :</label>
-          <Input type="month" value={congeFilterMonth} onChange={(e) => setCongeFilterMonth(e.target.value)} className="w-auto" />
-          {congeFilterMonth && (
-            <button onClick={() => setCongeFilterMonth('')} className="text-[11px] text-blue-600 hover:underline">
-              Tous les mois
-            </button>
-          )}
-          <span className="text-[11px] text-slate-400 ml-auto">{filteredLeaves.length} congé(s)</span>
-        </div>
-        {filteredLeaves.length === 0 ? (
-          <EmptyState icon="" text="Aucun congé enregistré sur cette période" />
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 p-5">
-            {filteredLeaves.map((l) => {
-              const emp = employees.find((e) => e.id === l.employeeId);
-              return (
-                <div key={l.id} className="rounded-xl border border-slate-200 p-4 bg-white hover:shadow-sm transition-shadow">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xl">{LEAVE_ICONS[l.type]}</span>
-                      <div>
-                        <p className="font-semibold text-slate-800 text-sm">{emp?.name ?? '—'}</p>
-                        <p className="text-[11px] text-slate-400">{LEAVE_LABELS[l.type]}</p>
-                      </div>
-                    </div>
-                    <BtnDelete
-                      size="xs"
-                      onClick={() => {
-                        if (confirm('Supprimer ce congé ?')) removeLeave(l.id);
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-slate-500 mt-2">
-                    <span>
-                      {l.dateDebut} → {l.dateFin}
-                    </span>
-                    <span className="font-bold text-slate-700">{l.jours}j</span>
-                  </div>
-                  {l.motif && (
-                    <p className="text-[11px] text-slate-400 mt-2 italic truncate" title={l.motif}>
-                      {l.motif}
-                    </p>
-                  )}
-                  <div className="flex items-center justify-between mt-2">
-                    <p className="text-[10px] text-slate-300">Ajouté par {l.createdBy || '—'}</p>
-                    <BtnEdit size="xs" onClick={() => openEditConge(l, emp)} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Card>
-
-      {/* Employee modal */}
-      <Modal open={empModal} onClose={() => setEmpModal(false)} title={editing ? ` Modifier ${editing.name}` : ' Nouvel Employé'}>
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Matricule</label>
-              <Input value={form.mle ?? ''} onChange={(e) => setForm((f) => ({ ...f, mle: e.target.value }))} />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Nom complet *</label>
-              <Input value={form.name ?? ''} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Poste</label>
-              <Input value={form.poste ?? ''} onChange={(e) => setForm((f) => ({ ...f, poste: e.target.value }))} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Téléphone</label>
-              <Input value={form.telephone ?? ''} onChange={(e) => setForm((f) => ({ ...f, telephone: e.target.value }))} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">NNI</label>
-              <Input value={form.nni ?? ''} onChange={(e) => setForm((f) => ({ ...f, nni: e.target.value }))} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Ville</label>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Nom complet *</label>
               <Input
+                placeholder="Ex: Mohamed Lemine"
+                value={form.name ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Poste</label>
+              <Input
+                placeholder="Technicien, Chef d'équipe..."
+                value={form.poste ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, poste: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Téléphone</label>
+              <Input
+                placeholder="Ex: 46001122"
+                value={form.telephone ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, telephone: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">NNI</label>
+              <Input
+                placeholder="10 chiffres"
+                value={form.nni ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, nni: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Ville</label>
+              <Input
+                placeholder="NKTT, NDB, KAEDI..."
                 value={form.ville ?? ''}
                 onChange={(e) => setForm((f) => ({ ...f, ville: e.target.value }))}
-                placeholder="NKTT, NDB, KEADI, ROSSO..."
               />
             </div>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Équipe (RH)</label>
-            <Input
-              value={form.equipeNom ?? ''}
-              onChange={(e) => setForm((f) => ({ ...f, equipeNom: e.target.value }))}
-              placeholder="ARAFAT, CENTRE VILLE, TVZ, Déploiement..."
-            />
-          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Banque</label>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Équipe (RH)</label>
+              <Input
+                placeholder="ARAFAT, CENTRE VILLE..."
+                value={form.equipeNom ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, equipeNom: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Date d'embauche</label>
+              <Input
+                type="date"
+                value={form.dateEmbauche ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, dateEmbauche: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Banque</label>
               <Select
                 className="w-full"
                 value={form.banque ?? ''}
@@ -502,132 +467,46 @@ export default function EmployesPage() {
               </Select>
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">RIB</label>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">RIB / Numéro de compte</label>
               <Input
+                placeholder="Numéro sans espace"
                 value={form.rib ?? ''}
                 onChange={(e) => setForm((f) => ({ ...f, rib: e.target.value.replace(/\s+/g, '') }))}
-                placeholder="23 chiffres, sans espace"
               />
-              <p className="text-[11px] text-slate-400 mt-1">Format bancaire compact — les espaces sont retirés automatiquement.</p>
             </div>
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Montant net (MRU)</label>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Salaire Net (MRU)</label>
               <Input
                 type="number"
+                placeholder="Ex: 35000"
                 value={form.montant ?? ''}
                 onChange={(e) => setForm((f) => ({ ...f, montant: parseFloat(e.target.value) || undefined }))}
               />
             </div>
             <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Statut</label>
-              <Select value={form.actif ? '1' : '0'} onChange={(e) => setForm((f) => ({ ...f, actif: e.target.value === '1' }))}>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Statut</label>
+              <Select
+                value={form.actif ? '1' : '0'}
+                onChange={(e) => setForm((f) => ({ ...f, actif: e.target.value === '1' }))}
+              >
                 <option value="1">Actif</option>
                 <option value="0">Inactif</option>
               </Select>
             </div>
           </div>
-          <div className="flex gap-3 justify-end pt-2">
+
+          <div className="flex gap-3 justify-end pt-3 border-t border-slate-100">
             <Button variant="outline" onClick={() => setEmpModal(false)}>
               Annuler
             </Button>
-            <Button onClick={saveEmployee}> Enregistrer</Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Congé modal */}
-      <Modal
-        open={congeModal}
-        onClose={() => setCongeModal(false)}
-        title={` ${editingLeave ? 'Modifier le' : 'Nouveau'} congé — ${congeEmployee?.name ?? ''}`}
-      >
-        <div className="space-y-4">
-          {congeEmployee && (
-            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-2">
-              Solde congé annuel restant : <strong>{soldeFor(congeEmployee.id)} jours</strong> / {SOLDE_ANNUEL}
-            </p>
-          )}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Type</label>
-            <Select
-              className="w-full"
-              value={leaveForm.type}
-              onChange={(e) => setLeaveForm((f) => ({ ...f, type: e.target.value as LeaveType }))}
-            >
-              {Object.entries(LEAVE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Du</label>
-              <input
-                type="date"
-                className="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                value={leaveForm.dateDebut}
-                onChange={(e) => setLeaveForm((f) => ({ ...f, dateDebut: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500 block mb-1.5">Au</label>
-              <input
-                type="date"
-                className="w-full border border-slate-200 rounded-lg px-2 py-2 text-sm"
-                value={leaveForm.dateFin}
-                onChange={(e) => setLeaveForm((f) => ({ ...f, dateFin: e.target.value }))}
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1.5">Motif / note</label>
-            <Textarea rows={2} value={leaveForm.motif} onChange={(e) => setLeaveForm((f) => ({ ...f, motif: e.target.value }))} />
-          </div>
-          <div className="flex gap-3 justify-end pt-2">
-            <Button variant="outline" onClick={() => setCongeModal(false)}>
-              Annuler
+            <Button onClick={saveEmployee} disabled={saving}>
+              {saving ? 'Enregistrement...' : editing ? 'Mettre à jour' : 'Créer l’employé'}
             </Button>
-            <Button onClick={saveConge}>{editingLeave ? ' Enregistrer les modifications' : ' Enregistrer le congé'}</Button>
           </div>
         </div>
-      </Modal>
-
-
-      {/* Signature du directeur */}
-      <Modal open={sigModal} onClose={() => setSigModal(false)} title="Signature du directeur">
-        <SignaturePad
-          initialValue={directorSignature}
-          onSave={async (b64) => {
-            await setDirectorSignature(b64);
-            setSigModal(false);
-            showToast('Signature enregistrée', 'success');
-          }}
-          onClear={() => setDirectorSignature(null)}
-        />
-      </Modal>
-
-
-      <ExportPreviewModal
-        open={!!preview}
-        preview={preview}
-        onClose={() => setPreview(null)}
-        onConfirm={handleExportPresents}
-      />
-
-      <Modal open={sigModal} onClose={() => setSigModal(false)} title="Signature du directeur">
-        <SignaturePad
-          initialValue={directorSignature ?? DEFAULT_SIGNATURE}
-          onSave={async (b64) => {
-            await setDirectorSignature(b64);
-            setSigModal(false);
-            showToast('Signature enregistrée', 'success');
-          }}
-          onClear={() => setDirectorSignature(null)}
-        />
       </Modal>
     </div>
   );

@@ -29,7 +29,8 @@ import {
   Briefcase,
   LogOut,
   Menu as MenuIcon,
-  X
+  X,
+  FileSpreadsheet
 } from 'lucide-react';
 
 // Pages
@@ -55,6 +56,7 @@ import CongesPage from '@/pages/CongesPage';
 import CaissesPage from '@/pages/CaissePage';
 import DistributionPage from '@/pages/DistributionPage';
 import PointsPage from '@/pages/PointsPage';
+import ExportSalairePage from '@/pages/ExportSalairePage';
 import { DECHARGE_URL } from '@/utils/programme';
 
 type Page =
@@ -79,7 +81,8 @@ type Page =
   | 'conges'
   | 'caisses'
   | 'distribution'
-  | 'points';
+  | 'points'
+  | 'export-salaire';
 
 type NavLeaf = { id: Page; label: string };
 type NavGroup = { group: string; label: string; children: NavLeaf[] };
@@ -125,6 +128,7 @@ const RH_GROUP: NavGroup = {
     { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
+    { id: 'export-salaire', label: 'Export Salaires' },
     { id: 'equipes', label: 'Équipes' },
     { id: 'materiels', label: 'Matériel' },
     { id: 'vehicules', label: 'Véhicules' },
@@ -164,6 +168,7 @@ const NAV: Record<Role, NavItem[]> = {
     { id: 'employes', label: 'Employés' },
     { id: 'conges', label: 'Congés' },
     { id: 'prets', label: 'Prêts' },
+    { id: 'export-salaire', label: 'Export Salaires' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'profil', label: 'Profil' },
   ],
@@ -184,6 +189,7 @@ const NAV: Record<Role, NavItem[]> = {
     RACCORDEMENT_GROUP_ADMIN,
     DEPLOIEMENT_GROUP,
     { id: 'caisses', label: 'Caisses' },
+    { id: 'export-salaire', label: 'Export Salaires' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'profil', label: 'Profil' },
   ],
@@ -212,6 +218,7 @@ const PAGE_TITLES: Record<Page, string> = {
   caisses: 'Caisses',
   distribution: 'Distribuer le programme',
   points: 'Points des équipes',
+  'export-salaire': 'Export Salaires (Excel)',
 };
 
 const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
@@ -237,6 +244,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   caisses: Banknote,
   distribution: Send,
   points: Trophy,
+  'export-salaire': FileSpreadsheet,
 };
 
 const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
@@ -309,6 +317,7 @@ export default function AppLayout() {
     caisses: <CaissesPage />,
     distribution: <DistributionPage />,
     points: <PointsPage />,
+    'export-salaire': <ExportSalairePage />,
   };
 
   return (

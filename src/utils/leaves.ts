@@ -67,12 +67,24 @@ export interface ExportPresentsOpts {
   signatureBase64?: string | null;
 }
 
-type PresentEmployee = Employee & { conge_double?: boolean; pret_deduit?: number; pret_reste_apres?: number };
+type PresentEmployee = Employee & {
+  conge_double?: boolean;
+  pret_deduit?: number;
+  pret_reste_apres?: number;
+  prets_count?: number;
+  prets_details?: string;
+};
 
 function remarquesFor(e: PresentEmployee): string {
   const r: string[] = [];
   if (e.conge_double) r.push('Congé le mois prochain — salaire doublé');
-  if (e.pret_deduit) r.push(`Prêt : -${e.pret_deduit.toLocaleString('fr-FR')} MRU (reste ${e.pret_reste_apres?.toLocaleString('fr-FR')} MRU)`);
+  if (e.pret_deduit) {
+    if ((e.prets_count ?? 1) > 1) {
+      r.push(`Prêts (${e.prets_count}) : -${e.pret_deduit.toLocaleString('fr-FR')} MRU (${e.prets_details} · reste ${e.pret_reste_apres?.toLocaleString('fr-FR')} MRU)`);
+    } else {
+      r.push(`Prêt : -${e.pret_deduit.toLocaleString('fr-FR')} MRU (reste ${e.pret_reste_apres?.toLocaleString('fr-FR')} MRU)`);
+    }
+  }
   return r.join(' · ');
 }
 /**
@@ -337,11 +349,16 @@ function computePresentEmployees(opts: {
   const onLeaveIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === month).map((l) => l.employeeId));
   const doublingIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === nextMonth).map((l) => l.employeeId));
 
-  // Prêts actifs (reste dû > 0) par employé — la mensualité (plafonnée au reste
-  // dû) est déduite du salaire exporté ce mois-ci, automatiquement.
-  const activeLoanByEmployee = new Map<string, Loan>();
+  // Prêts actifs (reste dû > 0) par employé — pour chaque prêt actif, la mensualité
+  // (plafonnée à son reste dû) est déduite du salaire ce mois-ci.
+  // Un employé peut avoir plusieurs prêts simultanés : toutes les mensualités se cumulent.
+  const activeLoansByEmployee = new Map<string, Loan[]>();
   loans.forEach((l) => {
-    if (l.statut === 'actif' && l.reste > 0) activeLoanByEmployee.set(l.employeeId, l);
+    if (l.statut === 'actif' && l.reste > 0) {
+      const list = activeLoansByEmployee.get(l.employeeId) || [];
+      list.push(l);
+      activeLoansByEmployee.set(l.employeeId, list);
+    }
   });
 
   const present = employees
@@ -349,14 +366,30 @@ function computePresentEmployees(opts: {
     .map((e) => {
       const conge_double = doublingIds.has(e.id);
       const baseMontant = conge_double ? (e.montant ?? 0) * 2 : (e.montant ?? 0);
-      const loan = activeLoanByEmployee.get(e.id);
-      const pret_deduit = loan ? Math.min(loan.mensualite, loan.reste) : 0;
-      return { ...e, montant: baseMontant - pret_deduit, conge_double, pret_deduit, pret_reste_apres: loan ? Math.max(0, loan.reste - pret_deduit) : undefined };
+      const empLoans = activeLoansByEmployee.get(e.id) || [];
+      const pret_deduit = empLoans.reduce((sum, l) => sum + Math.min(l.mensualite, l.reste), 0);
+      const totalReste = empLoans.reduce((sum, l) => sum + l.reste, 0);
+      const pret_reste_apres = empLoans.length > 0 ? Math.max(0, totalReste - pret_deduit) : undefined;
+      const prets_count = empLoans.length;
+      const prets_details = empLoans.length > 1
+        ? empLoans.map((l, idx) => `P${idx + 1}: ${Math.min(l.mensualite, l.reste).toLocaleString('fr-FR')}`).join(' + ')
+        : undefined;
+
+      const finalMontant = Math.max(0, baseMontant - pret_deduit);
+      return {
+        ...e,
+        montant: finalMontant,
+        conge_double,
+        pret_deduit: pret_deduit > 0 ? pret_deduit : undefined,
+        pret_reste_apres,
+        prets_count,
+        prets_details,
+      };
     });
 
   const motifMois = `${MOIS_FR[(m || 1) - 1]} ${y}`;
   const dateStr = opts.dateStr ?? new Date().toLocaleDateString('fr-FR');
-  const ordreBase = opts.ordreBase ?? '001/DG/GSS/2026';
+  const ordreBase = opts.ordreBase ?? `001/DG/GSS/${y || new Date().getFullYear()}`;
 
   const banquesPresentes = [...new Set(present.map((e) => e.banque || 'Caisse'))].sort(
     (a, b) => BANQUES_ORDER.indexOf(a) - BANQUES_ORDER.indexOf(b),
@@ -393,9 +426,7 @@ function buildRecapSheet(
   });
 
   present.forEach((e, i) => {
-    const remarques: string[] = [];
-    if (e.conge_double) remarques.push('Congé le mois prochain — salaire doublé');
-    if (e.pret_deduit) remarques.push(`Prêt : -${e.pret_deduit.toLocaleString('fr-FR')} MRU (reste ${e.pret_reste_apres?.toLocaleString('fr-FR')} MRU)`);
+    const rem = remarquesFor(e);
     const r = wsAll.addRow([
       i + 1,
       e.mle,
@@ -406,7 +437,7 @@ function buildRecapSheet(
       e.banque || 'Caisse',
       formatRib(e.rib),
       e.montant ?? undefined,
-      remarques.join(' · '),
+      rem,
     ]);
     r.height = 18;
     const banded = i % 2 === 1;
@@ -416,8 +447,8 @@ function buildRecapSheet(
       cell.alignment = { horizontal: colNumber === 3 ? 'left' : 'center', vertical: 'middle' };
       if (banded) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
       if (colNumber === 9) cell.numFmt = MONTANT_FMT; // Montant — vrai nombre
-if (colNumber === 10 && remarques)
-   {        cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
+      if (colNumber === 10 && rem) {
+        cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
       }
     });
   });
@@ -570,4 +601,178 @@ export function buildExportPreview(opts: ExportPresentsOpts): ExportPreview {
     logo: toDataUrl(GSS_LOGO_BASE64, 'image/png'),
     signature: resolveSignature(opts.signatureBase64),
   };
+}
+
+/** Exporte la liste complète des employés au format Excel avec mise en page soignée GSS. */
+export async function exportEmployesListExcel(employees: Employee[], fileName = 'GSS_Liste_Employes.xlsx') {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Employés GSS', { views: [{ showGridLines: false }] });
+
+  ws.columns = [
+    { width: 6 },  // N°
+    { width: 10 }, // Matricule
+    { width: 30 }, // Nom et prénom
+    { width: 18 }, // Poste
+    { width: 14 }, // Téléphone
+    { width: 14 }, // NNI
+    { width: 12 }, // Ville
+    { width: 18 }, // Équipe
+    { width: 12 }, // Banque
+    { width: 28 }, // RIB
+    { width: 16 }, // Montant Net
+    { width: 12 }, // Statut
+  ];
+
+  const logoId = wb.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+  ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 180, height: 72 } });
+  for (let i = 0; i < 5; i++) ws.addRow([]);
+
+  const rTitle = ws.addRow(['', '', 'LISTE GÉNÉRALE DU PERSONNEL GSS']);
+  rTitle.getCell(3).font = { name: 'Times New Roman', size: 16, bold: true, color: { argb: COLOR.accentDark } };
+  const rDate = ws.addRow(['', '', `Exporté le ${new Date().toLocaleDateString('fr-FR')} · Total: ${employees.length} employé(s)`]);
+  rDate.getCell(3).font = { name: 'Times New Roman', size: 10, italic: true, color: { argb: 'FF666666' } };
+  ws.addRow([]);
+
+  const headers = [
+    'N°', 'Mle', 'Nom complet', 'Poste', 'Téléphone', 'NNI', 'Ville', 'Équipe', 'Banque', 'RIB', 'Salaire Net (MRU)', 'Statut'
+  ];
+  const rHead = ws.addRow(headers);
+  rHead.height = 24;
+  rHead.eachCell((cell) => {
+    cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.headerText } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.headerFill } };
+    cell.border = FULL_BORDER;
+  });
+
+  employees.forEach((e, idx) => {
+    const row = ws.addRow([
+      idx + 1,
+      e.mle || '—',
+      e.name,
+      e.poste || '—',
+      e.telephone || '—',
+      e.nni || '—',
+      e.ville || '—',
+      e.equipeNom || '—',
+      e.banque || 'Caisse',
+      formatRib(e.rib),
+      e.montant ?? undefined,
+      e.actif ? 'Actif' : 'Inactif'
+    ]);
+    row.height = 19;
+    const isOdd = idx % 2 === 1;
+    row.eachCell((cell, colNum) => {
+      cell.border = FULL_BORDER;
+      cell.font = { name: 'Times New Roman', size: 10.5 };
+      cell.alignment = { horizontal: colNum === 3 ? 'left' : 'center', vertical: 'middle' };
+      if (isOdd) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
+      if (colNum === 11) cell.numFmt = MONTANT_FMT;
+      if (colNum === 12) {
+        cell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: e.actif ? 'FF1B5E20' : 'FFB71C1C' } };
+      }
+    });
+  });
+
+  // Ligne Total
+  const totalSalaires = employees.reduce((acc, e) => acc + (e.montant || 0), 0);
+  const rTot = ws.addRow(['', '', '', '', '', '', '', '', '', 'TOTAL', totalSalaires, '']);
+  rTot.height = 22;
+  rTot.eachCell((cell, colNum) => {
+    cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
+    cell.alignment = { horizontal: colNum === 10 ? 'right' : 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.totalFill } };
+    cell.border = { ...FULL_BORDER, top: { style: 'medium', color: { argb: COLOR.accentDark } } };
+    if (colNum === 11) cell.numFmt = MONTANT_FMT;
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  downloadWorkbook(buffer as ArrayBuffer, fileName);
+}
+
+/** Exporte la liste des prêts employés au format Excel. */
+export async function exportPretsExcel(loans: Loan[], employees: Employee[], fileName = 'GSS_Prets_Employes.xlsx') {
+  const empMap = new Map(employees.map(e => [e.id, e]));
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Prêts GSS', { views: [{ showGridLines: false }] });
+
+  ws.columns = [
+    { width: 6 },  // N°
+    { width: 10 }, // Mle
+    { width: 30 }, // Nom employé
+    { width: 16 }, // Banque/Caisse
+    { width: 16 }, // Montant Total
+    { width: 16 }, // Mensualité
+    { width: 16 }, // Reste Dû
+    { width: 14 }, // Date début
+    { width: 12 }, // Durée (mois)
+    { width: 12 }, // Statut
+  ];
+
+  const logoId = wb.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+  ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 180, height: 72 } });
+  for (let i = 0; i < 5; i++) ws.addRow([]);
+
+  const rTitle = ws.addRow(['', '', 'ÉTAT DES PRÊTS DU PERSONNEL']);
+  rTitle.getCell(3).font = { name: 'Times New Roman', size: 16, bold: true, color: { argb: COLOR.accentDark } };
+  const rDate = ws.addRow(['', '', `Généré le ${new Date().toLocaleDateString('fr-FR')} · ${loans.length} prêt(s)`]);
+  rDate.getCell(3).font = { name: 'Times New Roman', size: 10, italic: true, color: { argb: 'FF666666' } };
+  ws.addRow([]);
+
+  const headers = [
+    'N°', 'Mle', 'Nom et prénom', 'Banque/Caisse', 'Montant Total', 'Mensualité', 'Reste Dû', 'Date début', 'Durée', 'Statut'
+  ];
+  const rHead = ws.addRow(headers);
+  rHead.height = 24;
+  rHead.eachCell((cell) => {
+    cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.headerText } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.headerFill } };
+    cell.border = FULL_BORDER;
+  });
+
+  loans.forEach((l, idx) => {
+    const emp = empMap.get(l.employeeId);
+    const row = ws.addRow([
+      idx + 1,
+      emp?.mle || '—',
+      emp?.name || 'Inconnu',
+      l.banqueCaisse || '—',
+      l.montantTotal,
+      l.mensualite,
+      l.reste,
+      l.dateDebut || '—',
+      l.dureeMois ? `${l.dureeMois} mois` : '—',
+      l.statut === 'actif' ? 'Actif' : 'Soldé'
+    ]);
+    row.height = 19;
+    const isOdd = idx % 2 === 1;
+    row.eachCell((cell, colNum) => {
+      cell.border = FULL_BORDER;
+      cell.font = { name: 'Times New Roman', size: 10.5 };
+      cell.alignment = { horizontal: colNum === 3 ? 'left' : 'center', vertical: 'middle' };
+      if (isOdd) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.bandFill } };
+      if ([5, 6, 7].includes(colNum)) cell.numFmt = MONTANT_FMT;
+      if (colNum === 10) {
+        cell.font = { name: 'Times New Roman', size: 10, bold: true, color: { argb: l.statut === 'actif' ? 'FF1565C0' : 'FF2E7D32' } };
+      }
+    });
+  });
+
+  const totalMontant = loans.reduce((acc, l) => acc + l.montantTotal, 0);
+  const totalMens = loans.filter(l => l.statut === 'actif').reduce((acc, l) => acc + Math.min(l.mensualite, l.reste), 0);
+  const totalReste = loans.filter(l => l.statut === 'actif').reduce((acc, l) => acc + l.reste, 0);
+
+  const rTot = ws.addRow(['', '', 'TOTAL', '', totalMontant, totalMens, totalReste, '', '', '']);
+  rTot.height = 22;
+  rTot.eachCell((cell, colNum) => {
+    cell.font = { name: 'Times New Roman', size: 11, bold: true, color: { argb: COLOR.accentDark } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.totalFill } };
+    cell.border = { ...FULL_BORDER, top: { style: 'medium', color: { argb: COLOR.accentDark } } };
+    if ([5, 6, 7].includes(colNum)) cell.numFmt = MONTANT_FMT;
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  downloadWorkbook(buffer as ArrayBuffer, fileName);
 }

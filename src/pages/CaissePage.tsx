@@ -46,7 +46,7 @@ const StatutPill = ({ s }: { s: CaisseOperation['statut'] }) => (
 
 export default function CaissesPage() {
   const user = useAppStore((s) => s.user)!;
-  const { caisses: allCaisses, operations: allOps, loaded, error, decide, cancel, remove } = useCaisseStore();
+  const { caisses: allCaisses, operations: allOps, loaded, error, decide, cancel, remove, addOperations } = useCaisseStore();
   const { showToast } = useToast();
   const compta = isComptable(user);
   const directeur = isDirecteur(user);
@@ -83,6 +83,7 @@ export default function CaissesPage() {
   const [rejectIds, setRejectIds] = useState<string[]>([]);
   const [fulfill, setFulfill] = useState<CaisseOperation | null>(null);
   const [detail, setDetail] = useState<CaisseOperation | null>(null);
+  const [validateOp, setValidateOp] = useState<CaisseOperation | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
   const [chargesFixesOpen, setChargesFixesOpen] = useState(false);
   const [titulaires, setTitulaires] = useState<{ id: string; name: string }[]>([]);
@@ -248,11 +249,11 @@ export default function CaissesPage() {
         )}
         {(compta || directeur) && (
           <Button
-            variant={directeur ? 'success' : 'outline'}
+            variant="success"
             icon={<ArrowDownLeft className="w-4 h-4" />}
             onClick={() => setForm({ type: 'alimentation' })}
           >
-            {directeur ? 'Alimenter une caisse' : 'Demander une alimentation au directeur'}
+            Alimenter une caisse
           </Button>
         )}
       </div>
@@ -285,6 +286,7 @@ export default function CaissesPage() {
               showToast(errMsg(e), 'error');
             }
           }}
+          onValidateWithFrais={setValidateOp}
           onReject={setRejectIds}
           onFulfill={setFulfill}
           onOpen={setDetail}
@@ -325,6 +327,37 @@ export default function CaissesPage() {
       {fulfill && <FulfillModal key={fulfill.id} op={fulfill} onClose={() => setFulfill(null)} />}
       {adminOpen && <CaissesAdminModal open onClose={() => setAdminOpen(false)} titulaires={titulaires} />}
       <ChargesFixesModal open={chargesFixesOpen} onClose={() => setChargesFixesOpen(false)} />
+      {validateOp && (
+        <ValidateAvecFraisModal
+          op={validateOp}
+          caisseName={caisses.find((c) => c.id === validateOp.caisseId)?.nom ?? '—'}
+          onClose={() => setValidateOp(null)}
+          onConfirm={async (frais, libelleFrais) => {
+            try {
+              await decide([validateOp.id], 'validee');
+              if (frais > 0) {
+                await addOperations([{
+                  caisseId: validateOp.caisseId,
+                  type: 'depense',
+                  montant: frais,
+                  date: validateOp.date,
+                  libelle: libelleFrais || `Frais — ${validateOp.libelle}`,
+                  categorie: validateOp.categorie,
+                  chantier: validateOp.chantier,
+                  note: `Frais liés à : ${validateOp.libelle}`,
+                  statut: 'validee',
+                }]);
+                showToast(`Dépense validée + ${mru(frais)} MRU de frais déduits`, 'success');
+              } else {
+                showToast('Dépense validée', 'success');
+              }
+              setValidateOp(null);
+            } catch (e) {
+              showToast(errMsg(e), 'error');
+            }
+          }}
+        />
+      )}
       {detail && (
         <DetailModal
           op={detail}
@@ -381,6 +414,7 @@ function ValidationList({
   ops,
   caisseName,
   onApprove,
+  onValidateWithFrais,
   onReject,
   onFulfill,
   onOpen,
@@ -388,6 +422,7 @@ function ValidationList({
   ops: CaisseOperation[];
   caisseName: (id: string) => string;
   onApprove: (ids: string[]) => Promise<void>;
+  onValidateWithFrais: (op: CaisseOperation) => void;
   onReject: (ids: string[]) => void;
   onFulfill: (op: CaisseOperation) => void;
   onOpen: (op: CaisseOperation) => void;
@@ -497,7 +532,7 @@ function ValidationList({
                   <button aria-label="Refuser" onClick={() => onReject([o.id])} className="p-1.5 rounded-lg text-slate-400 hover:text-red-700 hover:bg-red-50">
                     <X className="w-4 h-4" />
                   </button>
-                  <button aria-label="Valider" disabled={busy} onClick={() => approve([o.id])} className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-50">
+                  <button aria-label="Valider" disabled={busy} onClick={() => onValidateWithFrais(o)} className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-50">
                     <Check className="w-4 h-4" />
                   </button>
                 </div>
@@ -942,4 +977,81 @@ function DetailModal({
     </Modal>
   );
 }
+// ─── Modal : valider une dépense + saisir des frais optionnels ───────────────
+function ValidateAvecFraisModal({
+  op,
+  caisseName,
+  onClose,
+  onConfirm,
+}: {
+  op: CaisseOperation;
+  caisseName: string;
+  onClose: () => void;
+  onConfirm: (frais: number, libelleFrais: string) => Promise<void>;
+}) {
+  const [frais, setFrais] = useState('');
+  const [libelleFrais, setLibelleFrais] = useState('');
+  const [saving, setSaving] = useState(false);
+  const montantFrais = parseInt(frais.replace(/\D/g, ''), 10) || 0;
+  const total = op.montant + montantFrais;
 
+  const submit = async () => {
+    setSaving(true);
+    await onConfirm(montantFrais, libelleFrais.trim());
+    setSaving(false);
+  };
+
+  return (
+    <Modal open onClose={onClose} title="✅ Valider la dépense">
+      <div className="space-y-4">
+        {/* Résumé dépense */}
+        <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 space-y-0.5">
+          <p className="text-sm font-semibold text-slate-800">{op.libelle}</p>
+          <p className="text-xs text-slate-500">{caisseName} · {shortDate(op.date)}</p>
+          <p className="text-lg font-black tabular-nums text-slate-900">−{mru(op.montant)} MRU</p>
+        </div>
+
+        {/* Frais optionnels */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+            Frais supplémentaires (optionnel)
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={frais}
+            onChange={(e) => setFrais(e.target.value)}
+            placeholder="0 MRU"
+            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xl font-black tabular-nums focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+          />
+          {montantFrais > 0 && (
+            <input
+              type="text"
+              value={libelleFrais}
+              onChange={(e) => setLibelleFrais(e.target.value)}
+              placeholder={`ex. Transport, remise en état…`}
+              className="mt-2 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            />
+          )}
+        </div>
+
+        {/* Total */}
+        {montantFrais > 0 && (
+          <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-sm">
+            <span className="text-amber-800 font-medium">Total déduit de la caisse</span>
+            <span className="font-black tabular-nums text-amber-900">−{mru(total)} MRU</span>
+          </div>
+        )}
+
+        <div className="flex gap-3 pt-1">
+          <Button variant="outline" className="flex-1 justify-center" onClick={onClose}>
+            Annuler
+          </Button>
+          <Button variant="success" className="flex-1 justify-center" onClick={submit} disabled={saving}>
+            {saving ? 'Validation…' : montantFrais > 0 ? `Valider + ${mru(montantFrais)} frais` : 'Valider'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}

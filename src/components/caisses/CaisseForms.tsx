@@ -16,9 +16,8 @@ function CategoryPicker({ value, onChange }: { value: string; onChange: (v: Pars
           key={c.id}
           type="button"
           onClick={() => onChange(c.id)}
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-            value === c.id ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-          }`}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${value === c.id ? 'bg-slate-900 border-slate-900 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
         >
           <span className="w-2 h-2 rounded-full" style={{ background: c.color }} />
           {c.label}
@@ -74,14 +73,14 @@ export function OperationModal({
   const isDep = type === 'depense';
   // Qui crée quoi :
   //  • dépense      : superviseur → DEMANDE à la comptable ; comptable → enregistrée directement
-  //  • alimentation : comptable → DEMANDE au directeur ;   directeur → transfert enregistré directement
-  const direct = isDep ? compta : directeur;
+  //  • alimentation : comptable ET directeur → alimentation directe (sans demande)
+  const direct = isDep ? compta : (compta || directeur);
   const soldeCaisse = useMemo(() => soldes(caisses, operations)[caisseId], [caisses, operations, caisseId]);
   const title = editing
-    ? 'Modifier l’opération'
+    ? `Modifier l'opération`
     : isDep
       ? direct ? 'Enregistrer une dépense' : 'Demander une dépense'
-      : direct ? 'Alimenter une caisse' : 'Demander une alimentation au directeur';
+      : 'Alimenter une caisse';
 
   const submit = async () => {
     const m = parseInt(montant.replace(/\D/g, ''), 10);
@@ -109,15 +108,15 @@ export function OperationModal({
             type,
             montant: m,
             date,
-            libelle: isDep ? libelle.trim() : direct ? 'Transfert Bankily' : 'Demande d’alimentation',
+            libelle: isDep ? libelle.trim() : 'Alimentation caisse',
             categorie: isDep ? categorie : 'alimentation',
             chantier,
             trsId: null,
             note,
-            statut: direct ? 'validee' : 'en_attente',
+            statut: 'validee',
           },
         ]);
-        showToast(direct ? 'Opération enregistrée' : isDep ? 'Demande envoyée à la comptabilité' : 'Demande envoyée au directeur', 'success');
+        showToast('Opération enregistrée', 'success');
       }
       onClose();
     } catch (e) {
