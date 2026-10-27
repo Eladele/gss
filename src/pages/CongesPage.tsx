@@ -25,12 +25,12 @@ const LEAVE_LABELS: Record<LeaveType, string> = {
 };
 
 const LEAVE_COLORS: Record<LeaveType, { bg: string; text: string; border: string }> = {
-    annuel:       { bg: 'bg-blue-50',   text: 'text-blue-700',   border: 'border-blue-200' },
-    maladie:      { bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200' },
-    sans_solde:   { bg: 'bg-slate-100', text: 'text-slate-600',  border: 'border-slate-200' },
-    exceptionnel: { bg: 'bg-amber-50',  text: 'text-amber-700',  border: 'border-amber-200' },
-    maternite:    { bg: 'bg-pink-50',   text: 'text-pink-700',   border: 'border-pink-200' },
-    autre:        { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
+    annuel: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
+    maladie: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+    sans_solde: { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-200' },
+    exceptionnel: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+    maternite: { bg: 'bg-pink-50', text: 'text-pink-700', border: 'border-pink-200' },
+    autre: { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
 };
 
 const AVATAR_PALETTE = ['#1565C0', '#2E7D32', '#E9A93B', '#8E24AA', '#00838F', '#C62828', '#546E7A'];
@@ -113,14 +113,14 @@ function BtnAddConge({ onClick }: { onClick: () => void }) {
 type Tab = 'dashboard' | 'historique' | 'export';
 
 export default function CongesPage() {
-    const employees          = useAppStore((s) => s.employees);
-    const leaves             = useAppStore((s) => s.leaves);
-    const loans              = useAppStore((s) => s.loans);
-    const loadEmployees      = useAppStore((s) => s.loadEmployees);
-    const addLeave           = useAppStore((s) => s.addLeave);
-    const editLeave          = useAppStore((s) => s.editLeave);
-    const removeLeave        = useAppStore((s) => s.removeLeave);
-    const directorSignature  = useAppStore((s) => s.directorSignature);
+    const employees = useAppStore((s) => s.employees);
+    const leaves = useAppStore((s) => s.leaves);
+    const loans = useAppStore((s) => s.loans);
+    const loadEmployees = useAppStore((s) => s.loadEmployees);
+    const addLeave = useAppStore((s) => s.addLeave);
+    const editLeave = useAppStore((s) => s.editLeave);
+    const removeLeave = useAppStore((s) => s.removeLeave);
+    const directorSignature = useAppStore((s) => s.directorSignature);
     const setDirectorSignature = useAppStore((s) => s.setDirectorSignature);
     const { showToast } = useToast();
 
@@ -131,29 +131,29 @@ export default function CongesPage() {
 
     // ── Filtres dashboard ─────────────────────────────────────────────────────
     const [dashSearch, setDashSearch] = useState('');
-    const [dashVille, setDashVille]   = useState('');
+    const [dashVille, setDashVille] = useState('');
 
     // ── Filtres historique ────────────────────────────────────────────────────
-    const [filterType, setFilterType]         = useState<LeaveType | ''>('');
-    const [filterMonth, setFilterMonth]       = useState('');
+    const [filterType, setFilterType] = useState<LeaveType | ''>('');
+    const [filterMonth, setFilterMonth] = useState('');
     const [filterEmpSearch, setFilterEmpSearch] = useState('');
 
     // ── Modal congé ───────────────────────────────────────────────────────────
-    const [congeModal, setCongeModal]       = useState(false);
+    const [congeModal, setCongeModal] = useState(false);
     const [congeEmployee, setCongeEmployee] = useState<Employee | null>(null);
-    const [editingLeave, setEditingLeave]   = useState<LeaveRecord | null>(null);
+    const [editingLeave, setEditingLeave] = useState<LeaveRecord | null>(null);
     // dateDebut / dateFin stockés en « YYYY-MM » (mois seulement)
-    const [leaveForm, setLeaveForm]         = useState({ type: 'annuel' as LeaveType, dateDebut: '', dateFin: '', motif: '' });
+    const [leaveForm, setLeaveForm] = useState({ type: 'annuel' as LeaveType, dateDebut: '', dateFin: '', motif: '' });
 
     // ── Export ────────────────────────────────────────────────────────────────
     const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
     const [exportOrdre, setExportOrdre] = useState(() => `020/DG/GSS/${new Date().getFullYear()}`);
     const FEUILLES_DISPO = ['BPM', 'Caisse', 'SGM', 'Récap'];
-    const [feuilles, setFeuilles]       = useState<string[]>(FEUILLES_DISPO);
+    const [feuilles, setFeuilles] = useState<string[]>(FEUILLES_DISPO);
     const toggleFeuille = (f: string) =>
         setFeuilles((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]);
-    const [sigModal, setSigModal]       = useState(false);
-    const [preview, setPreview]         = useState<ExportPreview | null>(null);
+    const [sigModal, setSigModal] = useState(false);
+    const [preview, setPreview] = useState<ExportPreview | null>(null);
 
     // ── Derived ───────────────────────────────────────────────────────────────
     const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
@@ -164,7 +164,7 @@ export default function CongesPage() {
     /** Liste des villes disponibles */
     const villes = useMemo(() =>
         [...new Set(employees.map(e => e.ville).filter(Boolean))].sort() as string[]
-    , [employees]);
+        , [employees]);
 
     /** Solde de congé annuel restant — cumul global tous mois confondus (22 jours au total) */
     const soldeFor = (empId: string) => {
@@ -177,14 +177,14 @@ export default function CongesPage() {
     // ── KPIs ──────────────────────────────────────────────────────────────────
     const kpis = useMemo(() => {
         const actifs = employees.filter(e => e.actif);
-        const poste  = (e: Employee) => (e.poste ?? '').toLowerCase();
+        const poste = (e: Employee) => (e.poste ?? '').toLowerCase();
         return {
-            enConge:       enCongeAujourdHui.length,
-            presents:      actifs.filter(e => !enCongeIds.has(e.id)).length,
-            totalConges:   leaves.length,
+            enConge: enCongeAujourdHui.length,
+            presents: actifs.filter(e => !enCongeIds.has(e.id)).length,
+            totalConges: leaves.length,
             joursConsommes: leaves.filter(l => l.type === 'annuel').reduce((a, l) => a + l.jours, 0),
-            chefs:        actifs.filter(e => poste(e).includes('chef')).length,
-            techniciens:  actifs.filter(e => poste(e).includes('technicien')).length,
+            chefs: actifs.filter(e => poste(e).includes('chef')).length,
+            techniciens: actifs.filter(e => poste(e).includes('technicien')).length,
             superviseurs: actifs.filter(e => poste(e).includes('superviseur')).length,
         };
     }, [enCongeAujourdHui, employees, leaves, enCongeIds]);
@@ -211,7 +211,7 @@ export default function CongesPage() {
             if (filterMonth) {
                 const [y, m] = filterMonth.split('-').map(Number);
                 const start = new Date(y, m - 1, 1);
-                const end   = new Date(y, m, 0, 23, 59, 59);
+                const end = new Date(y, m, 0, 23, 59, 59);
                 const d1 = new Date(l.dateDebut), d2 = new Date(l.dateFin);
                 if (!(d1 <= end && d2 >= start)) return false;
             }
@@ -275,9 +275,9 @@ export default function CongesPage() {
 
     // ── TAB CONFIG ────────────────────────────────────────────────────
     const TABS: { id: Tab; label: string; icon: string }[] = [
-        { id: 'dashboard',  label: 'Tableau de bord',       icon: '📊' },
+        { id: 'dashboard', label: 'Tableau de bord', icon: '📊' },
         { id: 'historique', label: 'Historique des congés', icon: '📋' },
-        { id: 'export',     label: 'Export Salaires (Excel)', icon: '📤' },
+        { id: 'export', label: 'Export Salaires (Excel)', icon: '📤' },
     ];
 
     return (
@@ -297,9 +297,8 @@ export default function CongesPage() {
                     <button
                         key={t.id}
                         onClick={() => setTab(t.id)}
-                        className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-                            tab === t.id ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                        }`}
+                        className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${tab === t.id ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                            }`}
                     >
                         <span>{t.icon}</span>{t.label}
                     </button>
@@ -313,16 +312,16 @@ export default function CongesPage() {
                 <div className="space-y-5">
                     {/* KPIs — ligne 1 : présence */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        <StatCard value={kpis.enConge}        label="En congé aujourd'hui"   icon="🌴" accent="#E65100" />
-                        <StatCard value={kpis.presents}       label="Présents aujourd'hui"   icon="✅" accent="#2E7D32" />
-                        <StatCard value={kpis.totalConges}    label="Congés enregistrés"     icon="📋" accent="#1565C0" />
-                        <StatCard value={kpis.joursConsommes} label="Jours annuels pris"     icon="📅" accent="#8E24AA" />
+                        <StatCard value={kpis.enConge} label="En congé aujourd'hui" icon="🌴" accent="#E65100" />
+                        <StatCard value={kpis.presents} label="Présents aujourd'hui" icon="✅" accent="#2E7D32" />
+                        <StatCard value={kpis.totalConges} label="Congés enregistrés" icon="📋" accent="#1565C0" />
+                        <StatCard value={kpis.joursConsommes} label="Jours annuels pris" icon="📅" accent="#8E24AA" />
                     </div>
                     {/* KPIs — ligne 2 : postes */}
                     <div className="grid grid-cols-3 gap-4">
-                        <StatCard value={kpis.chefs}        label="Chefs d'équipe" icon="👑" accent="#E9A93B" />
-                        <StatCard value={kpis.techniciens}  label="Techniciens"    icon="🔧" accent="#00838F" />
-                        <StatCard value={kpis.superviseurs} label="Superviseurs"   icon="🎯" accent="#546E7A" />
+                        <StatCard value={kpis.chefs} label="Chefs d'équipe" icon="👑" accent="#E9A93B" />
+                        <StatCard value={kpis.techniciens} label="Techniciens" icon="🔧" accent="#00838F" />
+                        <StatCard value={kpis.superviseurs} label="Superviseurs" icon="🎯" accent="#546E7A" />
                     </div>
 
                     {/* En congé aujourd'hui */}
@@ -491,8 +490,8 @@ export default function CongesPage() {
                     ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                             {[...filteredLeaves].sort((a, b) => new Date(b.dateDebut).getTime() - new Date(a.dateDebut).getTime()).map(l => {
-                                const emp    = employees.find(e => e.id === l.employeeId);
-                                const col    = LEAVE_COLORS[l.type] ?? LEAVE_COLORS.autre;
+                                const emp = employees.find(e => e.id === l.employeeId);
+                                const col = LEAVE_COLORS[l.type] ?? LEAVE_COLORS.autre;
                                 const active = isOnLeaveToday(l);
                                 return (
                                     <div key={l.id} className={`rounded-2xl border p-4 bg-white hover:shadow-md transition-all ${active ? 'border-orange-300 ring-1 ring-orange-200' : 'border-slate-200'}`}>
