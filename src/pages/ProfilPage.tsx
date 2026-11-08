@@ -70,7 +70,7 @@ export default function ProfilPage() {
       <Card className="p-6">
         <div className="text-center mb-6">
           <div
-            className="w-20 h-20 rounded-full flex items-center justify-center text-white text-3xl font-black mx-auto mb-3 shadow-lg"
+            className="w-22 h-20 rounded-full flex items-center justify-center text-white text-3xl font-black mx-auto mb-3 shadow-lg"
             style={{ background: `linear-gradient(135deg, ${user.color}, #00BCD4)` }}
           >
             {user.avatar}

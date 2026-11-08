@@ -3,11 +3,11 @@ import { useAppStore } from '@/store/useAppStore';
 import { StatCard, EmptyState, useToast } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
 import { OtCard } from '@/components/programme/OtCard';
-import { cloturer, fetchPourPoints, fetchProgramme, fetchScanOts, subscribeProgramme, type Cloture, type ScanOT } from '@/lib/programmeService';
+import { cloturer, fetchPenalites, fetchPourPoints, fetchProgramme, fetchScanOts, subscribeProgramme, type Cloture, type ScanOT } from '@/lib/programmeService';
 import { ExternalLink, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
 import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
-import { classement, delaiOT } from '@/utils/points';
+import { classement, delaiOT, fmtPts } from '@/utils/points';
 import { errMsg } from '@/utils';
 
 // ─── Programme du chef d'équipe : uniquement les fiches OT distribuées ────────
@@ -105,9 +105,10 @@ function FichesOT() {
     const filtered = s
       ? base.filter((o) => [o.fgp, o.clientNom, o.zone, o.pco, o.dis, ...o.telephones, ...o.ontSerials].join(' ').toLowerCase().includes(s))
       : base;
-    // en retard d'abord, puis dérangements avant installations, puis par zone / PCO
+    // prioritaires d'abord, puis par échéance, dérangements avant installations, puis par zone / PCO
     return [...filtered].sort(
       (a, b) =>
+        Number(delaiOT(b).prioritaire) - Number(delaiOT(a).prioritaire) ||
         delaiOT(a).echeance.localeCompare(delaiOT(b).echeance) ||
         (a.nature === b.nature ? 0 : a.nature === 'derangement' ? -1 : 1) ||
         (a.zone + a.pco).localeCompare(b.zone + b.pco),
@@ -235,18 +236,20 @@ function FichesOT() {
 
 /** Points de l'équipe cette semaine et son rang parmi toutes les équipes */
 function PointsEquipe({ team }: { team: string }) {
-  const [txt, setTxt] = useState<{ points: number; rang: number; nb: number; pct: number; retard: number } | null>(null);
+  const [txt, setTxt] = useState<{ points: number; rang: number; nb: number; pct: number; retard: number; penalites: number } | null>(null);
   useEffect(() => {
     let alive = true;
     const now = new Date();
     const monday = new Date(now);
     monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-    fetchPourPoints(monday.toISOString().slice(0, 10), now.toISOString().slice(0, 10)).then(
-      (ots) => {
+    const from = monday.toISOString().slice(0, 10);
+    const to = now.toISOString().slice(0, 10);
+    Promise.all([fetchPourPoints(from, to), fetchPenalites(from, to)]).then(
+      ([ots, pens]) => {
         if (!alive) return;
-        const rows = classement(ots);
+        const rows = classement(ots, pens);
         const me = rows.find((r) => r.equipe.toLowerCase() === team.toLowerCase());
-        setTxt(me ? { points: me.points, rang: me.rang, nb: rows.length, pct: me.pctDansDelai, retard: me.retard } : null);
+        setTxt(me ? { points: me.points, rang: me.rang, nb: rows.length, pct: me.pctDansDelai, retard: me.retard, penalites: me.penalites } : null);
       },
       () => {},
     );
@@ -258,7 +261,7 @@ function PointsEquipe({ team }: { team: string }) {
   return (
     <div className="rounded-xl bg-slate-900 text-white px-4 py-3 flex items-center gap-4">
       <div>
-        <p className="text-3xl font-black tabular-nums leading-none">{txt.points}</p>
+        <p className="text-3xl font-black tabular-nums leading-none">{fmtPts(txt.points)}</p>
         <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">points cette semaine</p>
       </div>
       <div className="text-sm">
@@ -266,8 +269,9 @@ function PointsEquipe({ team }: { team: string }) {
           <b>{txt.rang === 1 ? '1re' : `${txt.rang}e`}</b> sur {txt.nb} équipe{txt.nb > 1 ? 's' : ''} · {txt.pct} % dans le délai
         </p>
         <p className="text-xs text-slate-400">
-          1 point par fiche faite dans le délai (installation 48 h, dérangement 24 h)
+          +1 par fiche faite avant son échéance (22 h) · −1 par fiche non traitée à 22 h
           {txt.retard ? ` · ${txt.retard} en retard` : ''}
+          {txt.penalites ? ` · ${txt.penalites} pénalité${txt.penalites > 1 ? 's' : ''}` : ''}
         </p>
       </div>
     </div>

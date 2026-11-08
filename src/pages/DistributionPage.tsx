@@ -1,12 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarDays, Copy, FileUp, MessageCircle, Send, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CalendarDays, Clock, Copy, FileUp, MapPin, MessageCircle, Pin, Send, Trash2 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
 import { parseOtPdf, programmeWhatsApp, type ParsedOT } from '@/utils/otPdf';
-import { deleteOts, distribuer, existingNumeros, fetchProgramme, reassign, situationsOuvertes, subscribeProgramme } from '@/lib/programmeService';
+import {
+  attribuerZone,
+  deleteOts,
+  distribuer,
+  existingNumeros,
+  fetchDernierControle,
+  fetchEnRetard,
+  fetchProgramme,
+  rattraperControles,
+  reassign,
+  retarder,
+  signalerFauxOk,
+  situationsOuvertes,
+  subscribeProgramme,
+} from '@/lib/programmeService';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel } from '@/utils/programme';
+import { estPrioritaire, jourCourt, jourRemise } from '@/utils/points';
 import { ClotureResume } from '@/components/programme/OtCard';
+import { FauxOkButton } from '@/components/programme/FauxOk';
 import type { ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
 
@@ -25,6 +41,105 @@ const todayISO = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const frDate = (iso: string) => iso.split('-').reverse().join('/');
+const addDays = (iso: string, n: number) => {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** Affectation des fiches lues, zone par zone (ex. CA3Z05 → DÉPLOIEMENT) */
+function ParZone({
+  items,
+  equipeNames,
+  zoneEquipe,
+  colorOf,
+  onChoose,
+  onRemember,
+}: {
+  items: { zone: string; equipe: string; nature: ParsedOT['nature']; include: boolean; deja?: unknown }[];
+  equipeNames: string[];
+  zoneEquipe: Record<string, string>;
+  colorOf: (n: string) => string;
+  onChoose: (zone: string, equipe: string) => void;
+  onRemember: (zone: string, equipe: string) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState<string | null>(null);
+  const zones = useMemo(() => {
+    const m = new Map<string, { zone: string; der: number; inst: number; equipes: Set<string> }>();
+    items
+      .filter((i) => i.include && !i.deja)
+      .forEach((i) => {
+        const z = i.zone || '';
+        const r = m.get(z) ?? { zone: z, der: 0, inst: 0, equipes: new Set<string>() };
+        if (i.nature === 'derangement') r.der++;
+        else r.inst++;
+        r.equipes.add(i.equipe);
+        m.set(z, r);
+      });
+    // zones sans équipe d'abord, puis par code
+    return [...m.values()].sort((a, b) => Number(!a.equipes.has('')) - Number(!b.equipes.has('')) || a.zone.localeCompare(b.zone));
+  }, [items]);
+  if (!zones.length) return null;
+  return (
+    <Card>
+      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+        <MapPin className="w-4 h-4 text-blue-700" />
+        <span className="font-bold text-slate-800">Par zone</span>
+        <span className="text-xs text-slate-500">choisir l’équipe d’une zone l’applique à toutes ses fiches</span>
+      </div>
+      <div className="grid sm:grid-cols-2 2xl:grid-cols-3">
+        {zones.map((z) => {
+          const une = z.equipes.size === 1 ? [...z.equipes][0] : null;
+          const memorisee = zoneEquipe[z.zone] ?? '';
+          const manque = z.equipes.has('');
+          return (
+            <div key={z.zone || 'sans'} className={`px-4 py-2.5 border-b border-slate-100 flex items-center gap-2 ${manque ? 'bg-amber-50/60' : ''}`}>
+              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: une ? colorOf(une) : '#F59E0B' }} />
+              <div className="min-w-0 flex-1">
+                <p className="font-mono font-bold text-sm text-slate-800">{z.zone || 'Zone inconnue'}</p>
+                <p className="text-[11px] text-slate-500">
+                  {z.der ? `${z.der} dér.` : ''}
+                  {z.der && z.inst ? ' · ' : ''}
+                  {z.inst ? `${z.inst} inst.` : ''}
+                </p>
+              </div>
+              <div className="flex flex-col items-end gap-1">
+                <Select
+                  aria-label={`Équipe de la zone ${z.zone}`}
+                  className="!py-1 !text-xs"
+                  value={une ?? '__plusieurs'}
+                  onChange={(e) => onChoose(z.zone, e.target.value)}
+                >
+                  {!une && <option value="__plusieurs">Plusieurs équipes</option>}
+                  <option value="">— Équipe —</option>
+                  {equipeNames.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </Select>
+                {z.zone && une && une !== memorisee && (
+                  <button
+                    type="button"
+                    disabled={saving === z.zone}
+                    onClick={async () => {
+                      setSaving(z.zone);
+                      await onRemember(z.zone, une).finally(() => setSaving(null));
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:underline disabled:opacity-50"
+                    title={memorisee ? `Aujourd’hui : ${memorisee}` : 'Zone attribuée à aucune équipe'}
+                  >
+                    <Pin className="w-3 h-3" /> {saving === z.zone ? 'Enregistrement…' : 'Retenir pour les prochains programmes'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
 
 async function shareWhatsApp(text: string, showToast: (m: string, t?: 'success' | 'error' | 'info') => void) {
   try {
@@ -35,11 +150,16 @@ async function shareWhatsApp(text: string, showToast: (m: string, t?: 'success' 
   }
 }
 
-function RowCells({ o }: { o: Row }) {
+function RowCells({ o, prioritaire }: { o: Row; prioritaire?: boolean }) {
   return (
     <>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
+          {prioritaire && (
+            <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-red-600 text-white" title="Délai officiel (depuis « OT reçu le ») déjà dépassé : à faire le jour même avant 22 h">
+              PRIORITAIRE
+            </span>
+          )}
           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${NATURE_CLASS[o.nature]}`}>{NATURE_LABEL[o.nature]}</span>
           {o.typeOt && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{o.typeOt}</span>}
           <span className="text-sm font-bold text-slate-800">{ligneLabel(o)}</span>
@@ -62,6 +182,7 @@ function RowCells({ o }: { o: Row }) {
 export default function DistributionPage() {
   const user = useAppStore((s) => s.user)!;
   const equipes = useAppStore((s) => s.equipes);
+  const loadAll = useAppStore((s) => s.loadAll);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -115,6 +236,19 @@ export default function DistributionPage() {
   };
 
   const update = (key: string, patch: Partial<Item>) => setItems((cur) => cur.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  const choisirZone = (zone: string, equipe: string) => {
+    if (equipe === '__plusieurs') return;
+    setItems((cur) => cur.map((i) => ((i.zone || '') === zone && !i.deja ? { ...i, equipe } : i)));
+  };
+  const retenirZone = async (zone: string, equipe: string) => {
+    try {
+      await attribuerZone(zone, equipe);
+      await loadAll();
+      showToast(`Zone ${zone} → ${equipe} : retenue pour les prochains programmes`, 'success');
+    } catch (e) {
+      showToast(errMsg(e), 'error');
+    }
+  };
   const toSend = items.filter((i) => i.include && !i.deja);
   const missingTeam = toSend.filter((i) => !i.equipe);
   const groups = useMemo(() => {
@@ -147,11 +281,28 @@ export default function DistributionPage() {
   const [hist, setHist] = useState<ProgrammeOT[]>([]);
   const [histError, setHistError] = useState('');
   const [armed, setArmed] = useState<string | null>(null);
+  const [enRetard, setEnRetard] = useState<ProgrammeOT[]>([]);
+  const [penaliser, setPenaliser] = useState(true);
+  const [retardId, setRetardId] = useState<string | null>(null);
+  const [retardDate, setRetardDate] = useState(() => addDays(todayISO(), 1));
+  const [controle, setControle] = useState<{ jour: string; nbFiches: number } | null>(null);
+
+  // Contrôle de 22 h : rattrape un contrôle manqué (tâche automatique arrêtée), puis l'affiche
+  useEffect(() => {
+    let alive = true;
+    rattraperControles()
+      .then(() => fetchDernierControle())
+      .then((c) => alive && setControle(c));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   useEffect(() => {
     let alive = true;
     const refresh = () =>
-      fetchProgramme({ from: histDate, to: histDate }).then(
-        (rows) => alive && (setHist(rows), setHistError('')),
+      Promise.all([fetchProgramme({ from: histDate, to: histDate }), histDate === todayISO() ? fetchEnRetard(histDate) : Promise.resolve([])]).then(
+        ([rows, retard]) => alive && (setHist(rows), setEnRetard(retard), setHistError('')),
         (e) => alive && setHistError(errMsg(e)),
       );
     refresh();
@@ -167,6 +318,146 @@ export default function DistributionPage() {
     hist.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [hist]);
+  // fiches dont l'échéance est passée (avant aujourd'hui) et toujours ouvertes
+  const retardGroups = useMemo(() => {
+    const m = new Map<string, ProgrammeOT[]>();
+    enRetard.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [enRetard]);
+
+  const pen = (n: number) => (n ? ` · ${n} pénalité${n > 1 ? 's' : ''} (−${n} pt)` : '');
+  const doReassign = async (o: ProgrammeOT, equipe: string) => {
+    try {
+      const n = await reassign([o.id], equipe, { par: user });
+      showToast(`${ligneLabel(o)} envoyé à ${equipe}${pen(n)}`, 'success');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    }
+  };
+  // toutes les fiches en retard d'une équipe d'un coup
+  const toutReaffecter = async (list: ProgrammeOT[], equipe: string) => {
+    try {
+      const n = await reassign(list.map((o) => o.id), equipe, { par: user });
+      showToast(`${list.length} fiche${list.length > 1 ? 's' : ''} envoyée${list.length > 1 ? 's' : ''} à ${equipe}${pen(n)}`, 'success');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    }
+  };
+  const toutRetarder = async (list: ProgrammeOT[]) => {
+    try {
+      const n = await retarder(list.map((o) => o.id), retardDate, { par: user, penaliser });
+      setRetardId(null);
+      showToast(`${list.length} fiche${list.length > 1 ? 's' : ''} reportée${list.length > 1 ? 's' : ''} au ${frDate(retardDate)}${pen(n)}`, 'success');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    }
+  };
+  const peutSignaler = user.role === 'admin' || user.role === 'superviseur';
+  const doFauxOk = async (o: ProgrammeOT, note: string) => {
+    try {
+      await signalerFauxOk(o.id, user, note);
+      showToast(`${ligneLabel(o)} : faux OK signalé — −1 point pour ${o.equipe}, fiche rouverte`, 'warning');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    }
+  };
+  const doRetarder = async (o: ProgrammeOT) => {
+    try {
+      const n = await retarder([o.id], retardDate, { par: user, penaliser });
+      setRetardId(null);
+      showToast(`${ligneLabel(o)} reporté au ${frDate(retardDate)}${pen(n)}`, 'success');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    }
+  };
+
+  /** Une fiche du suivi avec ses actions (réaffecter, retarder, retirer) */
+  const ficheSuivi = (o: ProgrammeOT, showDate = false) => (
+    <div key={o.id} className="flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0">
+      <div className="min-w-0 flex-1 flex flex-col gap-1">
+        <div className="flex">
+          <RowCells o={o} prioritaire={o.statut === 'a_faire' && o.prioritaire} />
+        </div>
+        {(o.statut === 'a_faire' || o.nbPenalites > 0) && (
+          <p className="text-[11px] text-slate-500">
+            {showDate && <>Prévue le {jourCourt(o.dateProgramme)} · </>}
+            {o.statut === 'a_faire' && o.echeanceEquipe && <>échéance {jourCourt(o.echeanceEquipe)} 22 h</>}
+            {o.statut === 'a_faire' && o.echeanceEquipe && o.nbPenalites > 0 && ' · '}
+            {o.nbPenalites > 0 && (
+              <b className="text-red-700">
+                non traitée · −{o.nbPenalites} pt pour {o.equipe}
+              </b>
+            )}
+          </p>
+        )}
+        {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
+        {o.statut === 'fait' && peutSignaler && <FauxOkButton onConfirm={(note) => doFauxOk(o, note)} />}
+        {retardId === o.id && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="date"
+              aria-label="Nouvelle date"
+              min={todayISO()}
+              value={retardDate}
+              onChange={(e) => setRetardDate(e.target.value)}
+              className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white"
+            />
+            <Button size="sm" onClick={() => doRetarder(o)} disabled={!retardDate}>
+              Reporter
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setRetardId(null)}>
+              Annuler
+            </Button>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-col items-end gap-1">
+        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${o.statut === 'a_faire' && o.nbPenalites > 0 ? 'bg-red-50 text-red-700 border-red-200' : STATUT_OT[o.statut].cls}`}>
+          {o.statut === 'a_faire' && o.nbPenalites > 0 ? 'En cours' : STATUT_OT[o.statut].label}
+        </span>
+        {o.statut === 'a_faire' && (
+          <div className="flex items-center gap-1">
+            <Select aria-label="Réaffecter" className="!py-1 !text-xs" value={o.equipe} onChange={(e) => doReassign(o, e.target.value)}>
+              {!equipeNames.includes(o.equipe) && <option value={o.equipe}>{o.equipe || '—'}</option>}
+              {equipeNames.map((nm) => (
+                <option key={nm} value={nm}>
+                  {nm}
+                </option>
+              ))}
+            </Select>
+            <button
+              aria-label="Retarder"
+              title="Reporter à un autre jour"
+              onClick={() => {
+                setRetardDate(addDays(todayISO(), 1));
+                setRetardId(retardId === o.id ? null : o.id);
+              }}
+              className={`p-1.5 rounded-md ${retardId === o.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-blue-700 hover:bg-blue-50'}`}
+            >
+              <CalendarClock className="w-3.5 h-3.5" />
+            </button>
+            <button
+              aria-label="Retirer du programme"
+              title={armed === o.id ? 'Cliquer encore pour confirmer' : 'Retirer du programme'}
+              onClick={async () => {
+                if (armed !== o.id) return setArmed(o.id);
+                try {
+                  await deleteOts([o.id]);
+                  setArmed(null);
+                  showToast('Fiche retirée du programme', 'info');
+                } catch (err) {
+                  showToast(errMsg(err), 'error');
+                }
+              }}
+              className={`p-1.5 rounded-md ${armed === o.id ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-red-700 hover:bg-red-50'}`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-6 animate-fade-in pb-24 md:pb-6">
@@ -249,6 +540,8 @@ export default function DistributionPage() {
             )}
           </div>
 
+          <ParZone items={items} equipeNames={equipeNames} zoneEquipe={zoneEquipe} colorOf={colorOf} onChoose={choisirZone} onRemember={retenirZone} />
+
           {groups.map(([equipe, list]) => {
             const active = list.filter((i) => i.include && !i.deja);
             return (
@@ -281,7 +574,7 @@ export default function DistributionPage() {
                       disabled={!!i.deja}
                       onChange={(e) => update(i.key, { include: e.target.checked })}
                     />
-                    <RowCells o={i} />
+                    <RowCells o={i} prioritaire={!!i.dateRecu && estPrioritaire(i.dateRecu, i.nature, jourRemise(null, dateProgramme))} />
                     <div className="flex flex-col items-end gap-1">
                       {i.deja ? (
                         <span className="text-[11px] text-slate-500">
@@ -348,7 +641,91 @@ export default function DistributionPage() {
             />
           </label>
         </div>
+        <Card className="p-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600">
+          <span className="flex items-start gap-1.5">
+            <Clock className="w-4 h-4 text-slate-400 flex-shrink-0" />
+            <span>
+              Échéance à <b>22 h</b> : dérangement le jour de la remise, installation le lendemain, fiche <b>prioritaire</b> (déjà hors délai) le jour même.
+              Non traitée à l’échéance : <b>−1 point</b> par contrôle de 22 h, elle reste en cours. Réaffecter avant l’échéance ne pénalise pas
+              {controle ? ` · dernier contrôle ${jourCourt(controle.jour)} (${controle.nbFiches} fiche${controle.nbFiches > 1 ? 's' : ''})` : ''}.
+            </span>
+          </span>
+          <label className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
+            <input type="checkbox" checked={penaliser} onChange={(e) => setPenaliser(e.target.checked)} />
+            Retarder une fiche ouverte coûte 1 point à son équipe
+          </label>
+        </Card>
+
         {histError && <Card className="p-4 text-sm text-red-700">{histError}</Card>}
+
+        {retardGroups.length > 0 && (
+          <Card className="border-red-200">
+            <div className="px-4 py-3 border-b border-red-100 bg-red-50/60">
+              <p className="font-bold text-red-800">
+                {enRetard.length} fiche{enRetard.length > 1 ? 's' : ''} non traitée{enRetard.length > 1 ? 's' : ''} après l’échéance
+              </p>
+              <p className="text-xs text-red-700/80">
+                Laissez-les à l’équipe (−1 point à chaque contrôle de 22 h tant qu’elles ne sont pas traitées), réaffectez-les (la nouvelle équipe repart avec sa propre échéance) ou retardez-les.
+              </p>
+            </div>
+            {retardGroups.map(([equipe, list]) => (
+              <div key={equipe || 'none'}>
+                <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: colorOf(equipe) }} />
+                  <b className="text-slate-800">{equipe || 'Sans équipe'}</b>
+                  <span className="text-xs text-slate-500">{list.length} en retard</span>
+                  {list.length > 1 && (
+                    <span className="ml-auto flex items-center gap-1.5">
+                      <Select
+                        aria-label={`Tout réaffecter (${equipe})`}
+                        className="!py-1 !text-xs"
+                        value=""
+                        onChange={(e) => e.target.value && toutReaffecter(list, e.target.value)}
+                      >
+                        <option value="">Tout réaffecter à…</option>
+                        {equipeNames
+                          .filter((nm) => nm !== equipe)
+                          .map((nm) => (
+                            <option key={nm} value={nm}>
+                              {nm}
+                            </option>
+                          ))}
+                      </Select>
+                      {retardId === `grp:${equipe}` ? (
+                        <>
+                          <input
+                            type="date"
+                            aria-label="Nouvelle date pour toutes"
+                            min={todayISO()}
+                            value={retardDate}
+                            onChange={(e) => setRetardDate(e.target.value)}
+                            className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white"
+                          />
+                          <Button size="sm" onClick={() => toutRetarder(list)} disabled={!retardDate}>
+                            Tout reporter
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          icon={<CalendarClock className="w-3.5 h-3.5" />}
+                          onClick={() => {
+                            setRetardDate(addDays(todayISO(), 1));
+                            setRetardId(`grp:${equipe}`);
+                          }}
+                        >
+                          Tout retarder
+                        </Button>
+                      )}
+                    </span>
+                  )}
+                </div>
+                {list.map((o) => ficheSuivi(o, true))}
+              </div>
+            ))}
+          </Card>
+        )}
         {!histError && hist.length === 0 && (
           <Card className="py-10 text-center text-sm text-slate-400">Aucune fiche distribuée pour le {frDate(histDate)}.</Card>
         )}
@@ -377,61 +754,7 @@ export default function DistributionPage() {
               <div className="h-1 bg-slate-100">
                 <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
               </div>
-              {list.map((o) => (
-                <div key={o.id} className="flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0">
-                  <div className="min-w-0 flex-1 flex flex-col gap-1">
-                    <div className="flex">
-                      <RowCells o={o} />
-                    </div>
-                    {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${STATUT_OT[o.statut].cls}`}>{STATUT_OT[o.statut].label}</span>
-
-                    {o.statut === 'a_faire' && (
-                      <div className="flex items-center gap-1">
-                        <Select
-                          aria-label="Réaffecter"
-                          className="!py-1 !text-xs"
-                          value={o.equipe}
-                          onChange={async (e) => {
-                            try {
-                              await reassign([o.id], e.target.value);
-                              showToast(`${ligneLabel(o)} envoyé à ${e.target.value}`, 'success');
-                            } catch (err) {
-                              showToast(errMsg(err), 'error');
-                            }
-                          }}
-                        >
-                          {!equipeNames.includes(o.equipe) && <option value={o.equipe}>{o.equipe || '—'}</option>}
-                          {equipeNames.map((nm) => (
-                            <option key={nm} value={nm}>
-                              {nm}
-                            </option>
-                          ))}
-                        </Select>
-                        <button
-                          aria-label="Retirer du programme"
-                          title={armed === o.id ? 'Cliquer encore pour confirmer' : 'Retirer du programme'}
-                          onClick={async () => {
-                            if (armed !== o.id) return setArmed(o.id);
-                            try {
-                              await deleteOts([o.id]);
-                              setArmed(null);
-                              showToast('Fiche retirée du programme', 'info');
-                            } catch (err) {
-                              showToast(errMsg(err), 'error');
-                            }
-                          }}
-                          className={`p-1.5 rounded-md ${armed === o.id ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-red-700 hover:bg-red-50'}`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+              {list.map((o) => ficheSuivi(o))}
             </Card>
           );
         })}

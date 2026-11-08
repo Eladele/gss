@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Check, ExternalLink, Minus, Plus } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
 import type { Cloture } from '@/lib/programmeService';
-import { DECHARGE_URL, MOTIFS_FAIT, MOTIFS_NON_FAIT, ligneLabel, poteauxDuMotif } from '@/utils/programme';
+import { DECHARGE_URL, estMotifReseau, ligneLabel, MOTIFS_FAIT, MOTIFS_NON_FAIT, poteauxDuMotif } from '@/utils/programme';
 
 const AUTRE = 'Autre';
 
@@ -119,6 +119,11 @@ export function ClotureSheet({
                 </button>
               ))}
             </div>
+            {fait && estMotifReseau(motif) && (
+              <p className="mt-2 text-[11px] font-semibold text-amber-800 bg-amber-50 rounded-md px-2 py-1">
+                Panne réseau : cette fiche compte un demi-point.
+              </p>
+            )}
             {motif === AUTRE && (
               <input
                 id="cloture-autre"
@@ -165,7 +170,7 @@ export function ClotureSheet({
                         className="w-full font-mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
                       />
                     </div>
-                    <div>
+                    {/* <div>
                       <label htmlFor="cst-ont" className="text-[11px] font-semibold text-slate-500">
                         Nouvel ONT <span className="font-normal">(ancien : {ot.ontSerials[0] || '—'})</span>
                       </label>
@@ -176,7 +181,7 @@ export function ClotureSheet({
                         placeholder="ex. 48575443B2FCC9AE"
                         className="w-full font-mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
                       />
-                    </div>
+                    </div> */}
                   </div>
                 )}
               </div>
@@ -226,7 +231,7 @@ export function ClotureSheet({
             <button
               type="button"
               onClick={confirmer}
-              disabled={!!erreur}
+              // disabled={!!erreur}
               className={`flex-1 py-3 rounded-xl font-bold text-white disabled:opacity-40 ${fait ? 'bg-green-600' : 'bg-red-600'}`}
             >
               {fait ? 'Confirmer fait' : 'Confirmer non fait'}

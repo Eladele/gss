@@ -301,7 +301,7 @@ export interface AppNotification {
   id: string;
   titre: string;
   message: string;
-  type: 'demande_depense' | 'demande_alimentation' | 'validee' | 'rejetee' | 'alimentation' | 'programme' | 'programme_non_fait' | 'info';
+  type: 'demande_depense' | 'demande_alimentation' | 'validee' | 'rejetee' | 'alimentation' | 'programme' | 'programme_non_fait' | 'programme_penalite' | 'info';
   module: string;
   refId: string | null;
   lu: boolean;
@@ -351,5 +351,40 @@ export interface ProgrammeOT {
   traiteLe: string | null;
   distribueParNom: string | null;
   sourceFichier: string;
+  nbPenalites: number; // pénalités de l'équipe actuelle sur cette fiche (non traitée à 22 h, retardée)
+  echeanceEquipe: string | null; // YYYY-MM-DD : à faire avant 22 h ce jour-là (calculée par la base)
+  prioritaire: boolean; // délai officiel déjà dépassé quand l'équipe a reçu la fiche
   createdAt: string;
+}
+
+// Pénalité d'une équipe sur une fiche OT (table penalites)
+export interface Penalite {
+  id: string;
+  situationId: string;
+  equipe: string;
+  jour: string; // YYYY-MM-DD
+  motif: 'non_traitee' | 'reaffectee' | 'retardee' | 'faux_ok';
+  points: number; // négatif
+  note: string | null; // motif d'un faux OK
+  creeParNom: string | null; // vide = contrôle automatique de 22 h
+  fgp: string;
+  typeLigne: string;
+  clientNom: string;
+  nature: 'derangement' | 'installation';
+  numeroOt: string;
+}
+
+// Fiche marquée « Fait » qui semble inexacte (vue clotures_a_verifier)
+export interface ClotureAVerifier {
+  id: string;
+  numeroOt: string;
+  nature: 'derangement' | 'installation';
+  equipe: string;
+  fgp: string;
+  typeLigne: string;
+  clientNom: string;
+  traiteLe: string | null;
+  traiteParNom: string | null;
+  cause: 'scan' | 'rechute';
+  raison: string;
 }

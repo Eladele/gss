@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { OtStatut, ProgrammeOT } from '@/types';
+import type { ClotureAVerifier, OtStatut, Penalite, ProgrammeOT } from '@/types';
 import type { ParsedOT } from '@/utils/otPdf';
 import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts } from './refs';
 
@@ -62,6 +62,9 @@ function mapOt(r: any): ProgrammeOT {
     distribueParNom: r.distribue_par_nom ?? null,
     assigneLe: r.assigne_le ?? r.created_at ?? null,
     sourceFichier: r.source_fichier ?? '',
+    nbPenalites: Number(r.nb_penalites) || 0,
+    echeanceEquipe: r.echeance_equipe ?? null,
+    prioritaire: !!r.prioritaire,
     createdAt: r.created_at,
   };
 }
@@ -70,6 +73,8 @@ function mapOt(r: any): ProgrammeOT {
 function dbError(error: { code?: string; message?: string } | null, fallback: string): Error {
   if (error?.code === '42703' || error?.code === '42P01')
     return new Error('La base n’est pas à jour (exécuter supabase_normalisation.sql).');
+  if (error?.code === 'PGRST202' || error?.code === '42883')
+    return new Error('Le contrôle du programme n’est pas encore installé (exécuter supabase_programme_controle.sql).');
   return new Error(error?.message || fallback);
 }
 
@@ -283,9 +288,132 @@ export async function cloturer(id: string, c: Cloture, par: Par): Promise<void> 
   if (error) throw dbError(error, 'Mise à jour impossible');
 }
 
-export async function reassign(ids: string[], equipe: string): Promise<void> {
-  const { error } = await supabase.from(TABLE).update({ team_id: await teamIdFor(equipe) }).in('id', ids);
+/** Réaffecte des fiches à une autre équipe : sans pénalité, la nouvelle équipe repart avec sa
+ *  propre échéance (après l'échéance, l'ancienne équipe a déjà perdu son point à 22 h).
+ *  `penaliser` reste possible pour un cas exceptionnel. Renvoie le nombre de pénalités. */
+export async function reassign(ids: string[], equipe: string, opts: { par?: Par; penaliser?: boolean } = {}): Promise<number> {
+  const teamId = await teamIdFor(equipe);
+  if (!teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
+  const { data, error } = await supabase.rpc('reaffecter_fiches', {
+    p_ids: ids,
+    p_team: teamId,
+    p_par: opts.par?.id ?? null,
+    p_penaliser: opts.penaliser ?? false,
+  });
   if (error) throw dbError(error, 'Réaffectation impossible');
+  return Number(data) || 0;
+}
+
+/** Reporte des fiches ouvertes à un autre jour : 1 point de moins pour l'équipe (sauf si elle a
+ *  déjà été pénalisée au dernier contrôle, ou `penaliser: false`) */
+export async function retarder(ids: string[], date: string, opts: { par?: Par; penaliser?: boolean } = {}): Promise<number> {
+  const { data, error } = await supabase.rpc('retarder_fiches', {
+    p_ids: ids,
+    p_date: date,
+    p_par: opts.par?.id ?? null,
+    p_penaliser: opts.penaliser ?? true,
+  });
+  if (error) throw dbError(error, 'Report impossible');
+  return Number(data) || 0;
+}
+
+/** Fiches encore ouvertes dont l'échéance d'équipe est AVANT ce jour (non traitées à 22 h) */
+export async function fetchEnRetard(avant: string): Promise<ProgrammeOT[]> {
+  const { data, error } = await supabase
+    .from(VUE)
+    .select('*')
+    .not('numero_ot', 'is', null)
+    .in('status', OUVERT)
+    .lt('echeance_equipe', avant)
+    .order('echeance_equipe')
+    .limit(1000);
+  if (error) throw dbError(error, 'Chargement des fiches en retard impossible');
+  return (data ?? []).map(mapOt);
+}
+
+// ─── Pénalités et contrôle de 22 h ────────────────────────────────────────────
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const mapPenalite = (r: any): Penalite => ({
+  id: r.id,
+  situationId: r.situation_id,
+  equipe: r.equipe ?? '',
+  jour: r.jour,
+  motif: r.motif,
+  points: Number(r.points) || 0,
+  creeParNom: r.cree_par_nom ?? null,
+  note: r.note ?? null,
+  fgp: r.fgp ?? '',
+  typeLigne: r.type_ligne ?? 'FGP',
+  clientNom: r.client_nom ?? '',
+  nature: r.nature === 'derangement' ? 'derangement' : 'installation',
+  numeroOt: r.numero_ot ?? '',
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** Pénalités d'une période (jour du contrôle ou de l'action) */
+export async function fetchPenalites(from: string, to: string): Promise<Penalite[]> {
+  const { data, error } = await supabase.from('penalites_detail').select('*').gte('jour', from).lte('jour', to).order('jour').limit(5000);
+  if (error) {
+    // module pas encore installé (supabase_programme_controle.sql) : pas de pénalités
+    if (error.code === '42P01' || error.code === 'PGRST205') return [];
+    throw dbError(error, 'Chargement des pénalités impossible');
+  }
+  return (data ?? []).map(mapPenalite);
+}
+
+/** Fiche marquée « Fait » à tort : −1 pour l'équipe, fiche rouverte chez elle (le +1 disparaît) */
+export async function signalerFauxOk(id: string, par: Par, note: string): Promise<void> {
+  const { error } = await supabase.rpc('signaler_faux_ok', { p_id: id, p_par: par.id, p_note: note });
+  if (error) throw dbError(error, 'Signalement impossible');
+}
+
+/** OK suspects (ONT non scanné après l'installation, nouveau dérangement sur le FGP) */
+export async function fetchCloturesAVerifier(): Promise<ClotureAVerifier[]> {
+  const { data, error } = await supabase.from('clotures_a_verifier').select('*').order('traite_le', { ascending: false }).limit(500);
+  if (error) return []; // module pas encore installé
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    numeroOt: r.numero_ot ?? '',
+    nature: r.nature === 'derangement' ? 'derangement' : 'installation',
+    equipe: r.equipe ?? '',
+    fgp: r.fgp ?? '',
+    typeLigne: r.type_ligne ?? 'FGP',
+    clientNom: r.client_nom ?? '',
+    traiteLe: r.traite_le ?? null,
+    traiteParNom: r.traite_par_nom ?? null,
+    cause: r.cause === 'rechute' ? 'rechute' : 'scan',
+    raison: r.raison ?? '',
+  }));
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+}
+
+/** Annule une pénalité (erreur de distribution, fiche faite mais pas cliquée…) */
+export async function annulerPenalite(id: string): Promise<void> {
+  const { error } = await supabase.from('penalites').delete().eq('id', id);
+  if (error) throw dbError(error, 'Annulation impossible');
+}
+
+/** Contrôle les jours ouvrés passés qui ne l'ont pas été (si la tâche de 22 h n'a pas tourné) */
+export async function rattraperControles(): Promise<number> {
+  const { data, error } = await supabase.rpc('rattraper_controles');
+  return error ? 0 : Number(data) || 0;
+}
+
+/** Dernier contrôle de 22 h effectué */
+export async function fetchDernierControle(): Promise<{ jour: string; nbFiches: number } | null> {
+  const { data, error } = await supabase.from('controles_soir').select('jour, nb_fiches').order('jour', { ascending: false }).limit(1).maybeSingle();
+  if (error || !data) return null;
+  return { jour: data.jour as string, nbFiches: Number(data.nb_fiches) || 0 };
+}
+
+/** Mémorise l'équipe d'une zone (retirée des autres équipes) */
+export async function attribuerZone(zone: string, equipe: string): Promise<void> {
+  const teamId = await teamIdFor(equipe);
+  if (!teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
+  const { error } = await supabase.rpc('attribuer_zone', { p_zone: zone, p_team: teamId });
+  if (error) throw dbError(error, 'Enregistrement de la zone impossible');
 }
 
 /** Retire des fiches du programme : une situation créée par l'OT est supprimée ; une
@@ -308,6 +436,10 @@ export function subscribeProgramme(key: string, onChange: () => void): () => voi
     .channel(`programme-${key}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, () => {
       // un import Excel modifie des centaines de lignes : un seul rechargement
+      if (t) clearTimeout(t);
+      t = setTimeout(onChange, 500);
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'penalites' }, () => {
       if (t) clearTimeout(t);
       t = setTimeout(onChange, 500);
     })

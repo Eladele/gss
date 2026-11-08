@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, Download, Trophy } from 'lucide-react';
+import { ChevronDown, Download, SearchCheck, Trophy, Undo2 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, useToast } from '@/components/ui';
-import { fetchPourPoints, subscribeProgramme } from '@/lib/programmeService';
-import { ETAT_DELAI, POINTS, classement, delaiOT, jourCourt } from '@/utils/points';
-import { NATURE_CLASS, NATURE_LABEL, ligneLabel } from '@/utils/programme';
+import {
+  annulerPenalite,
+  fetchCloturesAVerifier,
+  fetchPenalites,
+  fetchPourPoints,
+  rattraperControles,
+  signalerFauxOk,
+  subscribeProgramme,
+} from '@/lib/programmeService';
+import { FauxOkButton } from '@/components/programme/FauxOk';
+import { ETAT_DELAI, POINTS, classement, delaiOT, fmtPts, jourCourt } from '@/utils/points';
+import { MOTIF_PENALITE, NATURE_CLASS, NATURE_LABEL, ligneLabel } from '@/utils/programme';
 import { downloadWorkbookBuffer } from '@/utils/stats';
-import type { ProgrammeOT } from '@/types';
+import type { ClotureAVerifier, Penalite, ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
 
 type Preset = 'semaine' | 'mois' | 'mois_dernier' | 'custom';
@@ -27,7 +36,12 @@ const MEDAL = ['bg-amber-400 text-amber-950', 'bg-slate-300 text-slate-800', 'bg
 
 export default function PointsPage() {
   const equipes = useAppStore((s) => s.equipes);
+  const user = useAppStore((s) => s.user);
+  const isAdmin = user?.role === 'admin';
+  const peutSignaler = user?.role === 'admin' || user?.role === 'superviseur';
+  const [aVerifier, setAVerifier] = useState<ClotureAVerifier[]>([]);
   const { showToast } = useToast();
+  const [penalites, setPenalites] = useState<Penalite[]>([]);
   const [preset, setPreset] = useState<Preset>('semaine');
   const [cFrom, setCFrom] = useState(() => iso(new Date(Date.now() - 6 * 86400000)));
   const [cTo, setCTo] = useState(() => iso(new Date()));
@@ -41,13 +55,14 @@ export default function PointsPage() {
   useEffect(() => {
     let alive = true;
     const load = () =>
-      fetchPourPoints(from, to)
+      Promise.all([fetchPourPoints(from, to), fetchPenalites(from, to), fetchCloturesAVerifier()])
         .then(
-          (rows) => alive && (setOts(rows), setError('')),
+          ([rows, pens, av]) => alive && (setOts(rows), setPenalites(pens), setAVerifier(av), setError('')),
           (e) => alive && setError(errMsg(e)),
         )
         .finally(() => alive && setLoaded(true));
-    load();
+    // un contrôle de 22 h manqué est rattrapé avant le calcul
+    rattraperControles().finally(load);
     const unsub = subscribeProgramme('points', load);
     return () => {
       alive = false;
@@ -56,12 +71,32 @@ export default function PointsPage() {
   }, [from, to]);
 
   const scoped = useMemo(() => ots.filter((o) => nature === 'all' || o.nature === nature), [ots, nature]);
-  const rows = useMemo(() => classement(scoped), [scoped]);
+  const pensScoped = useMemo(() => penalites.filter((p) => nature === 'all' || p.nature === nature), [penalites, nature]);
+  const rows = useMemo(() => classement(scoped, pensScoped), [scoped, pensScoped]);
   const maxPts = Math.max(1, ...rows.map((r) => r.points));
+  const fauxOk = async (c: ClotureAVerifier, note: string) => {
+    if (!user) return;
+    try {
+      await signalerFauxOk(c.id, user, note);
+      setAVerifier((cur) => cur.filter((x) => x.id !== c.id));
+      showToast(`${ligneLabel(c)} : faux OK — −1 point pour ${c.equipe}, fiche rouverte`, 'warning');
+    } catch (e) {
+      showToast(errMsg(e), 'error');
+    }
+  };
+  const annuler = async (p: Penalite) => {
+    try {
+      await annulerPenalite(p.id);
+      setPenalites((cur) => cur.filter((x) => x.id !== p.id));
+      showToast(`Pénalité annulée (${p.equipe}, ${ligneLabel(p)})`, 'success');
+    } catch (e) {
+      showToast(errMsg(e), 'error');
+    }
+  };
   const colorOf = (n: string) => equipes.find((e) => e.name.toLowerCase() === n.toLowerCase())?.color ?? '#94A3B8';
   const tot = rows.reduce(
-    (a, r) => ({ faits: a.faits + r.faits, dans: a.dans + r.dans, retard: a.retard + r.retard, confies: a.confies + r.confiesEnRetard }),
-    { faits: 0, dans: 0, retard: 0, confies: 0 },
+    (a, r) => ({ faits: a.faits + r.faits, dans: a.dans + r.dans, retard: a.retard + r.retard, confies: a.confies + r.confiesEnRetard, penalites: a.penalites + r.penalites }),
+    { faits: 0, dans: 0, retard: 0, confies: 0, penalites: 0 },
   );
 
   const exportXlsx = async () => {
@@ -70,14 +105,14 @@ export default function PointsPage() {
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Classement');
       ws.addRow([`Points des équipes — du ${from.split('-').reverse().join('/')} au ${to.split('-').reverse().join('/')}`]).font = { bold: true, size: 13 };
-      ws.addRow(['Installation : 48 h (2 jours ouvrés) · Dérangement : 24 h (1 jour ouvré) après « OT reçu le », ou après la remise à l’équipe si elle est plus tardive · dimanches et jours fériés non comptés']);
+      ws.addRow(['Échéance de l’équipe à 22 h : dérangement le jour de la remise, installation le jour ouvré suivant, fiche prioritaire (délai officiel dépassé) le jour de la remise · dimanches et jours fériés non comptés']);
       ws.addRow([]);
-      ws.addRow(['Rang', 'Équipe', 'Points', 'Points installation', 'Points dérangement', 'Fiches reçues', 'Faites', 'Dans le délai', 'Hors délai', '% dans le délai', 'En retard (à faire)', 'Non faites', 'Remises déjà en retard']).font = { bold: true };
-      rows.forEach((r) => ws.addRow([r.rang, r.equipe, r.points, r.pointsInst, r.pointsDer, r.total, r.faits, r.dans, r.hors, r.pctDansDelai / 100, r.retard, r.nonFaits, r.confiesEnRetard]));
-      ws.getColumn(10).numFmt = '0%';
+      ws.addRow(['Rang', 'Équipe', 'Points', 'Points installation', 'Points dérangement', 'Pénalités (points)', 'Nombre de pénalités', 'Faux OK', 'Fiches reçues', 'Faites', 'Dans le délai', 'Hors délai', '% dans le délai', 'En retard (à faire)', 'Non faites', 'Prioritaires (remises hors délai)']).font = { bold: true };
+      rows.forEach((r) => ws.addRow([r.rang, r.equipe, r.points, r.pointsInst, r.pointsDer, r.pointsPenalites, r.penalites, r.fauxOk, r.total, r.faits, r.dans, r.hors, r.pctDansDelai / 100, r.retard, r.nonFaits, r.confiesEnRetard]));
+      ws.getColumn(13).numFmt = '0%';
       ws.columns.forEach((c, i) => (c.width = i === 1 ? 20 : 14));
       const wd = wb.addWorksheet('Détail');
-      wd.addRow(['Équipe', 'Type', 'Ligne', 'Client', 'OT reçu le', 'Échéance officielle', 'Confié à l’équipe le', 'Échéance équipe', 'Remis déjà en retard', 'Statut', 'Fait le', 'Jours ouvrés (équipe)', 'Délai équipe', 'Points', 'Motif']).font = { bold: true };
+      wd.addRow(['Équipe', 'Type', 'Ligne', 'Client', 'OT reçu le', 'Échéance officielle', 'Confié à l’équipe le', 'Échéance équipe', 'Prioritaire', 'Statut', 'Fait le', 'Jours ouvrés (équipe)', 'Délai équipe', 'Points', 'Motif']).font = { bold: true };
       scoped.forEach((o) => {
         const d = delaiOT(o);
         wd.addRow([
@@ -89,7 +124,7 @@ export default function PointsPage() {
           d.echeanceOfficielle,
           d.confieLe ?? '',
           d.echeance,
-          d.confieEnRetard ? 'Oui' : '',
+          d.prioritaire ? 'Oui' : '',
           o.statut,
           o.traiteLe ? new Date(o.traiteLe).toLocaleString('fr-FR') : '',
           d.jours,
@@ -100,6 +135,12 @@ export default function PointsPage() {
       });
       wd.columns.forEach((c) => (c.width = 16));
       wd.views = [{ state: 'frozen', ySplit: 1 }];
+      const wp = wb.addWorksheet('Pénalités');
+      wp.addRow(['Jour', 'Équipe', 'Motif', 'Détail', 'Points', 'Ligne', 'Client', 'N° OT', 'Par']).font = { bold: true };
+      pensScoped.forEach((p) =>
+        wp.addRow([p.jour, p.equipe, MOTIF_PENALITE[p.motif], p.note ?? '', p.points, ligneLabel(p), p.clientNom, p.numeroOt, p.creeParNom ?? 'Contrôle de 22 h']),
+      );
+      wp.columns.forEach((c) => (c.width = 18));
       downloadWorkbookBuffer((await wb.xlsx.writeBuffer()) as ArrayBuffer, `points-equipes-${from}-${to}.xlsx`);
     } catch (e) {
       showToast('Export impossible — ' + errMsg(e), 'error');
@@ -161,19 +202,62 @@ export default function PointsPage() {
           ))}
         </div>
         <p className="text-xs text-slate-500">
-          <b>{POINTS.dansDelai} point</b> par fiche faite dans le délai, compté depuis la date « OT reçu le » de l’OT (ou depuis le jour où l’équipe a reçu la
-          fiche, si c’est plus tard) jusqu’au moment où le chef marque « Fait » :
-          installation <b>48 h</b> (2 jours ouvrés), dérangement <b>24 h</b> (1 jour ouvré). Dimanches et jours fériés non comptés. Période : fiches reçues du{' '}
+          <b>{POINTS.dansDelai} point</b> par fiche marquée « Fait » avant son échéance de <b>22 h</b> : dérangement le jour où l’équipe l’a reçue,
+          installation le jour ouvré suivant. Fiche <b>prioritaire</b> (délai officiel depuis « OT reçu le » déjà dépassé quand l’équipe la reçoit) : le
+          jour même. Dimanches et jours fériés non comptés. Période : fiches reçues du{' '}
           {from.split('-').reverse().join('/')} au {to.split('-').reverse().join('/')}.
         </p>
+        <p className="text-xs text-slate-500">
+          <b>Demi-point</b> quand la fiche faite a pour motif une panne réseau (câble distribution ou transport coupé, HUB-BOX ou SUB-BOX défectueux).{' '}
+          <b className="text-red-700">{POINTS.penalite} point</b> par fiche ni faite ni « non faite » au contrôle de 22 h une fois son échéance arrivée
+          (et à chaque contrôle suivant), et quand une fiche ouverte est retardée. Réaffecter une fiche avant son échéance ne pénalise pas.{' '}
+          <b className="text-red-700">Faux OK</b> (fiche marquée « Fait » à tort, signalée par l’admin ou le superviseur) : le +1 est perdu et −1 en plus, la
+          fiche est rouverte.
+        </p>
       </Card>
+
+      {peutSignaler && aVerifier.length > 0 && (
+        <Card className="border-amber-200">
+          <div className="px-4 py-3 border-b border-amber-100 bg-amber-50/60 flex items-start gap-2">
+            <SearchCheck className="w-4 h-4 text-amber-700 mt-0.5" />
+            <div>
+              <p className="font-bold text-amber-900">
+                {aVerifier.length} clôture{aVerifier.length > 1 ? 's' : ''} à vérifier
+              </p>
+              <p className="text-xs text-amber-800/80">
+                Fiches marquées « Fait » ces 30 derniers jours qui semblent inexactes. Si c’est un faux OK : l’équipe perd son point (+1), prend −1, et la
+                fiche est rouverte chez elle.
+              </p>
+            </div>
+          </div>
+          {aVerifier.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0 text-sm">
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${NATURE_CLASS[c.nature]}`}>{NATURE_LABEL[c.nature]}</span>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-slate-800 truncate">
+                  {ligneLabel(c)} · {c.clientNom} · <span className="font-normal text-slate-500">{c.equipe}</span>
+                </p>
+                <p className="text-[11px]">
+                  <b className="text-amber-800">{c.raison}</b>
+                  <span className="text-slate-500">
+                    {' '}
+                    · marquée Fait{c.traiteParNom ? ` par ${c.traiteParNom}` : ''}
+                    {c.traiteLe ? ` le ${new Date(c.traiteLe).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}` : ''}
+                  </span>
+                </p>
+              </div>
+              <FauxOkButton compact onConfirm={(note) => fauxOk(c, note)} />
+            </div>
+          ))}
+        </Card>
+      )}
 
       {error && <Card className="p-4 text-sm text-red-700">{error}</Card>}
       {loaded && !error && rows.length === 0 && <Card className="py-12 text-center text-sm text-slate-400">Aucune fiche OT reçue sur cette période.</Card>}
 
       {rows.length > 0 && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <Card className="p-4">
               <p className="text-xs text-slate-500">Fiches faites</p>
               <p className="text-2xl font-black tabular-nums">{tot.faits}</p>
@@ -187,10 +271,14 @@ export default function PointsPage() {
               <p className={`text-2xl font-black tabular-nums ${tot.retard ? 'text-red-700' : ''}`}>{tot.retard}</p>
             </Card>
             <Card className="p-4">
-              <p className="text-xs text-slate-500" title="Fiches remises à l’équipe alors que le délai officiel (depuis « OT reçu le ») était déjà dépassé : retard non compté à l’équipe">
-                Remises déjà en retard
+              <p className="text-xs text-slate-500" title="Fiches remises à l’équipe alors que le délai officiel (depuis « OT reçu le ») était déjà dépassé : à faire le jour même avant 22 h">
+                Prioritaires
               </p>
               <p className={`text-2xl font-black tabular-nums ${tot.confies ? 'text-amber-700' : ''}`}>{tot.confies}</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-xs text-slate-500">Pénalités</p>
+              <p className={`text-2xl font-black tabular-nums ${tot.penalites ? 'text-red-700' : ''}`}>{tot.penalites}</p>
             </Card>
           </div>
 
@@ -215,18 +303,27 @@ export default function PointsPage() {
                         <span className="font-bold text-slate-800 truncate">{r.equipe}</span>
                       </div>
                       <div className="mt-1.5 h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${(r.points / maxPts) * 100}%`, background: colorOf(r.equipe) }} />
+                        <div className="h-full rounded-full" style={{ width: `${(Math.max(0, r.points) / maxPts) * 100}%`, background: colorOf(r.equipe) }} />
                       </div>
                       <p className="mt-1 text-[11px] text-slate-500">
-                        {r.dans}/{r.faits} faites dans le délai ({r.pctDansDelai} %) · inst. {r.pointsInst} pt · dér. {r.pointsDer} pt
+                        {r.dans}/{r.faits} faites dans le délai ({r.pctDansDelai} %) · inst. {fmtPts(r.pointsInst)} pt · dér. {fmtPts(r.pointsDer)} pt
+                        {r.penalites ? (
+                          <b className="text-red-700">
+                            {' '}
+                            · {r.penalites} pénalité{r.penalites > 1 ? 's' : ''} ({fmtPts(r.pointsPenalites)} pt)
+                            {r.fauxOk ? ` dont ${r.fauxOk} faux OK` : ''}
+                          </b>
+                        ) : (
+                          ''
+                        )}
                         {r.hors ? ` · ${r.hors} hors délai` : ''}
                         {r.nonFaits ? ` · ${r.nonFaits} non faites` : ''}
                         {r.retard ? <b className="text-red-700"> · {r.retard} en retard</b> : ''}
-                        {r.confiesEnRetard ? <span className="text-amber-700"> · {r.confiesEnRetard} remise{r.confiesEnRetard > 1 ? 's' : ''} déjà en retard</span> : ''}
+                        {r.confiesEnRetard ? <span className="text-amber-700"> · {r.confiesEnRetard} prioritaire{r.confiesEnRetard > 1 ? 's' : ''}</span> : ''}
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-2xl font-black tabular-nums text-slate-900">{r.points}</p>
+                      <p className={`text-2xl font-black tabular-nums ${r.points < 0 ? 'text-red-700' : 'text-slate-900'}`}>{fmtPts(r.points)}</p>
                       <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">points</p>
                     </div>
                     <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -243,15 +340,44 @@ export default function PointsPage() {
                             <p className="text-[11px] text-slate-500">
                               OT reçu {jourCourt(d.recuLe)}
                               {d.decale && d.confieLe ? ` · confié ${jourCourt(d.confieLe)}` : ''} · échéance équipe {jourCourt(d.echeance)}
-                              {d.confieEnRetard ? ' (remis déjà en retard)' : ''}
+                              {d.prioritaire ? ' (prioritaire)' : ''}
                               {o.traiteLe ? ` · fait le ${new Date(o.traiteLe).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}
                               {o.statut === 'fait' ? ` · ${d.jours} j ouvré${d.jours > 1 ? 's' : ''}` : ''}
                             </p>
                           </div>
                           <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${ETAT_DELAI[d.etat].cls}`}>{ETAT_DELAI[d.etat].label}</span>
-                          <span className="w-10 text-right font-bold tabular-nums">{d.points ? `+${d.points}` : '0'}</span>
+                          <span className="w-10 text-right font-bold tabular-nums" title={d.reseau ? 'Panne réseau : demi-point' : undefined}>
+                            {d.points ? `+${fmtPts(d.points)}` : '0'}
+                          </span>
                         </div>
                       ))}
+                      {pensScoped
+                        .filter((p) => p.equipe === r.equipe)
+                        .map((p) => (
+                          <div key={p.id} className="flex items-center gap-3 px-4 py-2 border-b border-slate-100 last:border-0 text-sm bg-red-50/40">
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border bg-red-50 text-red-700 border-red-200">Pénalité</span>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-slate-800 truncate">
+                                {ligneLabel(p)} · {p.clientNom}
+                              </p>
+                              <p className="text-[11px] text-slate-500">
+                                {MOTIF_PENALITE[p.motif]}
+                                {p.note ? ` (${p.note})` : ''} · {jourCourt(p.jour)}
+                                {p.creeParNom ? ` · par ${p.creeParNom}` : ' · contrôle automatique'}
+                              </p>
+                            </div>
+                            {isAdmin && (
+                              <button
+                                onClick={() => annuler(p)}
+                                title="Annuler cette pénalité"
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-blue-700"
+                              >
+                                <Undo2 className="w-3.5 h-3.5" /> Annuler
+                              </button>
+                            )}
+                            <span className="w-10 text-right font-bold tabular-nums text-red-700">{fmtPts(p.points)}</span>
+                          </div>
+                        ))}
                     </div>
                   )}
                 </div>

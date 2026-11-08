@@ -20,6 +20,7 @@ const REMOTE_BG: Record<AppNotification['type'], string> = {
   alimentation: 'bg-emerald-100 text-emerald-800',
   programme: 'bg-violet-100 text-violet-800',
   programme_non_fait: 'bg-rose-100 text-rose-700',
+  programme_penalite: 'bg-red-100 text-red-700',
   info: 'bg-slate-100 text-slate-600',
 };
 const REMOTE_MARK: Record<AppNotification['type'], string> = {
@@ -30,6 +31,7 @@ const REMOTE_MARK: Record<AppNotification['type'], string> = {
   alimentation: '+',
   programme: '📋',
   programme_non_fait: '!',
+  programme_penalite: '−1',
   info: 'i',
 };
 

@@ -29,6 +29,8 @@ export const TYPE_OT_LABEL: Record<string, string> = {
 export interface MotifDef {
   label: string;
   poteaux?: number;
+  /** panne du réseau (câble, boîtier) : la fiche faite ne rapporte que la moitié du point */
+  reseau?: boolean;
 }
 
 export const MOTIFS_NON_FAIT: MotifDef[] = [
@@ -49,12 +51,35 @@ export const MOTIFS_NON_FAIT: MotifDef[] = [
 ];
 
 export const MOTIFS_FAIT: MotifDef[] = [
-  { label: 'Câble distribution coupé' },
-  { label: 'Câble transport coupé' },
+  { label: 'Câble distribution coupé', reseau: true },
+  { label: 'Câble transport coupé', reseau: true },
+  { label: 'HUB-BOX défectueux', reseau: true },
+  { label: 'SUB-BOX défectueux', reseau: true },
   { label: 'Zone en panne' },
   { label: 'Modem défectueux' },
   { label: 'Installé par quelqu’un' },
   { label: 'Confirmé par client' },
+];
+
+/** Motif « fait » de panne réseau (câble coupé, HUB-BOX / SUB-BOX défectueux) → demi-point */
+export const estMotifReseau = (motif?: string | null) => !!motif && MOTIFS_FAIT.some((m) => m.reseau && m.label === motif);
+
+/** Libellés des pénalités */
+export const MOTIF_PENALITE = {
+  non_traitee: 'Non traitée à 22 h',
+  reaffectee: 'Réaffectée à une autre équipe',
+  retardee: 'Retardée',
+  faux_ok: 'Faux OK (fiche marquée Fait à tort)',
+} as const;
+
+/** Motifs proposés pour signaler un faux OK */
+export const MOTIFS_FAUX_OK = [
+  'Client non raccordé',
+  'Pas de signal / ONT non scanné',
+  'Mauvais ONT ou mauvais DIS',
+  'Rechute (nouveau dérangement)',
+  'Travail incomplet',
+  'Client conteste',
 ];
 
 /** Poteaux à compter pour un motif (« Besoin 2 poteaux 350 m » → 2) */
