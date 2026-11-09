@@ -19,8 +19,8 @@ import {
   situationsOuvertes,
   subscribeProgramme,
 } from '@/lib/programmeService';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel } from '@/utils/programme';
-import { estPrioritaire, jourCourt, jourRemise } from '@/utils/points';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
+import { POINTS, estPrioritaire, fmtPts, jourCourt, jourRemise, motPoint, ptsTexte } from '@/utils/points';
 import { ClotureResume } from '@/components/programme/OtCard';
 import { FauxOkButton } from '@/components/programme/FauxOk';
 import type { ProgrammeOT } from '@/types';
@@ -325,11 +325,12 @@ export default function DistributionPage() {
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [enRetard]);
 
-  const pen = (n: number) => (n ? ` · ${n} pénalité${n > 1 ? 's' : ''} (−${n} pt)` : '');
+  const pen = (n: number, motif: 'retardee' | 'reaffectee' = 'retardee') =>
+    n ? ` · ${n} pénalité${n > 1 ? 's' : ''} (${fmtPts(n * POINTS.penalites[motif])} pt)` : '';
   const doReassign = async (o: ProgrammeOT, equipe: string) => {
     try {
       const n = await reassign([o.id], equipe, { par: user });
-      showToast(`${ligneLabel(o)} envoyé à ${equipe}${pen(n)}`, 'success');
+      showToast(`${ligneLabel(o)} envoyé à ${equipe}${pen(n, 'reaffectee')}`, 'success');
     } catch (err) {
       showToast(errMsg(err), 'error');
     }
@@ -338,7 +339,7 @@ export default function DistributionPage() {
   const toutReaffecter = async (list: ProgrammeOT[], equipe: string) => {
     try {
       const n = await reassign(list.map((o) => o.id), equipe, { par: user });
-      showToast(`${list.length} fiche${list.length > 1 ? 's' : ''} envoyée${list.length > 1 ? 's' : ''} à ${equipe}${pen(n)}`, 'success');
+      showToast(`${list.length} fiche${list.length > 1 ? 's' : ''} envoyée${list.length > 1 ? 's' : ''} à ${equipe}${pen(n, 'reaffectee')}`, 'success');
     } catch (err) {
       showToast(errMsg(err), 'error');
     }
@@ -352,11 +353,11 @@ export default function DistributionPage() {
       showToast(errMsg(err), 'error');
     }
   };
-  const peutSignaler = user.role === 'admin' || user.role === 'superviseur';
-  const doFauxOk = async (o: ProgrammeOT, note: string) => {
+  const peutSignaler = peutSignalerFauxOk(user.role);
+  const doFauxOk = async (o: ProgrammeOT, motif: MotifFauxOk, note: string) => {
     try {
-      await signalerFauxOk(o.id, user, note);
-      showToast(`${ligneLabel(o)} : faux OK signalé — −1 point pour ${o.equipe}, fiche rouverte`, 'warning');
+      await signalerFauxOk(o.id, user, motif, note);
+      showToast(`${ligneLabel(o)} : faux OK (${libelleFauxOk(motif, note)}) — ${fmtPts(POINTS.penalites.faux_ok)} pt pour ${o.equipe}, fiche rouverte`, 'warning');
     } catch (err) {
       showToast(errMsg(err), 'error');
     }
@@ -385,13 +386,13 @@ export default function DistributionPage() {
             {o.statut === 'a_faire' && o.echeanceEquipe && o.nbPenalites > 0 && ' · '}
             {o.nbPenalites > 0 && (
               <b className="text-red-700">
-                non traitée · −{o.nbPenalites} pt pour {o.equipe}
+                non traitée · {o.nbPenalites} pénalité{o.nbPenalites > 1 ? 's' : ''} pour {o.equipe}
               </b>
             )}
           </p>
         )}
         {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
-        {o.statut === 'fait' && peutSignaler && <FauxOkButton onConfirm={(note) => doFauxOk(o, note)} />}
+        {o.statut === 'fait' && peutSignaler && <FauxOkButton onConfirm={(motif, note) => doFauxOk(o, motif, note)} />}
         {retardId === o.id && (
           <div className="flex items-center gap-2 flex-wrap">
             <input
@@ -646,13 +647,13 @@ export default function DistributionPage() {
             <Clock className="w-4 h-4 text-slate-400 flex-shrink-0" />
             <span>
               Échéance à <b>22 h</b> : dérangement le jour de la remise, installation le lendemain, fiche <b>prioritaire</b> (déjà hors délai) le jour même.
-              Non traitée à l’échéance : <b>−1 point</b> par contrôle de 22 h, elle reste en cours. Réaffecter avant l’échéance ne pénalise pas
+              Non traitée à l’échéance : <b>{fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)}</b> par contrôle de 22 h, elle reste en cours. Réaffecter avant l’échéance ne pénalise pas
               {controle ? ` · dernier contrôle ${jourCourt(controle.jour)} (${controle.nbFiches} fiche${controle.nbFiches > 1 ? 's' : ''})` : ''}.
             </span>
           </span>
           <label className="inline-flex items-center gap-1.5 font-semibold text-slate-700">
             <input type="checkbox" checked={penaliser} onChange={(e) => setPenaliser(e.target.checked)} />
-            Retarder une fiche ouverte coûte 1 point à son équipe
+            Retarder une fiche ouverte coûte {ptsTexte(POINTS.penalites.retardee)} à son équipe
           </label>
         </Card>
 
@@ -665,7 +666,7 @@ export default function DistributionPage() {
                 {enRetard.length} fiche{enRetard.length > 1 ? 's' : ''} non traitée{enRetard.length > 1 ? 's' : ''} après l’échéance
               </p>
               <p className="text-xs text-red-700/80">
-                Laissez-les à l’équipe (−1 point à chaque contrôle de 22 h tant qu’elles ne sont pas traitées), réaffectez-les (la nouvelle équipe repart avec sa propre échéance) ou retardez-les.
+                Laissez-les à l’équipe ({fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)} à chaque contrôle de 22 h tant qu’elles ne sont pas traitées), réaffectez-les (la nouvelle équipe repart avec sa propre échéance) ou retardez-les.
               </p>
             </div>
             {retardGroups.map(([equipe, list]) => (

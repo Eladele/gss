@@ -365,7 +365,8 @@ export interface Penalite {
   jour: string; // YYYY-MM-DD
   motif: 'non_traitee' | 'reaffectee' | 'retardee' | 'faux_ok';
   points: number; // négatif
-  note: string | null; // motif d'un faux OK
+  note: string | null; // précision d'un faux OK (« Autre »), ou ancien motif libre
+  motifFauxOk: string | null; // code du motif d'un faux OK (MOTIFS_FAUX_OK)
   creeParNom: string | null; // vide = contrôle automatique de 22 h
   fgp: string;
   typeLigne: string;

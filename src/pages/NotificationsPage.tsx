@@ -31,7 +31,7 @@ const REMOTE_MARK: Record<AppNotification['type'], string> = {
   alimentation: '+',
   programme: '📋',
   programme_non_fait: '!',
-  programme_penalite: '−1',
+  programme_penalite: '−',
   info: 'i',
 };
 

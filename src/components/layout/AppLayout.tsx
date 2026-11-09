@@ -30,8 +30,10 @@ import {
   LogOut,
   Menu as MenuIcon,
   X,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Settings,
 } from 'lucide-react';
+import { InstallApkButton } from '@/components/InstallApkButton';
 
 // Pages
 import Dashboard from '@/pages/Dashboard';
@@ -57,7 +59,9 @@ import CaissesPage from '@/pages/CaissePage';
 import DistributionPage from '@/pages/DistributionPage';
 import PointsPage from '@/pages/PointsPage';
 import ExportSalairePage from '@/pages/ExportSalairePage';
+import ParametresPage from '@/pages/ParametresPage';
 import { DECHARGE_URL } from '@/utils/programme';
+import { useParametresStore } from '@/store/useParametresStore';
 
 type Page =
   | 'dashboard'
@@ -82,7 +86,8 @@ type Page =
   | 'caisses'
   | 'distribution'
   | 'points'
-  | 'export-salaire';
+  | 'export-salaire'
+  | 'parametres';
 
 type NavLeaf = { id: Page; label: string };
 type NavGroup = { group: string; label: string; children: NavLeaf[] };
@@ -160,6 +165,7 @@ const NAV: Record<Role, NavItem[]> = {
     RH_GROUP,
     { id: 'caisses', label: 'Caisses' },
     { id: 'notifications', label: 'Notifications' },
+    { id: 'parametres', label: 'Paramètres' },
   ],
   // Comptable / RH (ex: Betoul) — uniquement Employés et Prêts, rien d'opérationnel
   // (pas de Situations, Réseau, Déploiement).
@@ -219,6 +225,7 @@ const PAGE_TITLES: Record<Page, string> = {
   distribution: 'Distribuer le programme',
   points: 'Points des équipes',
   'export-salaire': 'Export Salaires (Excel)',
+  parametres: 'Paramètres',
 };
 
 const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
@@ -245,6 +252,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   distribution: Send,
   points: Trophy,
   'export-salaire': FileSpreadsheet,
+  parametres: Settings,
 };
 
 const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
@@ -278,6 +286,12 @@ export default function AppLayout() {
 
   // Notifications en base + temps réel (demandes de dépense, validations, alimentations)
   useEffect(() => startCaisses(user), [user.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Barème des points et en-tête du virement (page Paramètres) : chargés avant les pages
+  const parametresPrets = useParametresStore((s) => s.pret);
+  const chargerParametres = useParametresStore((s) => s.charger);
+  useEffect(() => {
+    chargerParametres();
+  }, [user.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (incoming) showToast(`${incoming.titre} — ${incoming.message}`, incoming.type === 'rejetee' ? 'warning' : 'info');
   }, [incoming]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -318,6 +332,7 @@ export default function AppLayout() {
     distribution: <DistributionPage />,
     points: <PointsPage />,
     'export-salaire': <ExportSalairePage />,
+    parametres: <ParametresPage />,
   };
 
   return (
@@ -343,6 +358,8 @@ export default function AppLayout() {
           <span className="font-semibold text-slate-800 text-sm hidden sm:block">{PAGE_TITLES[page]}</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Bouton permanent : Installer version APK */}
+          <InstallApkButton />
           <button
             onClick={() => setPage('notifications')}
             className="relative px-3 py-1.5 rounded-full hover:bg-slate-100 transition-colors text-xs font-semibold text-slate-600 border border-slate-200"
@@ -448,8 +465,8 @@ export default function AppLayout() {
                   setMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-medium transition-all text-left ${page === item.id
-                    ? 'bg-blue-50 text-blue-700 font-semibold'
-                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+                  ? 'bg-blue-50 text-blue-700 font-semibold'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
                   }`}
               >
                 {Icon && <Icon className={`w-5 h-5 ${page === item.id ? 'text-blue-600' : 'text-slate-400'}`} />}
@@ -478,6 +495,9 @@ export default function AppLayout() {
               Application décharge
             </a>
           )}
+          <div className="pt-3">
+            <InstallApkButton variant="sidebar" />
+          </div>
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -581,7 +601,13 @@ export default function AppLayout() {
 
         {/* Content */}
         <main className="flex-1 p-4 md:p-6 pb-24 md:pb-6 min-w-0">
-          {allowedPages(user.role).includes(page) ? PageMap[page] : PageMap[defaultPage]}
+          {!parametresPrets ? (
+            <div className="py-16 text-center text-sm text-slate-400">Chargement…</div>
+          ) : allowedPages(user.role).includes(page) ? (
+            PageMap[page]
+          ) : (
+            PageMap[defaultPage]
+          )}
         </main>
       </div>
 

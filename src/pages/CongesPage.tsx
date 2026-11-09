@@ -148,7 +148,7 @@ export default function CongesPage() {
     // ── Export ────────────────────────────────────────────────────────────────
     const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
     const [exportOrdre, setExportOrdre] = useState(() => `020/DG/GSS/${new Date().getFullYear()}`);
-    const FEUILLES_DISPO = ['BPM', 'Caisse', 'SGM', 'Récap'];
+    const FEUILLES_DISPO = ['BPM', 'Caisse', 'BII', 'Récap'];
     const [feuilles, setFeuilles] = useState<string[]>(FEUILLES_DISPO);
     const toggleFeuille = (f: string) =>
         setFeuilles((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]);

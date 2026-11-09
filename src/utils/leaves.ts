@@ -2,16 +2,24 @@ import ExcelJS from 'exceljs';
 import type { Employee, LeaveRecord, Loan } from '@/types';
 import { numberToFrenchWords } from './numberToWordsFr';
 import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
+import { ENTETE_DEFAUT, type EnteteVirement } from '@/lib/parametresService';
 
-const BANQUES_ORDER = ['BPM', 'Caisse', 'SGM'];
-export const SOCIETE = {
-  siege: 'Siège social : Nouakchott, K.Ext SOCOGIM  873 2E A1',
-  rc: ' RC N° : analytique:75781 chrono: 1522',
-  nif: 'NIF : 21104523 ',
-  destinataire: 'Monsieur Le Directeur Général de Banque Populaire Mauritanie',
-  compte: 'Par le débit de notre compte n° 1005194, veuillez virer la somme :',
-  signataire: 'MOHAMED YAHYA LIMAM',
-};
+const BANQUES_ORDER = ['BPM', 'Caisse', 'BII'];
+/**
+ * En-tête de l'ordre de virement — modifiable par l'administrateur (page Paramètres).
+ * Valeurs par défaut remplacées au démarrage par celles de la base (appliquerEnteteVirement).
+ */
+export const SOCIETE: EnteteVirement = { ...ENTETE_DEFAUT, banques: {} };
+
+export function appliquerEnteteVirement(e: EnteteVirement) {
+  Object.assign(SOCIETE, e, { banques: { ...e.banques } });
+}
+
+/** Destinataire et compte d'une banque (ceux de la banque s'ils sont renseignés, sinon les généraux) */
+export function enteteBanque(banque: string): { destinataire: string; compte: string } {
+  const b = SOCIETE.banques[banque] ?? {};
+  return { destinataire: b.destinataire || SOCIETE.destinataire, compte: b.compte || SOCIETE.compte };
+}
 import { resolveSignature, imageExtension, toDataUrl } from './signature';
 
 const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
@@ -150,7 +158,7 @@ function buildVirementSheet(
   const rBlank1 = ws.addRow([]);
   rBlank1.height = 6;
 
-  const rDate = ws.addRow(['', '', '', '', '', 'Nouakchott,', `le ${dateStr}`]);
+  const rDate = ws.addRow(['', '', '', '', '', `${SOCIETE.ville},`, `le ${dateStr}`]);
   rDate.height = 18;
   rDate.getCell(6).font = { name: 'Times New Roman', size: 13, italic: true };
   rDate.getCell(7).font = { name: 'Times New Roman', size: 13, italic: true };
@@ -170,12 +178,13 @@ function buildVirementSheet(
   rA.getCell(4).font = { name: 'Times New Roman', size: 13, bold: true };
   rA.getCell(4).alignment = { horizontal: 'center' };
 
-  const rDest = ws.addRow(['', '', SOCIETE.destinataire]);
+  const { destinataire, compte } = enteteBanque(banque);
+  const rDest = ws.addRow(['', '', destinataire]);
   rDest.getCell(3).font = { name: 'Times New Roman', size: 13, bold: true };
   rDest.getCell(3).alignment = { horizontal: 'center' };
   ws.mergeCells(rDest.number, 3, rDest.number, isBpm ? 9 : 8);
 
-  const rCompte = ws.addRow(['', '', SOCIETE.compte, undefined, undefined, total, 'MRU']);
+  const rCompte = ws.addRow(['', '', compte, undefined, undefined, total, 'MRU']);
   rCompte.getCell(3).font = { name: 'Times New Roman', size: 13 };
   rCompte.getCell(6).font = { name: 'Times New Roman', size: 13, bold: true, color: { argb: COLOR.accentDark } };
   rCompte.getCell(6).numFmt = MONTANT_FMT;
@@ -191,10 +200,10 @@ function buildVirementSheet(
   rLettres.getCell(3).font = { name: 'Times New Roman', size: 13 };
   rLettres.getCell(4).font = { name: 'Times New Roman', size: 13, bold: true };
 
-  const rMotif = ws.addRow(['', '', `Motif : Paiement employés pour le mois de ${motifMois}`]);
+  const rMotif = ws.addRow(['', '', `Motif : ${SOCIETE.motif} ${motifMois}`]);
   rMotif.getCell(3).font = { name: 'Times New Roman', size: 13, bold: true, underline: true };
 
-  const rFaveur = ws.addRow(['', '', 'En faveur de nos employés conformément au tableau suivant :']);
+  const rFaveur = ws.addRow(['', '', SOCIETE.faveur]);
   rFaveur.getCell(3).font = { name: 'Times New Roman', size: 13 };
 
   const rNombre = ws.addRow(['', '', 'Nombre:', employees.length]);
@@ -509,7 +518,7 @@ export async function exportEmployesPresentsExcel(opts: ExportPresentsOpts) {
 }
 /**
  * Même contenu que `exportEmployesPresentsExcel`, mais chaque feuille (BPM,
- * Caisse, SGM, Récap) est téléchargée comme un **fichier .xlsx séparé** au
+ * Caisse, BII, Récap) est téléchargée comme un **fichier .xlsx séparé** au
  * lieu d'onglets dans un seul classeur — pratique pour envoyer à chaque
  * banque son propre fichier sans les autres onglets.
  *

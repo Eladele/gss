@@ -39,7 +39,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-const FEUILLES_DISPO = ['BPM', 'Caisse', 'SGM', 'Récap'];
+const FEUILLES_DISPO = ['BPM', 'Caisse', 'BII', 'Récap'];
 
 const AVATAR_PALETTE = ['#1565C0', '#2E7D32', '#E9A93B', '#8E24AA', '#00838F', '#C62828', '#546E7A'];
 function colorFor(seed: string) {

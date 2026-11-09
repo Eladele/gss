@@ -332,9 +332,8 @@ export default function PretsPage() {
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                            l.statut === 'actif' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
-                          }`}
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${l.statut === 'actif' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'
+                            }`}
                         >
                           {l.statut === 'actif' ? 'Actif' : 'Soldé'}
                         </span>
@@ -474,7 +473,7 @@ export default function PretsPage() {
               <option value="Banque">Banque</option>
               <option value="Caisse">Caisse</option>
               <option value="BPM">BPM</option>
-              <option value="SGM">SGM</option>
+              <option value="BII">BII</option>
             </Select>
           </div>
 

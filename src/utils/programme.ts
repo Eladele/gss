@@ -72,15 +72,26 @@ export const MOTIF_PENALITE = {
   faux_ok: 'Faux OK (fiche marquée Fait à tort)',
 } as const;
 
-/** Motifs proposés pour signaler un faux OK */
+/** Motifs du faux OK — liste fixe (mêmes codes que la base, fonction libelle_faux_ok) */
 export const MOTIFS_FAUX_OK = [
-  'Client non raccordé',
-  'Pas de signal / ONT non scanné',
-  'Mauvais ONT ou mauvais DIS',
-  'Rechute (nouveau dérangement)',
-  'Travail incomplet',
-  'Client conteste',
-];
+  { code: 'client_non_raccorde', label: 'Client non raccordé' },
+  { code: 'pas_de_signal', label: 'Pas de signal' },
+  { code: 'mauvais_ont', label: 'Mauvais ONT / mauvais DIS' },
+  { code: 'rechute', label: 'Rechute' },
+  { code: 'ne_synchronise_pas', label: 'Ne synchronise pas' },
+  { code: 'aucune_decharge', label: 'Aucune décharge' },
+  { code: 'autre', label: 'Autre' },
+] as const;
+export type MotifFauxOk = (typeof MOTIFS_FAUX_OK)[number]['code'];
+/** Faux OK : réservé à l'administrateur et au superviseur (la base le vérifie aussi) */
+export const peutSignalerFauxOk = (role?: string) => role === 'admin' || role === 'superviseur';
+/** « Ne synchronise pas », « Autre : modem absent » ; ancien faux OK sans code : sa note */
+export const libelleFauxOk = (code: string | null | undefined, note?: string | null) => {
+  const label = MOTIFS_FAUX_OK.find((m) => m.code === code)?.label;
+  if (!label) return note ?? '';
+  if (code === 'autre') return note ? `Autre : ${note}` : 'Autre';
+  return note ? `${label} — ${note}` : label;
+};
 
 /** Poteaux à compter pour un motif (« Besoin 2 poteaux 350 m » → 2) */
 export const poteauxDuMotif = (motif: string, liste: MotifDef[]) => liste.find((m) => m.label === motif)?.poteaux ?? 0;

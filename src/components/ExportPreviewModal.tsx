@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui';
-import { SOCIETE } from '@/utils/leaves';
+import { SOCIETE, enteteBanque } from '@/utils/leaves';
 import type { ExportPreview, PreviewVirementSheet, PreviewRecapSheet } from '@/utils/leaves';
 
 const C = { accent: '#0A7F94', dark: '#075A68', band: '#EAF5F7', total: '#D6EDF1', info: '#F4FAFB', border: '#B9DCE2' };
@@ -9,6 +9,7 @@ const cell = { border: `1px solid ${C.border}` };
 
 function VirementView({ s, logo, signature }: { s: PreviewVirementSheet; logo: string; signature: string }) {
   const heads = ['Ordre', 'Mle', 'NOM et PRENOM', 'Banque', s.banque === 'BPM' ? 'Numéro de compte' : 'RIB', 'Montant (MRU)'];
+  const { destinataire, compte } = enteteBanque(s.banque);
   return (
     <div className="bg-white shadow border border-slate-200 mx-auto p-6 text-[13px] text-slate-800" style={{ maxWidth: 820, fontFamily: '"Times New Roman", serif' }}>
       <img src={logo} alt="GSS" className="h-16 mb-2" />
@@ -17,17 +18,17 @@ function VirementView({ s, logo, signature }: { s: PreviewVirementSheet; logo: s
         <p>{SOCIETE.rc}</p>
         <p className="font-bold">{SOCIETE.nif}</p>
       </div>
-      <p className="text-right italic">Nouakchott, le {s.dateStr}</p>
+      <p className="text-right italic">{SOCIETE.ville}, le {s.dateStr}</p>
       <h2 className="text-center font-bold text-xl py-2 mb-3" style={{ color: C.dark, borderBottom: `2px solid ${C.accent}` }}>
         ORDRE DE VIREMENT N° {s.ordreNum}
       </h2>
       <p className="text-center font-bold">A</p>
-      <p className="text-center font-bold mb-2">{SOCIETE.destinataire}</p>
-      <p>{SOCIETE.compte} <strong style={{ color: C.dark }}>{fmt(s.total)} MRU</strong></p>
+      <p className="text-center font-bold mb-2">{destinataire}</p>
+      <p>{compte} <strong style={{ color: C.dark }}>{fmt(s.total)} MRU</strong></p>
       <p>En chiffres : <strong style={{ color: C.dark }}>{fmt(s.total)} MRU</strong></p>
       <p>En lettres : <strong>{s.totalLettres}</strong></p>
-      <p className="font-bold underline mt-2">Motif : Paiement employés pour le mois de {s.motifMois}</p>
-      <p>En faveur de nos employés conformément au tableau suivant :</p>
+      <p className="font-bold underline mt-2">Motif : {SOCIETE.motif} {s.motifMois}</p>
+      <p>{SOCIETE.faveur}</p>
       <p>Nombre : <strong>{s.rows.length}</strong></p>
 
       <table className="w-full border-collapse mt-3 text-xs">

@@ -7,7 +7,8 @@
 //     avant 22 h ;
 //   • sinon, échéance de l'équipe : dérangement → le jour de la remise avant 22 h ; installation →
 //     le jour ouvré suivant avant 22 h (ex. remise aujourd'hui → avant demain 22 h) ;
-//   • +1 point si le chef marque « Fait » avant l'échéance (moitié pour une panne réseau).
+//   • points du barème (page Paramètres, par défaut +1) si le chef marque « Fait » avant
+//     l'échéance (moitié pour une panne réseau).
 // L'échéance et la priorité sont calculées par la base (vue situations_detail, mêmes règles) ;
 // ce module ne les recalcule que si elles manquent.
 // Pénalités (enregistrées par la base, table penalites) : −1 par fiche ni faite ni « non faite »
@@ -16,20 +17,48 @@
 import { DELAI_THRESHOLD_DRG, DELAI_THRESHOLD_INSTALLATION, PUBLIC_HOLIDAYS } from '@/utils/stats';
 import { estMotifReseau } from '@/utils/programme';
 import type { Penalite, ProgrammeOT } from '@/types';
+import { BAREME_DEFAUT, type Bareme } from '@/lib/parametresService';
 
-/** Barème — modifiable ici, tout le reste suit */
+/**
+ * Barème en vigueur — modifiable par l'administrateur (page Paramètres, enregistré dans la base).
+ * Valeurs par défaut ci-dessous ; remplacées au démarrage par celles de la base (appliquerBareme).
+ * Les pénalités déjà enregistrées gardent la valeur qu'elles avaient à leur création.
+ */
 export const POINTS = {
-  dansDelai: 1, // fiche faite dans le délai
-  horsDelai: 0, // fiche faite après le délai
-  nonFait: 0, // fiche marquée « non fait »
+  dansDelai: BAREME_DEFAUT.faitDansDelai, // fiche faite dans le délai
+  horsDelai: BAREME_DEFAUT.faitHorsDelai, // fiche faite après le délai
+  nonFait: BAREME_DEFAUT.nonFait, // fiche marquée « non fait »
   // fiche faite dont le motif est une panne réseau (câble distribution / transport coupé,
-  // HUB-BOX / SUB-BOX défectueux) : moitié du point
-  coefReseau: 0.5,
-  penalite: -1, // affichage seulement : la valeur enregistrée est celle de la base
+  // HUB-BOX / SUB-BOX défectueux) : coefficient du point (0,5 = moitié)
+  coefReseau: BAREME_DEFAUT.coefReseau,
+  // pénalités (affichage : la valeur enregistrée sur chaque pénalité est celle de la base)
+  penalite: BAREME_DEFAUT.penaliteNonTraitee,
+  penalites: {
+    non_traitee: BAREME_DEFAUT.penaliteNonTraitee,
+    retardee: BAREME_DEFAUT.penaliteRetardee,
+    reaffectee: BAREME_DEFAUT.penaliteReaffectee,
+    faux_ok: BAREME_DEFAUT.penaliteFauxOk,
+  } as Record<Penalite['motif'], number>,
 };
 
-/** Arrondi à 0,5 près pour l'affichage (0.5 + 0.5 + … sans erreur de virgule) */
-export const fmtPts = (n: number) => (Math.round(n * 2) / 2).toLocaleString('fr-FR');
+/** Applique le barème enregistré par l'administrateur */
+export function appliquerBareme(b: Bareme) {
+  POINTS.dansDelai = b.faitDansDelai;
+  POINTS.horsDelai = b.faitHorsDelai;
+  POINTS.nonFait = b.nonFait;
+  POINTS.coefReseau = b.coefReseau;
+  POINTS.penalite = b.penaliteNonTraitee;
+  POINTS.penalites = { non_traitee: b.penaliteNonTraitee, retardee: b.penaliteRetardee, reaffectee: b.penaliteReaffectee, faux_ok: b.penaliteFauxOk };
+}
+
+/** Arrondi au centième pour l'affichage (0.5 + 0.5 + … sans erreur de virgule) : « 1,5 », « −1 » */
+export const fmtPts = (n: number) => (Math.round(n * 100) / 100 || 0).toLocaleString('fr-FR').replace('-', '−');
+/** « +1 », « −0,5 », « 0 » */
+export const fmtPtsSigne = (n: number) => (n > 0 ? `+${fmtPts(n)}` : fmtPts(n));
+/** « point » ou « points » selon la valeur */
+export const motPoint = (n: number) => (Math.abs(n) > 1 ? 'points' : 'point');
+/** « 1 point », « 2 points », « 0,5 point » (valeur absolue) */
+export const ptsTexte = (n: number) => `${fmtPts(Math.abs(n))} point${Math.abs(n) > 1 ? 's' : ''}`;
 
 const DAY = 86400000;
 const HOLIDAYS = new Set(PUBLIC_HOLIDAYS);

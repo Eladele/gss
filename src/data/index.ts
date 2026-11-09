@@ -386,7 +386,7 @@ export const MATERIEL_CATALOGUE: string[] = [
   'EPI (Casque, gants, gilet, chaussures)',
 ];
 
-export const BANQUES: string[] = ['BPM', 'Caisse', 'SGM'];
+export const BANQUES: string[] = ['BPM', 'Caisse', 'BII'];
 
 export const ETAT_MATERIEL_LABELS: Record<string, string> = {
   neuf: 'Neuf',

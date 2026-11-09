@@ -3,7 +3,7 @@ import { Cable, Check, ClipboardCopy, Copy, MapPin, Phone, RotateCcw, X } from '
 import type { ProgrammeOT } from '@/types';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, fmtTel, ligneLabel } from '@/utils/programme';
 import { TypeBadge } from '@/components/ui';
-import { ETAT_DELAI, delaiOT, fmtPts, jourCourt } from '@/utils/points';
+import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
 import type { ScanOT } from '@/lib/programmeService';
 
@@ -83,10 +83,11 @@ export function OtCard({
             <DelaiBadge d={delai} today={today} />
             {ot.nbPenalites > 0 && (
               <span
-                title="Fiche ni faite ni « non faite » au contrôle de 22 h (ou retardée) : 1 point de moins par pénalité"
+                title="Fiche ni faite ni « non faite » au contrôle de 22 h (ou retardée) : nombre de pénalités"
                 className="text-[11px] font-bold px-2 py-0.5 rounded-full border bg-red-600 text-white border-red-600"
               >
-                {ot.statut === 'a_faire' ? 'En cours · ' : ''}−{ot.nbPenalites} pt
+                {ot.statut === 'a_faire' ? 'En cours · ' : ''}
+                {ot.nbPenalites} pénalité{ot.nbPenalites > 1 ? 's' : ''}
               </span>
             )}
           </div>
@@ -151,7 +152,7 @@ export function OtCard({
         </p>
         {ot.statut === 'a_faire' && ot.commentaire.startsWith('Faux OK') && (
           <p className="text-[11px] font-bold rounded-md px-2 py-1 bg-red-600 text-white">
-            Rouverte : {ot.commentaire} — la fiche avait été marquée « Fait » à tort (−1 point). À refaire.
+            Rouverte : {ot.commentaire} — la fiche avait été marquée « Fait » à tort ({fmtPts(POINTS.penalites.faux_ok)} {motPoint(POINTS.penalites.faux_ok)}). À refaire.
           </p>
         )}
         {ot.statut === 'a_faire' && (
@@ -159,10 +160,10 @@ export function OtCard({
             OT reçu le {jourCourt(delai.recuLe)} (délai officiel {jourCourt(delai.echeanceOfficielle)})
             {delai.confieLe ? ` · reçu par l’équipe le ${jourCourt(delai.confieLe)}` : ''} ·{' '}
             {delai.etat === 'retard'
-              ? `échéance dépassée (${jourCourt(delai.echeance)} 22 h) : −1 point à chaque contrôle de 22 h tant qu’elle n’est pas traitée.`
+              ? `échéance dépassée (${jourCourt(delai.echeance)} 22 h) : ${fmtPts(POINTS.penalites.non_traitee)} ${motPoint(POINTS.penalites.non_traitee)} à chaque contrôle de 22 h tant qu’elle n’est pas traitée.`
               : delai.prioritaire
-                ? `déjà hors délai : prioritaire, à faire le ${jourCourt(delai.echeance)} avant 22 h, sinon −1 point.`
-                : `à faire avant le ${jourCourt(delai.echeance)} 22 h, sinon −1 point.`}
+                ? `déjà hors délai : prioritaire, à faire le ${jourCourt(delai.echeance)} avant 22 h, sinon ${ptsTexte(POINTS.penalites.non_traitee)} de moins.`
+                : `à faire avant le ${jourCourt(delai.echeance)} 22 h, sinon ${ptsTexte(POINTS.penalites.non_traitee)} de moins.`}
           </p>
         )}
         <ScanInfo ot={ot} scan={scan} />
@@ -326,7 +327,7 @@ function DelaiBadge({ d, today }: { d: ReturnType<typeof delaiOT>; today: string
     <span
       title={`OT reçu le ${d.recuLe.split('-').reverse().join('/')} · reçu par l'équipe le ${d.depart.split('-').reverse().join('/')} · échéance de l'équipe le ${d.echeance.split('-').reverse().join('/')} à 22 h`} className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${cls}`}>
       {label}
-      {d.etat === 'dans' ? ` · +${fmtPts(d.points)} pt` : ''}
+      {d.etat === 'dans' && d.points ? ` · ${d.points > 0 ? '+' : ''}${fmtPts(d.points)} pt` : ''}
     </span>
   );
 }

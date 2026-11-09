@@ -12,8 +12,8 @@ import {
   subscribeProgramme,
 } from '@/lib/programmeService';
 import { FauxOkButton } from '@/components/programme/FauxOk';
-import { ETAT_DELAI, POINTS, classement, delaiOT, fmtPts, jourCourt } from '@/utils/points';
-import { MOTIF_PENALITE, NATURE_CLASS, NATURE_LABEL, ligneLabel } from '@/utils/programme';
+import { ETAT_DELAI, POINTS, classement, delaiOT, fmtPts, fmtPtsSigne, jourCourt, motPoint } from '@/utils/points';
+import { MOTIF_PENALITE, NATURE_CLASS, NATURE_LABEL, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
 import { downloadWorkbookBuffer } from '@/utils/stats';
 import type { ClotureAVerifier, Penalite, ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
@@ -38,7 +38,7 @@ export default function PointsPage() {
   const equipes = useAppStore((s) => s.equipes);
   const user = useAppStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
-  const peutSignaler = user?.role === 'admin' || user?.role === 'superviseur';
+  const peutSignaler = peutSignalerFauxOk(user?.role);
   const [aVerifier, setAVerifier] = useState<ClotureAVerifier[]>([]);
   const { showToast } = useToast();
   const [penalites, setPenalites] = useState<Penalite[]>([]);
@@ -74,12 +74,17 @@ export default function PointsPage() {
   const pensScoped = useMemo(() => penalites.filter((p) => nature === 'all' || p.nature === nature), [penalites, nature]);
   const rows = useMemo(() => classement(scoped, pensScoped), [scoped, pensScoped]);
   const maxPts = Math.max(1, ...rows.map((r) => r.points));
-  const fauxOk = async (c: ClotureAVerifier, note: string) => {
+  /** Faux OK depuis « clôtures à vérifier » ou depuis le détail d'une équipe */
+  const fauxOk = async (c: Pick<ClotureAVerifier, 'id' | 'equipe' | 'fgp' | 'typeLigne'>, motif: MotifFauxOk, note: string) => {
     if (!user) return;
     try {
-      await signalerFauxOk(c.id, user, note);
+      await signalerFauxOk(c.id, user, motif, note);
+      // la fiche est rouverte (nouvelle échéance) et la pénalité est créée : on recharge
+      const [rows2, pens2] = await Promise.all([fetchPourPoints(from, to), fetchPenalites(from, to)]);
+      setOts(rows2);
+      setPenalites(pens2);
       setAVerifier((cur) => cur.filter((x) => x.id !== c.id));
-      showToast(`${ligneLabel(c)} : faux OK — −1 point pour ${c.equipe}, fiche rouverte`, 'warning');
+      showToast(`${ligneLabel(c)} : faux OK (${libelleFauxOk(motif, note)}) — ${fmtPts(POINTS.penalites.faux_ok)} pt pour ${c.equipe}, fiche rouverte`, 'warning');
     } catch (e) {
       showToast(errMsg(e), 'error');
     }
@@ -138,7 +143,7 @@ export default function PointsPage() {
       const wp = wb.addWorksheet('Pénalités');
       wp.addRow(['Jour', 'Équipe', 'Motif', 'Détail', 'Points', 'Ligne', 'Client', 'N° OT', 'Par']).font = { bold: true };
       pensScoped.forEach((p) =>
-        wp.addRow([p.jour, p.equipe, MOTIF_PENALITE[p.motif], p.note ?? '', p.points, ligneLabel(p), p.clientNom, p.numeroOt, p.creeParNom ?? 'Contrôle de 22 h']),
+        wp.addRow([p.jour, p.equipe, MOTIF_PENALITE[p.motif], p.motif === 'faux_ok' ? libelleFauxOk(p.motifFauxOk, p.note) : (p.note ?? ''), p.points, ligneLabel(p), p.clientNom, p.numeroOt, p.creeParNom ?? 'Contrôle de 22 h']),
       );
       wp.columns.forEach((c) => (c.width = 18));
       downloadWorkbookBuffer((await wb.xlsx.writeBuffer()) as ArrayBuffer, `points-equipes-${from}-${to}.xlsx`);
@@ -202,17 +207,19 @@ export default function PointsPage() {
           ))}
         </div>
         <p className="text-xs text-slate-500">
-          <b>{POINTS.dansDelai} point</b> par fiche marquée « Fait » avant son échéance de <b>22 h</b> : dérangement le jour où l’équipe l’a reçue,
+          <b>{fmtPtsSigne(POINTS.dansDelai)} {motPoint(POINTS.dansDelai)}</b> par fiche marquée « Fait » avant son échéance de <b>22 h</b> : dérangement le jour où l’équipe l’a reçue,
           installation le jour ouvré suivant. Fiche <b>prioritaire</b> (délai officiel depuis « OT reçu le » déjà dépassé quand l’équipe la reçoit) : le
           jour même. Dimanches et jours fériés non comptés. Période : fiches reçues du{' '}
           {from.split('-').reverse().join('/')} au {to.split('-').reverse().join('/')}.
         </p>
         <p className="text-xs text-slate-500">
-          <b>Demi-point</b> quand la fiche faite a pour motif une panne réseau (câble distribution ou transport coupé, HUB-BOX ou SUB-BOX défectueux).{' '}
-          <b className="text-red-700">{POINTS.penalite} point</b> par fiche ni faite ni « non faite » au contrôle de 22 h une fois son échéance arrivée
-          (et à chaque contrôle suivant), et quand une fiche ouverte est retardée. Réaffecter une fiche avant son échéance ne pénalise pas.{' '}
-          <b className="text-red-700">Faux OK</b> (fiche marquée « Fait » à tort, signalée par l’admin ou le superviseur) : le +1 est perdu et −1 en plus, la
-          fiche est rouverte.
+          Hors délai : <b>{fmtPtsSigne(POINTS.horsDelai)}</b> · « non fait » : <b>{fmtPtsSigne(POINTS.nonFait)}</b> · panne réseau (câble distribution ou
+          transport coupé, HUB-BOX ou SUB-BOX défectueux) : points <b>× {fmtPts(POINTS.coefReseau)}</b>.{' '}
+          <b className="text-red-700">{fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)}</b> par fiche ni faite ni « non faite » au contrôle de 22 h une fois son
+          échéance arrivée (et à chaque contrôle suivant), <b className="text-red-700">{fmtPts(POINTS.penalites.retardee)}</b> quand une fiche ouverte est
+          retardée. Réaffecter une fiche avant son échéance ne pénalise pas.{' '}
+          <b className="text-red-700">Faux OK</b> (fiche marquée « Fait » à tort, signalée par l’admin ou le superviseur) : la fiche perd ses points et
+          l’équipe prend <b className="text-red-700">{fmtPts(POINTS.penalites.faux_ok)}</b>, la fiche est rouverte.
         </p>
       </Card>
 
@@ -225,8 +232,8 @@ export default function PointsPage() {
                 {aVerifier.length} clôture{aVerifier.length > 1 ? 's' : ''} à vérifier
               </p>
               <p className="text-xs text-amber-800/80">
-                Fiches marquées « Fait » ces 30 derniers jours qui semblent inexactes. Si c’est un faux OK : l’équipe perd son point (+1), prend −1, et la
-                fiche est rouverte chez elle.
+                Fiches marquées « Fait » ces 30 derniers jours qui semblent inexactes. Si c’est un faux OK : la fiche perd ses points, l’équipe prend{' '}
+                {fmtPts(POINTS.penalites.faux_ok)} et la fiche est rouverte chez elle.
               </p>
             </div>
           </div>
@@ -246,7 +253,7 @@ export default function PointsPage() {
                   </span>
                 </p>
               </div>
-              <FauxOkButton compact onConfirm={(note) => fauxOk(c, note)} />
+              <FauxOkButton compact onConfirm={(motif, note) => fauxOk(c, motif, note)} />
             </div>
           ))}
         </Card>
@@ -346,8 +353,11 @@ export default function PointsPage() {
                             </p>
                           </div>
                           <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${ETAT_DELAI[d.etat].cls}`}>{ETAT_DELAI[d.etat].label}</span>
-                          <span className="w-10 text-right font-bold tabular-nums" title={d.reseau ? 'Panne réseau : demi-point' : undefined}>
-                            {d.points ? `+${fmtPts(d.points)}` : '0'}
+                          {o.statut === 'fait' && peutSignaler && (
+                            <FauxOkButton compact onConfirm={(motif, note) => fauxOk({ id: o.id, equipe: r.equipe, fgp: o.fgp, typeLigne: o.typeLigne }, motif, note)} />
+                          )}
+                          <span className="w-10 text-right font-bold tabular-nums" title={d.reseau ? 'Panne réseau : points × coefficient réseau' : undefined}>
+                            {fmtPtsSigne(d.points)}
                           </span>
                         </div>
                       ))}
@@ -362,7 +372,8 @@ export default function PointsPage() {
                               </p>
                               <p className="text-[11px] text-slate-500">
                                 {MOTIF_PENALITE[p.motif]}
-                                {p.note ? ` (${p.note})` : ''} · {jourCourt(p.jour)}
+                                {p.motif === 'faux_ok' ? (libelleFauxOk(p.motifFauxOk, p.note) ? ` : ${libelleFauxOk(p.motifFauxOk, p.note)}` : '') : p.note ? ` (${p.note})` : ''} ·{' '}
+                                {jourCourt(p.jour)}
                                 {p.creeParNom ? ` · par ${p.creeParNom}` : ' · contrôle automatique'}
                               </p>
                             </div>

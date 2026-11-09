@@ -224,7 +224,7 @@ export default function EmployesPage() {
                 <option value="">Toutes les banques</option>
                 <option value="BPM">BPM</option>
                 <option value="Caisse">Caisse</option>
-                <option value="SGM">SGM</option>
+                <option value="BII">BII</option>
               </Select>
 
               <Select
@@ -329,18 +329,16 @@ export default function EmployesPage() {
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                            solde < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
-                          }`}
+                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${solde < 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                            }`}
                         >
                           {solde}j / {SOLDE_ANNUEL}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-center">
                         <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${
-                            e.actif ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
-                          }`}
+                          className={`px-2 py-0.5 rounded-full text-xs font-bold ${e.actif ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+                            }`}
                         >
                           {e.actif ? 'Actif' : 'Inactif'}
                         </span>

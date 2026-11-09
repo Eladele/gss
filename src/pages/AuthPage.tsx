@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { loginWithCredentials } from '@/lib/supabaseService';
+import { InstallApkButton } from '@/components/InstallApkButton';
 
 export default function AuthPage() {
   const login = useAppStore((s) => s.login);
@@ -31,7 +32,12 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 relative">
+      {/* Bouton en haut : Installer version APK */}
+      <div className="absolute top-4 right-4 z-20">
+        <InstallApkButton />
+      </div>
+
       <div className="w-full max-w-sm mx-4">
         {/* Brand */}
         <div className="text-center mb-10">

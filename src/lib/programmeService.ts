@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import type { ClotureAVerifier, OtStatut, Penalite, ProgrammeOT } from '@/types';
 import type { ParsedOT } from '@/utils/otPdf';
+import type { MotifFauxOk } from '@/utils/programme';
 import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts } from './refs';
 
 // Les fiches OT du programme sont des situations dont `numero_ot` est renseigné.
@@ -343,6 +344,7 @@ const mapPenalite = (r: any): Penalite => ({
   points: Number(r.points) || 0,
   creeParNom: r.cree_par_nom ?? null,
   note: r.note ?? null,
+  motifFauxOk: r.motif_faux_ok ?? null,
   fgp: r.fgp ?? '',
   typeLigne: r.type_ligne ?? 'FGP',
   clientNom: r.client_nom ?? '',
@@ -362,10 +364,17 @@ export async function fetchPenalites(from: string, to: string): Promise<Penalite
   return (data ?? []).map(mapPenalite);
 }
 
-/** Fiche marquée « Fait » à tort : −1 pour l'équipe, fiche rouverte chez elle (le +1 disparaît) */
-export async function signalerFauxOk(id: string, par: Par, note: string): Promise<void> {
-  const { error } = await supabase.rpc('signaler_faux_ok', { p_id: id, p_par: par.id, p_note: note });
-  if (error) throw dbError(error, 'Signalement impossible');
+/**
+ * Fiche marquée « Fait » à tort : pénalité « faux OK » du barème pour l'équipe, fiche rouverte
+ * chez elle (ses points disparaissent). motif : code de MOTIFS_FAUX_OK ; « autre » → note obligatoire.
+ */
+export async function signalerFauxOk(id: string, par: Par, motif: MotifFauxOk, note = ''): Promise<void> {
+  const { error } = await supabase.rpc('signaler_faux_ok', { p_id: id, p_par: par.id, p_motif: motif, p_note: note });
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883')
+      throw new Error('Les motifs du faux OK ne sont pas encore installés (exécuter supabase_parametres.sql).');
+    throw dbError(error, 'Signalement impossible');
+  }
 }
 
 /** OK suspects (ONT non scanné après l'installation, nouveau dérangement sur le FGP) */

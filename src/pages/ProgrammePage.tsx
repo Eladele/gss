@@ -7,7 +7,7 @@ import { cloturer, fetchPenalites, fetchPourPoints, fetchProgramme, fetchScanOts
 import { ExternalLink, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
 import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
-import { classement, delaiOT, fmtPts } from '@/utils/points';
+import { POINTS, classement, delaiOT, fmtPts, fmtPtsSigne } from '@/utils/points';
 import { errMsg } from '@/utils';
 
 // ─── Programme du chef d'équipe : uniquement les fiches OT distribuées ────────
@@ -269,7 +269,7 @@ function PointsEquipe({ team }: { team: string }) {
           <b>{txt.rang === 1 ? '1re' : `${txt.rang}e`}</b> sur {txt.nb} équipe{txt.nb > 1 ? 's' : ''} · {txt.pct} % dans le délai
         </p>
         <p className="text-xs text-slate-400">
-          +1 par fiche faite avant son échéance (22 h) · −1 par fiche non traitée à 22 h
+          {fmtPtsSigne(POINTS.dansDelai)} par fiche faite avant son échéance (22 h) · {fmtPts(POINTS.penalites.non_traitee)} par fiche non traitée à 22 h
           {txt.retard ? ` · ${txt.retard} en retard` : ''}
           {txt.penalites ? ` · ${txt.penalites} pénalité${txt.penalites > 1 ? 's' : ''}` : ''}
         </p>
