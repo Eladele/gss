@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarClock, CalendarDays, Clock, Copy, FileUp, MapPin, MessageCircle, Pin, Send, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CalendarDays, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, Send, Trash2 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
@@ -12,6 +12,7 @@ import {
   fetchDernierControle,
   fetchEnRetard,
   fetchProgramme,
+  marquerUrgent,
   rattraperControles,
   reassign,
   retarder,
@@ -19,6 +20,7 @@ import {
   situationsOuvertes,
   subscribeProgramme,
 } from '@/lib/programmeService';
+import { AffecterUrgentModal } from '@/components/programme/AffecterUrgentModal';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
 import { POINTS, estPrioritaire, fmtPts, jourCourt, jourRemise, motPoint, ptsTexte } from '@/utils/points';
 import { ClotureResume } from '@/components/programme/OtCard';
@@ -150,12 +152,17 @@ async function shareWhatsApp(text: string, showToast: (m: string, t?: 'success' 
   }
 }
 
-function RowCells({ o, prioritaire }: { o: Row; prioritaire?: boolean }) {
+function RowCells({ o, prioritaire, isUrgent }: { o: Row; prioritaire?: boolean; isUrgent?: boolean }) {
   return (
     <>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
-          {prioritaire && (
+          {isUrgent && (
+            <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-orange-600 text-white flex items-center gap-1 shadow-sm" title="Cas urgent à traiter en priorité absolue">
+              <Flame className="w-3 h-3 text-yellow-300" /> URGENT
+            </span>
+          )}
+          {prioritaire && !isUrgent && (
             <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-red-600 text-white" title="Délai officiel (depuis « OT reçu le ») déjà dépassé : à faire le jour même avant 22 h">
               PRIORITAIRE
             </span>
@@ -286,6 +293,7 @@ export default function DistributionPage() {
   const [retardId, setRetardId] = useState<string | null>(null);
   const [retardDate, setRetardDate] = useState(() => addDays(todayISO(), 1));
   const [controle, setControle] = useState<{ jour: string; nbFiches: number } | null>(null);
+  const [urgentModalOpen, setUrgentModalOpen] = useState(false);
 
   // Contrôle de 22 h : rattrape un contrôle manqué (tâche automatique arrêtée), puis l'affiche
   useEffect(() => {
@@ -374,11 +382,17 @@ export default function DistributionPage() {
 
   /** Une fiche du suivi avec ses actions (réaffecter, retarder, retirer) */
   const ficheSuivi = (o: ProgrammeOT, showDate = false) => (
-    <div key={o.id} className="flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0">
+    <div key={o.id} className={`flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0 ${o.isUrgent ? 'bg-orange-50/25' : ''}`}>
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex">
-          <RowCells o={o} prioritaire={o.statut === 'a_faire' && o.prioritaire} />
+          <RowCells o={o} prioritaire={o.statut === 'a_faire' && o.prioritaire} isUrgent={o.isUrgent} />
         </div>
+        {o.statut === 'a_faire' && o.isUrgent && o.motif && (
+          <p className="text-[11px] font-semibold text-orange-800 flex items-center gap-1">
+            <Flame className="w-3 h-3 text-orange-600 flex-shrink-0" />
+            Urgence : {o.motif}
+          </p>
+        )}
         {(o.statut === 'a_faire' || o.nbPenalites > 0) && (
           <p className="text-[11px] text-slate-500">
             {showDate && <>Prévue le {jourCourt(o.dateProgramme)} · </>}
@@ -418,6 +432,28 @@ export default function DistributionPage() {
         </span>
         {o.statut === 'a_faire' && (
           <div className="flex items-center gap-1">
+            <button
+              aria-label={o.isUrgent ? 'Retirer le statut urgent' : 'Passer en cas urgent'}
+              title={o.isUrgent ? 'Cas urgent activé : cliquer pour désactiver' : 'Marquer comme cas urgent'}
+              onClick={async () => {
+                try {
+                  await marquerUrgent(o.id, !o.isUrgent);
+                  showToast(
+                    `${ligneLabel(o)} : ${!o.isUrgent ? 'marqué en cas urgent 🔥' : 'statut urgent retiré'}`,
+                    !o.isUrgent ? 'warning' : 'info',
+                  );
+                } catch (err) {
+                  showToast(errMsg(err), 'error');
+                }
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                o.isUrgent
+                  ? 'bg-orange-600 text-white shadow-sm ring-2 ring-orange-300'
+                  : 'text-slate-400 hover:text-orange-600 hover:bg-orange-50'
+              }`}
+            >
+              <Flame className="w-3.5 h-3.5" />
+            </button>
             <Select aria-label="Réaffecter" className="!py-1 !text-xs" value={o.equipe} onChange={(e) => doReassign(o, e.target.value)}>
               {!equipeNames.includes(o.equipe) && <option value={o.equipe}>{o.equipe || '—'}</option>}
               {equipeNames.map((nm) => (
@@ -462,12 +498,23 @@ export default function DistributionPage() {
 
   return (
     <div className="space-y-6 animate-fade-in pb-24 md:pb-6">
-      <div>
-        <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Raccordement · fiches OT Mauritel</p>
-        <h1 className="text-2xl font-black text-slate-900">Distribuer le programme</h1>
-        <p className="text-sm text-slate-500 mt-1">
-          Importez les PDF « OT Dérangement » et « OT Réseau ». Chaque fiche part à l’équipe de sa zone avec le client, ses numéros, le DIS et l’ONT.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Raccordement · fiches OT Mauritel</p>
+          <h1 className="text-2xl font-black text-slate-900">Distribuer le programme</h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Importez les PDF « OT Dérangement » et « OT Réseau ». Chaque fiche part à l’équipe de sa zone avec le client, ses numéros, le DIS et l’ONT.
+          </p>
+        </div>
+        <Button
+          variant="danger"
+          size="md"
+          icon={<Flame className="w-4 h-4 text-yellow-300 animate-pulse" />}
+          onClick={() => setUrgentModalOpen(true)}
+          className="shadow-md shadow-orange-600/20 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-bold"
+        >
+          Affecter cas urgent
+        </Button>
       </div>
 
       {/* Zone d'import */}
@@ -630,7 +677,18 @@ export default function DistributionPage() {
       {/* Suivi du programme distribué */}
       <div className="space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <h2 className="text-lg font-black text-slate-900">Suivi du programme</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-lg font-black text-slate-900">Suivi du programme</h2>
+            <Button
+              variant="outline"
+              size="sm"
+              icon={<Flame className="w-3.5 h-3.5 text-orange-600 animate-pulse" />}
+              onClick={() => setUrgentModalOpen(true)}
+              className="text-orange-700 border-orange-300 hover:bg-orange-50 font-bold"
+            >
+              + Cas urgent
+            </Button>
+          </div>
           <label className="inline-flex items-center gap-2 text-sm text-slate-600">
             <CalendarDays className="w-4 h-4" />
             <input
@@ -760,6 +818,27 @@ export default function DistributionPage() {
           );
         })}
       </div>
+
+      {urgentModalOpen && (
+        <AffecterUrgentModal
+          open={urgentModalOpen}
+          onClose={() => setUrgentModalOpen(false)}
+          equipeNames={equipeNames}
+          zoneEquipe={zoneEquipe}
+          user={user}
+          fichesActuelles={[...hist, ...enRetard]}
+          onSuccess={(msg) => {
+            showToast(msg, 'success');
+            Promise.all([
+              fetchProgramme({ from: histDate, to: histDate }),
+              histDate === todayISO() ? fetchEnRetard(histDate) : Promise.resolve([]),
+            ]).then(([rows, retard]) => {
+              setHist(rows);
+              setEnRetard(retard);
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

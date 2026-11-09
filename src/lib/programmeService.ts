@@ -66,6 +66,7 @@ function mapOt(r: any): ProgrammeOT {
     nbPenalites: Number(r.nb_penalites) || 0,
     echeanceEquipe: r.echeance_equipe ?? null,
     prioritaire: !!r.prioritaire,
+    isUrgent: !!(r.is_urgent || r.status === 'urgent'),
     createdAt: r.created_at,
   };
 }
@@ -329,6 +330,183 @@ export async function fetchEnRetard(avant: string): Promise<ProgrammeOT[]> {
     .order('echeance_equipe')
     .limit(1000);
   if (error) throw dbError(error, 'Chargement des fiches en retard impossible');
+  return (data ?? []).map(mapOt);
+}
+
+// ─── Cas urgents (dérangements & installations) ──────────────────────────────
+
+/** Active ou désactive le marquage urgent d'une fiche */
+export async function marquerUrgent(id: string, isUrgent = true): Promise<void> {
+  const now = new Date().toISOString();
+  const { data: cur } = await supabase.from(TABLE).select('status').eq('id', id).maybeSingle();
+  const updateData: Record<string, unknown> = {
+    is_urgent: isUrgent,
+    updated_at: now,
+  };
+  if (cur && OUVERT.includes(cur.status)) {
+    updateData.status = isUrgent ? 'urgent' : 'pending';
+  }
+  const { error } = await supabase.from(TABLE).update(updateData).eq('id', id);
+  if (error) throw dbError(error, 'Mise à jour du statut urgent impossible');
+}
+
+/** Affecte ou réaffecte une fiche existante en cas urgent */
+export async function affecterUrgent(
+  id: string,
+  equipe: string,
+  opts: { dateProgramme?: string; isUrgent?: boolean; par?: Par; motif?: string } = {},
+): Promise<void> {
+  const teamId = await teamIdFor(equipe);
+  if (!teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
+  const now = new Date().toISOString();
+  const dateProg = opts.dateProgramme || now.slice(0, 10);
+  const patch: Record<string, unknown> = {
+    team_id: teamId,
+    is_urgent: opts.isUrgent ?? true,
+    status: (opts.isUrgent ?? true) ? 'urgent' : 'pending',
+    date_programme: dateProg,
+    assigne_le: now,
+    updated_at: now,
+  };
+  if (opts.par?.id) patch.distribue_par = opts.par.id;
+  if (opts.motif) patch.motif = opts.motif;
+
+  const { error } = await supabase.from(TABLE).update(patch).eq('id', id);
+  if (error) throw dbError(error, 'Affectation urgente impossible');
+}
+
+export interface OtUrgentInput {
+  nature: 'derangement' | 'installation';
+  numeroOt?: string;
+  fgp: string;
+  clientNom?: string;
+  clientCode?: string;
+  telephones?: string[];
+  adresse?: string;
+  zone: string;
+  dis?: string;
+  pco?: string;
+  port?: string;
+  ontSerial?: string;
+  cableFibreM?: number | null;
+  typeOt?: string;
+  motif?: string;
+  equipe: string;
+  dateProgramme?: string;
+}
+
+/** Crée et affecte immédiatement un nouvel OT en cas urgent */
+export async function creerEtAffecterOtUrgent(input: OtUrgentInput, par: Par): Promise<ProgrammeOT> {
+  const fgp = input.fgp.trim();
+  const dateProg = input.dateProgramme || new Date().toISOString().slice(0, 10);
+  const numeroOt = input.numeroOt?.trim() || `URG-${dateProg.replace(/-/g, '')}-${fgp}`;
+
+  const disVal = input.dis?.trim() || (input.pco?.trim() ? `PCO-${input.pco.trim()}${input.port?.trim() ? `-${input.port.trim()}` : ''}` : undefined);
+
+  const [lignes, teamId] = await Promise.all([
+    upsertLignes([
+      {
+        fgp,
+        zone: input.zone.trim(),
+        typeLigne: 'FGP',
+        dis: disVal,
+        clientNom: input.clientNom?.trim(),
+        clientCode: input.clientCode?.trim(),
+        telephones: input.telephones?.filter(Boolean),
+        adresse: input.adresse?.trim(),
+      },
+    ]),
+    teamIdFor(input.equipe),
+  ]);
+
+  if (!teamId) throw new Error(`Équipe « ${input.equipe} » introuvable`);
+
+  let ontId: string | null = null;
+  if (input.ontSerial?.trim()) {
+    const onts = await upsertOnts([{ sn: input.ontSerial.trim(), ligneId: lignes.get(fgp) }]);
+    ontId = onts.get(normOnt(input.ontSerial.trim())) ?? null;
+  }
+
+  const type = input.typeOt?.trim() || (input.nature === 'derangement' ? 'DRG' : 'CPL');
+  const now = new Date().toISOString();
+
+  // On recherche si une situation ouverte existe pour ce FGP
+  const ouvertes = await situationsOuvertes([fgp]);
+  const ex = ouvertes.get(`${fgp}|${input.nature}`);
+
+  let recordId: string;
+  if (ex) {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .update({
+        numero_ot: numeroOt,
+        team_id: teamId,
+        type: ex.type || type,
+        nature: input.nature,
+        is_urgent: true,
+        status: 'urgent',
+        motif: input.motif?.trim() || (input.nature === 'derangement' ? 'Dérangement urgent' : 'Installation urgente'),
+        date_programme: dateProg,
+        date_recu: dateProg,
+        ont_id: ontId,
+        cable_fibre_m: input.cableFibreM ?? null,
+        distribue_par: par.id,
+        assigne_le: now,
+        updated_at: now,
+      })
+      .eq('id', ex.id)
+      .select('id')
+      .single();
+    if (error) throw dbError(error, 'Mise à jour en cas urgent impossible');
+    recordId = data.id;
+  } else {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .insert({
+        ligne_id: lignes.get(fgp) ?? null,
+        numero_ot: numeroOt,
+        team_id: teamId,
+        type,
+        nature: input.nature,
+        motif: input.motif?.trim() || (input.nature === 'derangement' ? 'Dérangement urgent' : 'Installation urgente'),
+        date_depo: dateProg,
+        date_message: dateProg,
+        date_recu: dateProg,
+        date_programme: dateProg,
+        delai: 0,
+        status: 'urgent',
+        is_urgent: true,
+        comment: '',
+        poteau: 0,
+        ont_id: ontId,
+        cable_fibre_m: input.cableFibreM ?? null,
+        distribue_par: par.id,
+        assigne_le: now,
+        cree_par_ot: true,
+        source_fichier: 'Manuel Urgent',
+      })
+      .select('id')
+      .single();
+    if (error) throw dbError(error, 'Création du cas urgent impossible');
+    recordId = data.id;
+  }
+
+  const { data: row, error: fetchErr } = await supabase.from(VUE).select('*').eq('id', recordId).single();
+  if (fetchErr) throw dbError(fetchErr, 'Relecture de la fiche impossible');
+  return mapOt(row);
+}
+
+/** Recherche rapide de fiches pour affectation urgente */
+export async function rechercherFichesProgramme(recherche: string): Promise<ProgrammeOT[]> {
+  const term = recherche.trim();
+  if (!term) return [];
+  const { data, error } = await supabase
+    .from(VUE)
+    .select('*')
+    .or(`fgp.ilike.%${term}%,numero_ot.ilike.%${term}%,client_nom.ilike.%${term}%,zone.ilike.%${term}%`)
+    .order('date_programme', { ascending: false })
+    .limit(20);
+  if (error) throw dbError(error, 'Recherche impossible');
   return (data ?? []).map(mapOt);
 }
 

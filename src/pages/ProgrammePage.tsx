@@ -4,7 +4,7 @@ import { StatCard, EmptyState, useToast } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
 import { OtCard } from '@/components/programme/OtCard';
 import { cloturer, fetchPenalites, fetchPourPoints, fetchProgramme, fetchScanOts, subscribeProgramme, type Cloture, type ScanOT } from '@/lib/programmeService';
-import { ExternalLink, ScanLine } from 'lucide-react';
+import { ExternalLink, Flame, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
 import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
 import { POINTS, classement, delaiOT, fmtPts, fmtPtsSigne } from '@/utils/points';
@@ -105,9 +105,10 @@ function FichesOT() {
     const filtered = s
       ? base.filter((o) => [o.fgp, o.clientNom, o.zone, o.pco, o.dis, ...o.telephones, ...o.ontSerials].join(' ').toLowerCase().includes(s))
       : base;
-    // prioritaires d'abord, puis par échéance, dérangements avant installations, puis par zone / PCO
+    // Cas urgents en priorité absolue, puis prioritaires d'abord, puis par échéance, dérangements avant installations, puis par zone / PCO
     return [...filtered].sort(
       (a, b) =>
+        Number(b.isUrgent) - Number(a.isUrgent) ||
         Number(delaiOT(b).prioritaire) - Number(delaiOT(a).prioritaire) ||
         delaiOT(a).echeance.localeCompare(delaiOT(b).echeance) ||
         (a.nature === b.nature ? 0 : a.nature === 'derangement' ? -1 : 1) ||
@@ -119,6 +120,7 @@ function FichesOT() {
   if (!loaded) return <p className="py-10 text-center text-sm text-slate-400">Chargement du programme…</p>;
 
   const der = aFaire.filter((o) => o.nature === 'derangement').length;
+  const urgentCount = aFaire.filter((o) => o.isUrgent).length;
   // Installations faites mais non scannées dans un fichier importé APRÈS l'installation
   // (le fichier de scan fait foi, même si la case « Scanné » a été cochée)
   const aScanner = ots.filter((o) => {
@@ -169,6 +171,19 @@ function FichesOT() {
               </p>
             </div>
           ))}
+        </div>
+      )}
+      {urgentCount > 0 && (
+        <div className="rounded-xl border border-orange-300 bg-orange-50/90 p-3.5 flex items-center justify-between gap-3 shadow-sm animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <Flame className="w-5 h-5 text-orange-600 flex-shrink-0" />
+            <div>
+              <p className="font-bold text-sm text-orange-950">
+                {urgentCount} cas urgent{urgentCount > 1 ? 's' : ''} à traiter en priorité absolue !
+              </p>
+              <p className="text-xs text-orange-700">Dérangement ou installation prioritaire assigné par la supervision.</p>
+            </div>
+          </div>
         </div>
       )}
       <div className="grid grid-cols-3 gap-3">

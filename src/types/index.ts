@@ -354,6 +354,7 @@ export interface ProgrammeOT {
   nbPenalites: number; // pénalités de l'équipe actuelle sur cette fiche (non traitée à 22 h, retardée)
   echeanceEquipe: string | null; // YYYY-MM-DD : à faire avant 22 h ce jour-là (calculée par la base)
   prioritaire: boolean; // délai officiel déjà dépassé quand l'équipe a reçu la fiche
+  isUrgent?: boolean; // cas urgent (dérangement ou installation urgent)
   createdAt: string;
 }
 

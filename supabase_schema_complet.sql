@@ -392,6 +392,7 @@ CREATE TABLE IF NOT EXISTS public.programme_ot (
     nouveau_dis       TEXT DEFAULT '',
     nouvel_ont        TEXT DEFAULT '',
     poteaux           INTEGER DEFAULT 0,
+    is_urgent         BOOLEAN DEFAULT FALSE,
     assigne_le        TIMESTAMPTZ DEFAULT NOW(),
     traite_par_nom    TEXT,
     traite_le         TIMESTAMPTZ,
@@ -452,6 +453,7 @@ ALTER TABLE public.programme_ot ADD COLUMN IF NOT EXISTS cst_change BOOLEAN DEFA
 ALTER TABLE public.programme_ot ADD COLUMN IF NOT EXISTS nouveau_dis TEXT DEFAULT '';
 ALTER TABLE public.programme_ot ADD COLUMN IF NOT EXISTS nouvel_ont TEXT DEFAULT '';
 ALTER TABLE public.programme_ot ADD COLUMN IF NOT EXISTS poteaux INTEGER DEFAULT 0;
+ALTER TABLE public.programme_ot ADD COLUMN IF NOT EXISTS is_urgent BOOLEAN DEFAULT FALSE;
 ALTER TABLE public.programme_ot ADD COLUMN IF NOT EXISTS assigne_le TIMESTAMPTZ DEFAULT NOW();
 
 
