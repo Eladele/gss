@@ -11,6 +11,8 @@ import {
   Users,
   MapPin,
   Bell,
+  BellOff,
+  BellRing,
   User,
   BarChart3,
   UserCheck,
@@ -284,6 +286,43 @@ export default function AppLayout() {
   const { showToast } = useToast();
   const unread = notifications.filter((n) => !n.read).length + remoteNotifs.filter((n: { lu: any; }) => !n.lu).length;
 
+  // ── Permission notifications ──────────────────────────────────────────────
+  const [notifPerm, setNotifPerm] = useState<NotificationPermission | 'unsupported'>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+  );
+  // Bannière auto pour les chefs si permission pas encore demandée
+  const [showNotifBanner, setShowNotifBanner] = useState(false);
+  // Modale paramètres notifications (icône cloche dans topbar)
+  const [showNotifModal, setShowNotifModal] = useState(false);
+
+  useEffect(() => {
+    if (typeof Notification === 'undefined') return;
+    const perm = Notification.permission;
+    setNotifPerm(perm);
+    // Pour les chefs : afficher la bannière au démarrage si jamais répondu
+    if (user.role === 'chef' && perm === 'default') {
+      setShowNotifBanner(true);
+    }
+  }, [user.role]);
+
+  const demanderPermission = async () => {
+    if (typeof Notification === 'undefined') return;
+    try {
+      const result = await Notification.requestPermission();
+      setNotifPerm(result);
+      setShowNotifBanner(false);
+      setShowNotifModal(false);
+      if (result === 'granted') {
+        showToast('Notifications activées ✓', 'success');
+      } else {
+        showToast('Notifications refusées — activez-les dans les paramètres du navigateur.', 'warning');
+      }
+    } catch {
+      setShowNotifBanner(false);
+      setShowNotifModal(false);
+    }
+  };
+
   // Notifications en base + temps réel (demandes de dépense, validations, alimentations)
   useEffect(() => startCaisses(user), [user.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // Barème des points et en-tête du virement (page Paramètres) : chargés avant les pages
@@ -359,7 +398,30 @@ export default function AppLayout() {
         </div>
         <div className="flex items-center gap-2">
           {/* Bouton permanent : Installer version APK */}
-          <InstallApkButton />
+          <InstallApkButton variant="full" />
+          {/* Bouton paramètres notifications */}
+          {notifPerm !== 'unsupported' && (
+            <button
+              type="button"
+              onClick={() => setShowNotifModal(true)}
+              title="Paramètres notifications"
+              className={`p-2 rounded-full border transition-colors ${
+                notifPerm === 'granted'
+                  ? 'border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100'
+                  : notifPerm === 'denied'
+                  ? 'border-red-200 text-red-500 bg-red-50 hover:bg-red-100'
+                  : 'border-amber-200 text-amber-600 bg-amber-50 hover:bg-amber-100 animate-pulse'
+              }`}
+            >
+              {notifPerm === 'granted' ? (
+                <BellRing className="w-4 h-4" />
+              ) : notifPerm === 'denied' ? (
+                <BellOff className="w-4 h-4" />
+              ) : (
+                <Bell className="w-4 h-4" />
+              )}
+            </button>
+          )}
           <button
             onClick={() => setPage('notifications')}
             className="relative px-3 py-1.5 rounded-full hover:bg-slate-100 transition-colors text-xs font-semibold text-slate-600 border border-slate-200"
@@ -385,6 +447,101 @@ export default function AppLayout() {
           </button>
         </div>
       </header>
+
+      {/* ── Bannière notification chef (1 seule fois au démarrage) ── */}
+      {showNotifBanner && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center gap-3 z-30">
+          <Bell className="w-4 h-4 text-amber-600 shrink-0" />
+          <p className="flex-1 text-xs font-semibold text-amber-900">
+            Activez les notifications pour recevoir les alertes programme en temps réel.
+          </p>
+          <button
+            type="button"
+            onClick={demanderPermission}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shrink-0"
+          >
+            Activer
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowNotifBanner(false)}
+            className="p-1 text-amber-500 hover:text-amber-800 shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* ── Modale paramètres notifications ── */}
+      {showNotifModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+          onClick={() => setShowNotifModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl border border-slate-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                {notifPerm === 'granted' ? (
+                  <BellRing className="w-6 h-6 text-emerald-600" />
+                ) : notifPerm === 'denied' ? (
+                  <BellOff className="w-6 h-6 text-red-500" />
+                ) : (
+                  <Bell className="w-6 h-6 text-amber-600" />
+                )}
+                <h3 className="font-bold text-slate-900">Paramètres notifications</h3>
+              </div>
+              <button type="button" onClick={() => setShowNotifModal(false)} className="p-1 rounded-full text-slate-400 hover:bg-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className={`rounded-xl p-3 mb-4 ${
+              notifPerm === 'granted' ? 'bg-emerald-50 border border-emerald-200' :
+              notifPerm === 'denied' ? 'bg-red-50 border border-red-200' :
+              'bg-amber-50 border border-amber-200'
+            }`}>
+              <p className={`text-sm font-semibold ${
+                notifPerm === 'granted' ? 'text-emerald-800' :
+                notifPerm === 'denied' ? 'text-red-800' :
+                'text-amber-800'
+              }`}>
+                {notifPerm === 'granted' ? '✓ Notifications activées' :
+                 notifPerm === 'denied' ? '✗ Notifications bloquées' :
+                 '⚠ Notifications non configurées'}
+              </p>
+              <p className={`text-xs mt-1 ${
+                notifPerm === 'granted' ? 'text-emerald-700' :
+                notifPerm === 'denied' ? 'text-red-700' :
+                'text-amber-700'
+              }`}>
+                {notifPerm === 'granted'
+                  ? 'Vous recevez les alertes programme en temps réel.'
+                  : notifPerm === 'denied'
+                  ? 'Allez dans les paramètres de votre navigateur pour débloquer les notifications pour ce site.'
+                  : 'Cliquez sur "Activer" pour recevoir les alertes en temps réel.'}
+              </p>
+            </div>
+
+            {notifPerm !== 'granted' && notifPerm !== 'denied' && (
+              <button
+                type="button"
+                onClick={demanderPermission}
+                className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-sm transition-colors"
+              >
+                Activer les notifications
+              </button>
+            )}
+            {notifPerm === 'denied' && (
+              <p className="text-xs text-slate-500 text-center">
+                Dans Chrome : Menu → Paramètres → Confidentialité → Notifications
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Mobile Drawer Backdrop */}
       {menuOpen && (
