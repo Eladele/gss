@@ -40,10 +40,12 @@ export function ClotureSheet({
   const estInstallation = ot.nature === 'installation';
   // Installation (fait) : seulement "Installé par quelqu'un" (optionnel)
   // Dérangement (fait) : tous les MOTIFS_FAIT sauf "Installé par quelqu'un" (obligatoire)
+  // NB: on utilise includes("quelqu") pour éviter les problèmes d'apostrophe Unicode vs ASCII
+  const estInstalleParQuelqun = (label: string) => label.includes('quelqu');
   const liste = fait && estInstallation
-    ? MOTIFS_FAIT.filter((m) => m.label === "Installé par quelqu'un")
+    ? MOTIFS_FAIT.filter((m) => estInstalleParQuelqun(m.label))
     : fait
-      ? MOTIFS_FAIT.filter((m) => m.label !== "Installé par quelqu'un")
+      ? MOTIFS_FAIT.filter((m) => !estInstalleParQuelqun(m.label))
       : MOTIFS_NON_FAIT;
   const [motif, setMotif] = useState('');
   const [autre, setAutre] = useState('');
