@@ -37,7 +37,12 @@ export function ClotureSheet({
   onConfirm: (c: Cloture) => void;
 }) {
   const fait = mode === 'fait';
-  const liste = fait ? MOTIFS_FAIT : MOTIFS_NON_FAIT;
+  const estInstallation = ot.nature === 'installation';
+  // Pour installation (fait) : seulement "Installé par quelqu'un" (optionnel)
+  // Pour dérangement (fait) : tous les MOTIFS_FAIT (obligatoire)
+  const liste = fait && estInstallation
+    ? MOTIFS_FAIT.filter((m) => m.label === "Installé par quelqu'un")
+    : fait ? MOTIFS_FAIT : MOTIFS_NON_FAIT;
   const [motif, setMotif] = useState('');
   const [autre, setAutre] = useState('');
   const [commentaire, setCommentaire] = useState('');
@@ -92,17 +97,17 @@ export function ClotureSheet({
           <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto" />
           <div>
             <p className={`font-black text-lg ${fait ? 'text-green-700' : 'text-red-700'}`}>
-              {fait ? 'Fait' : 'Non fait'} — {ligneLabel(ot)}
             </p>
             <p className="text-sm text-slate-500 truncate">{ot.clientNom}</p>
           </div>
 
           <div>
             <p className="text-xs font-semibold text-slate-500 mb-2">
-              {fait ? (ot.nature === 'derangement' ? 'Cause du dérangement' : 'Motif (facultatif)') : 'Motif'}
+              {fait ? (ot.nature === 'derangement' ? 'Cause du dérangement *' : 'Motif (facultatif)') : 'Motif'}
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {[...liste.map((m) => m.label), AUTRE].map((m) => (
+              {/* Installation fait : pas de bouton "Autre" ; dérangement fait : tous + "Autre" */}
+              {[...liste.map((m) => m.label), ...(fait && estInstallation ? [] : [AUTRE])].map((m) => (
                 <button
                   key={m}
                   type="button"
@@ -223,7 +228,7 @@ export function ClotureSheet({
             className="w-full border border-slate-200 rounded-lg p-3 text-sm resize-none focus:outline-none focus:border-blue-500 bg-slate-50"
           />
 
-          {erreur && motif !== '' && <p className="text-sm text-red-700">{erreur}</p>}
+          {erreur && (motif !== '' || motifRequis) && <p className="text-sm text-red-700">{erreur}</p>}
           <div className="flex gap-3 pb-2">
             <button type="button" onClick={onClose} className="flex-1 py-3 rounded-xl border border-slate-200 font-semibold text-slate-700">
               Annuler
@@ -231,7 +236,7 @@ export function ClotureSheet({
             <button
               type="button"
               onClick={confirmer}
-              // disabled={!!erreur}
+              disabled={!!erreur}
               className={`flex-1 py-3 rounded-xl font-bold text-white disabled:opacity-40 ${fait ? 'bg-green-600' : 'bg-red-600'}`}
             >
               {fait ? 'Confirmer fait' : 'Confirmer non fait'}

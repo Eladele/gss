@@ -335,10 +335,40 @@ export async function fetchEnRetard(avant: string): Promise<ProgrammeOT[]> {
 
 // ─── Cas urgents (dérangements & installations) ──────────────────────────────
 
+/** Envoie une notification persistante aux chefs d'une équipe pour une urgence */
+async function notifierChefsEquipe(
+  teamId: string,
+  titre: string,
+  message: string,
+  refId?: string,
+): Promise<void> {
+  try {
+    const { data: chefs } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('team_id', teamId)
+      .eq('role', 'chef');
+
+    if (chefs && chefs.length > 0) {
+      const notifs = chefs.map((c) => ({
+        destinataire_id: c.id,
+        titre,
+        message,
+        type: 'programme_urgent',
+        module: 'programme',
+        ref_id: refId ?? null,
+      }));
+      await supabase.from('app_notifications').insert(notifs);
+    }
+  } catch (err) {
+    console.warn('Impossible d’envoyer la notification chef:', err);
+  }
+}
+
 /** Active ou désactive le marquage urgent d'une fiche */
 export async function marquerUrgent(id: string, isUrgent = true): Promise<void> {
   const now = new Date().toISOString();
-  const { data: cur } = await supabase.from(TABLE).select('status').eq('id', id).maybeSingle();
+  const { data: cur } = await supabase.from(TABLE).select('status, team_id, motif').eq('id', id).maybeSingle();
   const updateData: Record<string, unknown> = {
     is_urgent: isUrgent,
     updated_at: now,
@@ -348,6 +378,16 @@ export async function marquerUrgent(id: string, isUrgent = true): Promise<void> 
   }
   const { error } = await supabase.from(TABLE).update(updateData).eq('id', id);
   if (error) throw dbError(error, 'Mise à jour du statut urgent impossible');
+
+  if (isUrgent && cur?.team_id) {
+    const { data: row } = await supabase.from(VUE).select('fgp, client_nom').eq('id', id).maybeSingle();
+    await notifierChefsEquipe(
+      cur.team_id,
+      `🚨 Cas Urgent — ${row?.fgp || 'Ligne'}`,
+      `Une intervention de votre programme a été passée en cas urgent par la supervision.${cur.motif ? ` Motif : ${cur.motif}` : ''}`,
+      id,
+    );
+  }
 }
 
 /** Affecte ou réaffecte une fiche existante en cas urgent */
@@ -373,6 +413,16 @@ export async function affecterUrgent(
 
   const { error } = await supabase.from(TABLE).update(patch).eq('id', id);
   if (error) throw dbError(error, 'Affectation urgente impossible');
+
+  if (opts.isUrgent ?? true) {
+    const { data: row } = await supabase.from(VUE).select('fgp, client_nom').eq('id', id).maybeSingle();
+    await notifierChefsEquipe(
+      teamId,
+      `🚨 Cas Urgent — ${row?.fgp || 'Fiche programme'}`,
+      `Intervention urgente affectée à votre équipe · Client : ${row?.client_nom || 'Client'}${opts.motif ? ` · Motif : ${opts.motif}` : ''}`,
+      id,
+    );
+  }
 }
 
 export interface OtUrgentInput {
@@ -493,6 +543,14 @@ export async function creerEtAffecterOtUrgent(input: OtUrgentInput, par: Par): P
 
   const { data: row, error: fetchErr } = await supabase.from(VUE).select('*').eq('id', recordId).single();
   if (fetchErr) throw dbError(fetchErr, 'Relecture de la fiche impossible');
+
+  await notifierChefsEquipe(
+    teamId,
+    `🚨 Nouveau Cas Urgent (${input.nature === 'derangement' ? 'Dérangement' : 'Installation'}) — ${input.fgp}`,
+    `Nouvelle intervention urgente affectée à votre équipe · Client : ${input.clientNom || 'Client'} · Zone : ${input.zone || '?'}${input.motif ? ` · Motif : ${input.motif}` : ''}`,
+    recordId,
+  );
+
   return mapOt(row);
 }
 

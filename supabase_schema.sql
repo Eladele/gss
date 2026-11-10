@@ -857,7 +857,8 @@ WHERE NOT EXISTS (
     SELECT 1 FROM public.teams t WHERE lower(t.name) = lower(v.name)
 );
 
-INSERT INTO public.profiles (name, role, password_hash)
+`
+` INTO public.profiles (name, role, password_hash)
 SELECT 'eladel', 'admin'::public.app_role, 'gss2026'
 WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE lower(name) = 'eladel');
 

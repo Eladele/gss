@@ -301,7 +301,7 @@ export interface AppNotification {
   id: string;
   titre: string;
   message: string;
-  type: 'demande_depense' | 'demande_alimentation' | 'validee' | 'rejetee' | 'alimentation' | 'programme' | 'programme_non_fait' | 'programme_penalite' | 'info';
+  type: 'demande_depense' | 'demande_alimentation' | 'validee' | 'rejetee' | 'alimentation' | 'programme' | 'programme_urgent' | 'programme_non_fait' | 'programme_penalite' | 'info';
   module: string;
   refId: string | null;
   lu: boolean;

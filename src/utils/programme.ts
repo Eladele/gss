@@ -47,6 +47,7 @@ export const MOTIFS_NON_FAIT: MotifDef[] = [
   { label: 'Besoin 2 poteaux 350 m', poteaux: 2 },
   { label: 'Le modem n’est pas en place' },
   { label: 'Ligne tirée, pas d’électricité' },
+    { label: 'Ligne tirée, ne synchronise pas ' },
   { label: 'Le modem n’est pas la copie conforme' },
 ];
 
@@ -55,8 +56,16 @@ export const MOTIFS_FAIT: MotifDef[] = [
   { label: 'Câble transport coupé', reseau: true },
   { label: 'HUB-BOX défectueux', reseau: true },
   { label: 'SUB-BOX défectueux', reseau: true },
+    { label: 'FMC' },
+      { label: 'Câble drop coupé' },
+        { label: 'jarrtiere' },
+                { label: 'changement mot de pass' },
+        { label: 'deplacement ont' },
+               { label: 'confiueration ont ' },
+ 
   { label: 'Zone en panne' },
   { label: 'Modem défectueux' },
+    { label: 'ERREUR de signalisation' },
   { label: 'Installé par quelqu’un' },
   { label: 'Confirmé par client' },
 ];
