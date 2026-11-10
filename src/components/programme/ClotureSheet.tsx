@@ -38,11 +38,13 @@ export function ClotureSheet({
 }) {
   const fait = mode === 'fait';
   const estInstallation = ot.nature === 'installation';
-  // Pour installation (fait) : seulement "Installé par quelqu'un" (optionnel)
-  // Pour dérangement (fait) : tous les MOTIFS_FAIT (obligatoire)
+  // Installation (fait) : seulement "Installé par quelqu'un" (optionnel)
+  // Dérangement (fait) : tous les MOTIFS_FAIT sauf "Installé par quelqu'un" (obligatoire)
   const liste = fait && estInstallation
     ? MOTIFS_FAIT.filter((m) => m.label === "Installé par quelqu'un")
-    : fait ? MOTIFS_FAIT : MOTIFS_NON_FAIT;
+    : fait
+      ? MOTIFS_FAIT.filter((m) => m.label !== "Installé par quelqu'un")
+      : MOTIFS_NON_FAIT;
   const [motif, setMotif] = useState('');
   const [autre, setAutre] = useState('');
   const [commentaire, setCommentaire] = useState('');
