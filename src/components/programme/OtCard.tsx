@@ -5,7 +5,9 @@ import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, fmtTel, ligneLabe
 import { TypeBadge } from '@/components/ui';
 import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
-import type { ScanOT } from '@/lib/programmeService';
+import type { ClotureArchivee, ReclamationFauxOk, ScanOT } from '@/lib/programmeService';
+import { HistoriqueMotifs } from '@/components/programme/Historique';
+import { ReclamerFauxOk } from '@/components/programme/Reclamation';
 
 /** Copie dans le presse-papiers ; `done` passe à vrai 1,5 s pour confirmer à l'écran */
 function useCopy(value: string) {
@@ -48,8 +50,17 @@ export function OtCard({
   onReset,
   busy,
   scan,
+  reclamation,
+  onReclamer,
+  historique,
 }: {
+  /** motifs passés (fiche déjà « non faite » puis renvoyée) */
+  historique?: ClotureArchivee[];
   ot: ProgrammeOT;
+  /** réclamation du chef sur le faux OK de cette fiche (s'il y en a une) */
+  reclamation?: ReclamationFauxOk;
+  /** chef : contester le faux OK qui a rouvert la fiche */
+  onReclamer?: (message: string) => Promise<void>;
   onFait?: () => void;
   onNonFait?: () => void;
   onReset?: () => void;
@@ -165,6 +176,10 @@ export function OtCard({
           <p className="text-[11px] font-bold rounded-md px-2 py-1 bg-red-600 text-white">
             Rouverte : {ot.commentaire} — la fiche avait été marquée « Fait » à tort ({fmtPts(POINTS.penalites.faux_ok)} {motPoint(POINTS.penalites.faux_ok)}). À refaire.
           </p>
+        )}
+        <HistoriqueMotifs liste={historique} compact />
+        {ot.statut === 'a_faire' && ot.commentaire.startsWith('Faux OK') && onReclamer && (
+          <ReclamerFauxOk reclamation={reclamation} onReclamer={onReclamer} />
         )}
         {ot.statut === 'a_faire' && (
           <p className={`text-[11px] rounded-md px-2 py-1 ${delai.prioritaire || delai.etat === 'retard' ? 'bg-red-50 text-red-800 font-semibold' : 'text-slate-500'}`}>

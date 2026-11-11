@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarClock, CalendarDays, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, Send, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CalendarDays, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, RotateCcw, Send, Trash2 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
@@ -15,14 +15,18 @@ import {
   marquerUrgent,
   rattraperControles,
   reassign,
+  redistribuer,
   retarder,
+  fetchHistoriqueClotures,
+  type ClotureArchivee,
   signalerFauxOk,
   situationsOuvertes,
   subscribeProgramme,
 } from '@/lib/programmeService';
+import { HistoriqueMotifs } from '@/components/programme/Historique';
 import { AffecterUrgentModal } from '@/components/programme/AffecterUrgentModal';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
-import { POINTS, estPrioritaire, fmtPts, jourCourt, jourRemise, motPoint, ptsTexte } from '@/utils/points';
+import { HEURE_PROGRAMME_SOIR, POINTS, estPrioritaire, fmtPts, jourCourt, jourOuvreSuivant, jourRemise, motPoint, ptsTexte } from '@/utils/points';
 import { ClotureResume } from '@/components/programme/OtCard';
 import { FauxOkButton } from '@/components/programme/FauxOk';
 import type { ProgrammeOT } from '@/types';
@@ -34,6 +38,8 @@ type Item = ParsedOT & {
   sourceFichier: string;
   deja?: { equipe: string; date: string };
   existante?: { equipe: string; type: string }; // situation Excel ouverte que l'OT va compléter
+  /** OT déjà distribué et rendu « non fait » (RV demain…) : renvoyé, son motif passé est gardé */
+  renvoi?: { id: string; equipe: string; motif: string; traiteLe: string | null };
   include: boolean;
 };
 type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
@@ -202,7 +208,10 @@ export default function DistributionPage() {
   const colorOf = (name: string) => equipes.find((e) => e.name.toLowerCase() === name.toLowerCase())?.color ?? '#94A3B8';
 
   // ─── Import ────────────────────────────────────────────────────────────
-  const [dateProgramme, setDateProgramme] = useState(todayISO());
+  // le soir (à partir de 16 h), on prépare le programme du lendemain (jour ouvré suivant)
+  const [dateProgramme, setDateProgramme] = useState(() => (new Date().getHours() >= HEURE_PROGRAMME_SOIR ? jourOuvreSuivant(todayISO()) : todayISO()));
+  const demain = jourOuvreSuivant(todayISO());
+  const soir = new Date().getHours() >= HEURE_PROGRAMME_SOIR;
   const [items, setItems] = useState<Item[]>([]);
   const [reading, setReading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -226,7 +235,9 @@ export default function DistributionPage() {
       const [deja, ouvertes] = await Promise.all([existingNumeros(fresh.map((p) => p.numeroOt)), situationsOuvertes(fresh.map((p) => p.fgp))]);
       fresh.forEach((p) => {
         const d = deja.get(p.numeroOt);
-        if (d) Object.assign(p, { deja: d, include: false });
+        // déjà « non faite » (RV demain, local fermé…) : on peut la renvoyer, son motif reste dans l'historique
+        if (d && d.status === 'non_ok') Object.assign(p, { renvoi: { id: d.id, equipe: d.equipe, motif: d.motif, traiteLe: d.traiteLe }, equipe: p.equipe || d.equipe, include: true });
+        else if (d) Object.assign(p, { deja: { equipe: d.equipe, date: d.date }, include: false });
         const ex = ouvertes.get(`${p.fgp}|${p.nature}`);
         if (ex && !d) Object.assign(p, { existante: { equipe: ex.equipe ?? '', type: ex.type }, equipe: p.equipe || ex.equipe || '' });
       });
@@ -268,10 +279,21 @@ export default function DistributionPage() {
     if (missingTeam.length) return showToast(`Choisissez une équipe pour ${missingTeam.length} fiche${missingTeam.length > 1 ? 's' : ''}`, 'error');
     setSending(true);
     try {
-      const { crees, completees } = await distribuer(toSend, dateProgramme, user);
-      const n = crees + completees;
+      const nouvelles = toSend.filter((i) => !i.renvoi);
+      const aRenvoyer = toSend.filter((i) => i.renvoi);
+      const { crees, completees } = nouvelles.length ? await distribuer(nouvelles, dateProgramme, user) : { crees: 0, completees: 0 };
+      // fiches déjà « non faites » : renvoyées équipe par équipe, motif passé gardé
+      let renvoyees = 0;
+      for (const eq of new Set(aRenvoyer.map((i) => i.equipe)))
+        renvoyees += await redistribuer(
+          aRenvoyer.filter((i) => i.equipe === eq).map((i) => i.renvoi!.id),
+          eq,
+          dateProgramme,
+          user,
+        );
+      const n = crees + completees + renvoyees;
       showToast(
-        `${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''}${completees ? ` (dont ${completees} situation${completees > 1 ? 's' : ''} existante${completees > 1 ? 's' : ''} complétée${completees > 1 ? 's' : ''})` : ''} : les chefs d’équipe sont prévenus`,
+        `${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''}${completees ? ` (dont ${completees} situation${completees > 1 ? 's' : ''} existante${completees > 1 ? 's' : ''} complétée${completees > 1 ? 's' : ''})` : ''}${renvoyees ? ` · ${renvoyees} déjà non faite${renvoyees > 1 ? 's' : ''} renvoyée${renvoyees > 1 ? 's' : ''} (motifs gardés)` : ''} : les chefs d’équipe sont prévenus`,
         'success',
       );
       setItems([]);
@@ -294,6 +316,10 @@ export default function DistributionPage() {
   const [retardDate, setRetardDate] = useState(() => addDays(todayISO(), 1));
   const [controle, setControle] = useState<{ jour: string; nbFiches: number } | null>(null);
   const [urgentModalOpen, setUrgentModalOpen] = useState(false);
+  // motifs passés des fiches renvoyées, et renvoi en cours (une fiche ou toutes les non faites d'une équipe)
+  const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
+  const [renvoi, setRenvoi] = useState<{ cle: string; ids: string[]; equipe: string; date: string } | null>(null);
+  const peutRenvoyer = user.role === 'admin' || user.role === 'superviseur';
 
   // Contrôle de 22 h : rattrape un contrôle manqué (tâche automatique arrêtée), puis l'affiche
   useEffect(() => {
@@ -310,7 +336,13 @@ export default function DistributionPage() {
     let alive = true;
     const refresh = () =>
       Promise.all([fetchProgramme({ from: histDate, to: histDate }), histDate === todayISO() ? fetchEnRetard(histDate) : Promise.resolve([])]).then(
-        ([rows, retard]) => alive && (setHist(rows), setEnRetard(retard), setHistError('')),
+        ([rows, retard]) => {
+          if (!alive) return;
+          setHist(rows);
+          setEnRetard(retard);
+          setHistError('');
+          fetchHistoriqueClotures([...rows, ...retard].map((o) => o.id)).then((h) => alive && setHistorique(h));
+        },
         (e) => alive && setHistError(errMsg(e)),
       );
     refresh();
@@ -380,6 +412,67 @@ export default function DistributionPage() {
     }
   };
 
+  /** Renvoyer des fiches « non faites » (motif passé gardé) */
+  const ouvrirRenvoi = (cle: string, ids: string[], equipe: string) =>
+    setRenvoi(
+      renvoi?.cle === cle
+        ? null
+        : { cle, ids, equipe, date: new Date().getHours() >= HEURE_PROGRAMME_SOIR ? jourOuvreSuivant(todayISO()) : todayISO() },
+    );
+  const doRenvoyer = async () => {
+    if (!renvoi) return;
+    try {
+      const n = await redistribuer(renvoi.ids, renvoi.equipe, renvoi.date, user);
+      showToast(
+        `${n} fiche${n > 1 ? 's' : ''} renvoyée${n > 1 ? 's' : ''} à ${renvoi.equipe} pour le ${jourCourt(renvoi.date)} — motif${n > 1 ? 's' : ''} précédent${n > 1 ? 's' : ''} gardé${n > 1 ? 's' : ''}`,
+        'success',
+      );
+      setRenvoi(null);
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    }
+  };
+  const panneauRenvoi = (cle: string) =>
+    renvoi?.cle === cle && (
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/60 p-2">
+        <span className="text-xs font-semibold text-blue-900">Renvoyer {renvoi.ids.length > 1 ? `les ${renvoi.ids.length} fiches` : ''} à</span>
+        <Select aria-label="Équipe du renvoi" className="!py-1 !text-xs" value={renvoi.equipe} onChange={(e) => setRenvoi({ ...renvoi, equipe: e.target.value })}>
+          {!equipeNames.includes(renvoi.equipe) && <option value={renvoi.equipe}>{renvoi.equipe || '— Équipe —'}</option>}
+          {equipeNames.map((nm) => (
+            <option key={nm} value={nm}>
+              {nm}
+            </option>
+          ))}
+        </Select>
+        <span className="text-xs text-blue-900">pour</span>
+        {[todayISO(), jourOuvreSuivant(todayISO())].map((d, k) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => setRenvoi({ ...renvoi, date: d })}
+            className={`px-2 py-1 rounded-md text-xs font-semibold border ${renvoi.date === d ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-200 text-slate-600'}`}
+          >
+            {k === 0 ? 'Aujourd’hui' : `Demain · ${jourCourt(d)}`}
+          </button>
+        ))}
+        <input
+          type="date"
+          aria-label="Date du renvoi"
+          min={todayISO()}
+          value={renvoi.date}
+          onChange={(e) => e.target.value && setRenvoi({ ...renvoi, date: e.target.value })}
+          className="border border-slate-200 rounded-md px-2 py-1 text-xs bg-white"
+        />
+        <Button size="sm" icon={<RotateCcw className="w-3.5 h-3.5" />} onClick={doRenvoyer} disabled={!renvoi.equipe}>
+          Renvoyer
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setRenvoi(null)}>
+          Annuler
+        </Button>
+        <p className="basis-full text-[11px] text-blue-800">La fiche redevient « à faire » avec une nouvelle échéance ; le motif « non fait » reste dans son historique.</p>
+      </div>
+    );
+
   /** Une fiche du suivi avec ses actions (réaffecter, retarder, retirer) */
   const ficheSuivi = (o: ProgrammeOT, showDate = false) => (
     <div key={o.id} className={`flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0 ${o.isUrgent ? 'bg-orange-50/25' : ''}`}>
@@ -406,6 +499,17 @@ export default function DistributionPage() {
           </p>
         )}
         {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
+        <HistoriqueMotifs liste={historique.get(o.id)} />
+        {o.statut === 'non_fait' && peutRenvoyer && renvoi?.cle !== o.id && (
+          <button
+            type="button"
+            onClick={() => ouvrirRenvoi(o.id, [o.id], o.equipe)}
+            className="self-start inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 rounded-md px-1.5 py-1"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> Renvoyer pour refaire
+          </button>
+        )}
+        {panneauRenvoi(o.id)}
         {o.statut === 'fait' && peutSignaler && <FauxOkButton onConfirm={(motif, note) => doFauxOk(o, motif, note)} />}
         {retardId === o.id && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -524,13 +628,31 @@ export default function DistributionPage() {
             <label htmlFor="prog-date" className="block text-xs font-semibold text-slate-500 mb-1.5">
               Programme du
             </label>
-            <input
-              id="prog-date"
-              type="date"
-              value={dateProgramme}
-              onChange={(e) => setDateProgramme(e.target.value)}
-              className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
-            />
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                { d: todayISO(), label: 'Aujourd’hui' },
+                { d: demain, label: `Demain · ${jourCourt(demain)}` },
+              ].map((x) => (
+                <button
+                  key={x.d}
+                  type="button"
+                  onClick={() => setDateProgramme(x.d)}
+                  className={`px-3 py-2 rounded-lg text-sm font-semibold border ${
+                    dateProgramme === x.d ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {x.label}
+                </button>
+              ))}
+              <input
+                id="prog-date"
+                type="date"
+                value={dateProgramme}
+                min={todayISO()}
+                onChange={(e) => e.target.value && setDateProgramme(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
           </div>
           {items.length > 0 && (
             <Button variant="ghost" size="sm" onClick={() => setItems([])}>
@@ -538,6 +660,27 @@ export default function DistributionPage() {
             </Button>
           )}
         </div>
+        {dateProgramme > todayISO() ? (
+          <p className="text-xs rounded-lg px-3 py-2 bg-indigo-50 border border-indigo-200 text-indigo-900 flex items-start gap-2">
+            <CalendarClock className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              <b>Programme du {jourCourt(dateProgramme)}</b> distribué d’avance : les chefs le reçoivent maintenant dans leur programme, avec ses échéances. Rien ne
+              compte ce soir (pas de pénalité au contrôle de 22 h) : les échéances partent du {jourCourt(dateProgramme)} (dérangement ce jour-là avant 22 h,
+              installation le jour ouvré suivant, prioritaire le jour même).
+            </span>
+          </p>
+        ) : (
+          soir &&
+          dateProgramme === todayISO() && (
+            <p className="text-xs rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-900 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>
+                Distribution du soir <b>pour aujourd’hui</b> : les dérangements et les fiches prioritaires sont à faire avant 22 h ce soir. Pour le programme de
+                demain, choisissez « Demain ».
+              </span>
+            </p>
+          )
+        )}
         <label
           htmlFor="prog-files"
           onDragOver={(e) => {
@@ -637,6 +780,16 @@ export default function DistributionPage() {
                             </option>
                           ))}
                         </Select>
+                      )}
+                      {i.renvoi && (
+                        <span
+                          className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-right"
+                          title="Fiche déjà rendue « non faite » : elle sera renvoyée, son motif passé reste dans l’historique"
+                        >
+                          Déjà non fait{i.renvoi.traiteLe ? ` le ${jourCourt(i.renvoi.traiteLe.slice(0, 10))}` : ''}
+                          {i.renvoi.equipe ? ` (${i.renvoi.equipe})` : ''}
+                          {i.renvoi.motif ? ` : ${i.renvoi.motif}` : ''} — renvoyée
+                        </span>
                       )}
                       {i.existante && !i.deja && (
                         <span className="text-[11px] text-blue-700" title="Une situation ouverte de ce FGP existe déjà (import Excel) : l’OT la complète au lieu d’en créer une nouvelle">
@@ -801,6 +954,22 @@ export default function DistributionPage() {
                     {n('fait')}/{list.length} faits ({pct}%) · {n('non_fait')} non faits · {n('a_faire')} à faire
                   </span>
                 </div>
+                {peutRenvoyer && n('non_fait') > 0 && renvoi?.cle !== `grp:${equipe}` && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={<RotateCcw className="w-3.5 h-3.5" />}
+                    onClick={() =>
+                      ouvrirRenvoi(
+                        `grp:${equipe}`,
+                        list.filter((o) => o.statut === 'non_fait').map((o) => o.id),
+                        equipe,
+                      )
+                    }
+                  >
+                    Renvoyer les {n('non_fait')} non faite{n('non_fait') > 1 ? 's' : ''}
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -810,6 +979,7 @@ export default function DistributionPage() {
                   WhatsApp (à faire)
                 </Button>
               </div>
+              {renvoi?.cle === `grp:${equipe}` && <div className="px-4 py-2 border-b border-slate-100">{panneauRenvoi(`grp:${equipe}`)}</div>}
               <div className="h-1 bg-slate-100">
                 <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
               </div>

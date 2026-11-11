@@ -15,7 +15,7 @@
 // au contrôle de 22 h une fois son échéance arrivée (et à chaque contrôle suivant), −1 quand une
 // fiche ouverte est retardée. Réaffecter avant l'échéance ne pénalise pas.
 import { DELAI_THRESHOLD_DRG, DELAI_THRESHOLD_INSTALLATION, PUBLIC_HOLIDAYS } from '@/utils/stats';
-import { estMotifReseau } from '@/utils/programme';
+import { estMotifLeger, estMotifReseau, estMotifSansPoint } from '@/utils/programme';
 import type { Penalite, ProgrammeOT } from '@/types';
 import { BAREME_DEFAUT, type Bareme } from '@/lib/parametresService';
 
@@ -31,6 +31,13 @@ export const POINTS = {
   // fiche faite dont le motif est une panne réseau (câble distribution / transport coupé,
   // HUB-BOX / SUB-BOX défectueux) : coefficient du point (0,5 = moitié)
   coefReseau: BAREME_DEFAUT.coefReseau,
+  // fiche faite sans intervention (confirmé par client, modem défectueux, électricité, erreur de
+  // signalisation) : ces points au lieu du point entier, + bonus décharge + bonus scanné
+  sansIntervention: BAREME_DEFAUT.sansIntervention,
+  bonusDecharge: BAREME_DEFAUT.bonusDecharge,
+  bonusScan: BAREME_DEFAUT.bonusScan,
+  // fiche faite « installé par quelqu'un », « confirmé par client », « erreur de signalisation » : 0
+  faitSansPoint: BAREME_DEFAUT.faitSansPoint,
   // pénalités (affichage : la valeur enregistrée sur chaque pénalité est celle de la base)
   penalite: BAREME_DEFAUT.penaliteNonTraitee,
   penalites: {
@@ -47,6 +54,10 @@ export function appliquerBareme(b: Bareme) {
   POINTS.horsDelai = b.faitHorsDelai;
   POINTS.nonFait = b.nonFait;
   POINTS.coefReseau = b.coefReseau;
+  POINTS.sansIntervention = b.sansIntervention;
+  POINTS.bonusDecharge = b.bonusDecharge;
+  POINTS.bonusScan = b.bonusScan;
+  POINTS.faitSansPoint = b.faitSansPoint;
   POINTS.penalite = b.penaliteNonTraitee;
   POINTS.penalites = { non_traitee: b.penaliteNonTraitee, retardee: b.penaliteRetardee, reaffectee: b.penaliteReaffectee, faux_ok: b.penaliteFauxOk };
 }
@@ -120,6 +131,19 @@ export function jourRemise(assigneLe: string | null | undefined, dateProgramme: 
   const remise = isoJour(a.getTime() + (a.getUTCHours() >= HEURE_LIMITE ? DAY : 0));
   return ajouterJoursOuvres([remise, (dateProgramme ?? '').slice(0, 10)].filter(Boolean).sort().pop()!, 0);
 }
+/** Prochain jour ouvré après « iso » (dimanche et jours fériés sautés) : le jour d'un programme « de demain » */
+export const jourOuvreSuivant = (iso: string) => ajouterJoursOuvres(iso, 1);
+
+/** Heure à partir de laquelle la distribution propose le programme du lendemain (distribution du soir) */
+export const HEURE_PROGRAMME_SOIR = 16;
+
+/**
+ * Fiche distribuée d'avance (le soir pour le lendemain) : son jour de remise est après « jour ».
+ * Elle n'est ni à faire ni en retard aujourd'hui : elle compte à partir de son jour de programme.
+ */
+export const estPourPlusTard = (ot: Pick<ProgrammeOT, 'statut' | 'assigneLe' | 'dateProgramme'>, jour = isoJour(Date.now())) =>
+  ot.statut === 'a_faire' && jourRemise(ot.assigneLe, ot.dateProgramme) > jour;
+
 /** Délai officiel dépassé le jour de la remise */
 export const estPrioritaire = (recuLe: string, nature: ProgrammeOT['nature'], remise: string) => echeance(recuLe, nature) < remise;
 /** Échéance de l'équipe (avant 22 h ce jour-là) */
@@ -138,6 +162,8 @@ export interface DelaiOT {
   prioritaire: boolean; // délai officiel déjà dépassé à la remise
   points: number;
   reseau: boolean; // panne réseau → demi-point
+  leger: boolean; // fiche faite sans intervention → barème « sans intervention » + bonus
+  sansPoint: boolean; // fiche faite qui ne rapporte rien (installé par quelqu'un, confirmé par client…)
   recuLe: string; // YYYY-MM-DD — « OT reçu le » (départ officiel)
   echeanceOfficielle: string; // YYYY-MM-DD — échéance officielle depuis « OT reçu le »
   confieLe: string | null; // YYYY-MM-DD — jour où l'équipe a reçu la fiche
@@ -151,6 +177,8 @@ export function delaiOT(
     motif?: string;
     echeanceEquipe?: string | null;
     prioritaire?: boolean;
+    decharge?: boolean | null;
+    scanne?: boolean | null;
   },
   now = Date.now(),
 ): DelaiOT {
@@ -166,7 +194,18 @@ export function delaiOT(
     ot.statut === 'non_fait' ? 'non_fait' : ot.statut === 'fait' ? (dansLesTemps ? 'dans' : 'hors') : dansLesTemps ? 'en_cours' : 'retard';
   const base = etat === 'dans' ? POINTS.dansDelai : etat === 'hors' ? POINTS.horsDelai : etat === 'non_fait' ? POINTS.nonFait : 0;
   const reseau = ot.statut === 'fait' && estMotifReseau(ot.motif);
-  const points = reseau ? base * POINTS.coefReseau : base;
+  const sansPoint = ot.statut === 'fait' && estMotifSansPoint(ot.motif);
+  const leger = ot.statut === 'fait' && !reseau && !sansPoint && estMotifLeger(ot.motif);
+  // sans intervention, dans le délai : 0,5 + 0,25 si décharge + 0,25 si scanné (barème)
+  const points = sansPoint
+    ? etat === 'dans'
+      ? POINTS.faitSansPoint
+      : POINTS.horsDelai
+    : reseau
+    ? base * POINTS.coefReseau
+    : leger && etat === 'dans'
+      ? POINTS.sansIntervention + (ot.decharge ? POINTS.bonusDecharge : 0) + (ot.scanne ? POINTS.bonusScan : 0)
+      : base;
   return {
     etat,
     jours: joursOuvres(depart, fin),
@@ -176,6 +215,8 @@ export function delaiOT(
     prioritaire,
     points,
     reseau,
+    leger,
+    sansPoint,
     recuLe,
     echeanceOfficielle,
     confieLe,

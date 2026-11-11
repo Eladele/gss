@@ -214,7 +214,9 @@ export default function PointsPage() {
         </p>
         <p className="text-xs text-slate-500">
           Hors délai : <b>{fmtPtsSigne(POINTS.horsDelai)}</b> · « non fait » : <b>{fmtPtsSigne(POINTS.nonFait)}</b> · panne réseau (câble distribution ou
-          transport coupé, HUB-BOX ou SUB-BOX défectueux) : points <b>× {fmtPts(POINTS.coefReseau)}</b>.{' '}
+          transport coupé, HUB-BOX ou SUB-BOX défectueux) : points <b>× {fmtPts(POINTS.coefReseau)}</b> · modem défectueux, problème
+          électricité : <b>{fmtPts(POINTS.sansIntervention)}</b> + <b>{fmtPts(POINTS.bonusDecharge)}</b> si décharge + <b>{fmtPts(POINTS.bonusScan)}</b> si
+          scanné · installé par quelqu’un, confirmé par client, erreur de signalisation : <b>{fmtPts(POINTS.faitSansPoint)}</b>.{' '}
           <b className="text-red-700">{fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)}</b> par fiche ni faite ni « non faite » au contrôle de 22 h une fois son
           échéance arrivée (et à chaque contrôle suivant), <b className="text-red-700">{fmtPts(POINTS.penalites.retardee)}</b> quand une fiche ouverte est
           retardée. Réaffecter une fiche avant son échéance ne pénalise pas.{' '}
@@ -356,7 +358,7 @@ export default function PointsPage() {
                           {o.statut === 'fait' && peutSignaler && (
                             <FauxOkButton compact onConfirm={(motif, note) => fauxOk({ id: o.id, equipe: r.equipe, fgp: o.fgp, typeLigne: o.typeLigne }, motif, note)} />
                           )}
-                          <span className="w-10 text-right font-bold tabular-nums" title={d.reseau ? 'Panne réseau : points × coefficient réseau' : undefined}>
+                          <span className="w-10 text-right font-bold tabular-nums" title={d.reseau ? 'Panne réseau : points × coefficient réseau' : d.leger ? 'Sans intervention : base + bonus décharge + bonus scanné' : undefined}>
                             {fmtPtsSigne(d.points)}
                           </span>
                         </div>

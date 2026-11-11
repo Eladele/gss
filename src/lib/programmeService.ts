@@ -115,13 +115,53 @@ export async function fetchPourPoints(from: string, to: string): Promise<Program
   return (data ?? []).map(mapOt);
 }
 
+/**
+ * Surveillance des équipes : fiches clôturées (faites / non faites) entre from et to (jours, bornes
+ * comprises, heure de Nouakchott = UTC) + toutes les fiches encore ouvertes (programme en cours).
+ */
+export async function fetchSurveillance(from: string, to: string): Promise<ProgrammeOT[]> {
+  const fin = new Date(`${to}T00:00:00Z`);
+  fin.setUTCDate(fin.getUTCDate() + 1);
+  const finIso = fin.toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from(VUE)
+    .select('*')
+    .not('numero_ot', 'is', null)
+    .not('team_id', 'is', null)
+    .or(`status.in.(${OUVERT.join(',')}),and(traite_le.gte.${from}T00:00:00Z,traite_le.lt.${finIso}T00:00:00Z)`)
+    .limit(10000);
+  if (error) throw dbError(error, 'Chargement de la surveillance impossible');
+  return (data ?? []).map(mapOt);
+}
+
 /** N° OT déjà distribués parmi ceux du PDF (pour ne pas les renvoyer) */
-export async function existingNumeros(numeros: string[]): Promise<Map<string, { equipe: string; date: string }>> {
-  const out = new Map<string, { equipe: string; date: string }>();
+export interface OtExistant {
+  id: string;
+  equipe: string;
+  date: string;
+  /** « non_ok » : fiche déjà « non faite », qu'on peut renvoyer en gardant son motif */
+  status: string;
+  motif: string;
+  traiteLe: string | null;
+}
+export async function existingNumeros(numeros: string[]): Promise<Map<string, OtExistant>> {
+  const out = new Map<string, OtExistant>();
   for (let i = 0; i < numeros.length; i += 200) {
-    const { data, error } = await supabase.from(VUE).select('numero_ot, equipe, date_programme').in('numero_ot', numeros.slice(i, i + 200));
+    const { data, error } = await supabase
+      .from(VUE)
+      .select('id, numero_ot, equipe, date_programme, status, motif_cloture, traite_le')
+      .in('numero_ot', numeros.slice(i, i + 200));
     if (error) throw dbError(error, 'Vérification des doublons impossible');
-    (data ?? []).forEach((r) => out.set(r.numero_ot as string, { equipe: (r.equipe as string) ?? '', date: (r.date_programme as string) ?? '' }));
+    (data ?? []).forEach((r) =>
+      out.set(r.numero_ot as string, {
+        id: r.id as string,
+        equipe: (r.equipe as string) ?? '',
+        date: (r.date_programme as string) ?? '',
+        status: (r.status as string) ?? '',
+        motif: (r.motif_cloture as string) ?? '',
+        traiteLe: (r.traite_le as string) ?? null,
+      }),
+    );
   }
   return out;
 }
@@ -688,11 +728,188 @@ export function subscribeProgramme(key: string, onChange: () => void): () => voi
       if (t) clearTimeout(t);
       t = setTimeout(onChange, 500);
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'reclamations_faux_ok' }, () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(onChange, 500);
+    })
     .subscribe();
   return () => {
     if (t) clearTimeout(t);
     supabase.removeChannel(channel);
   };
+}
+
+// ─── Renvoi des fiches « non faites » (supabase_redistribution.sql) ───────────
+export interface ClotureArchivee {
+  id: string;
+  situationId: string;
+  equipe: string;
+  statut: 'ok' | 'non_ok';
+  motif: string;
+  commentaire: string;
+  traiteLe: string | null;
+  traiteParNom: string | null;
+  renvoyeLe: string;
+  renvoyeParNom: string | null;
+  fgp: string;
+  typeLigne: string;
+  clientNom: string;
+  zone: string;
+  nature: string;
+}
+
+const mapArchive = (r: Record<string, any>): ClotureArchivee => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
+  id: r.id,
+  situationId: r.situation_id,
+  equipe: r.equipe ?? '',
+  statut: r.statut,
+  motif: r.motif_cloture ?? '',
+  commentaire: r.commentaire ?? '',
+  traiteLe: r.traite_le ?? null,
+  traiteParNom: r.traite_par_nom ?? null,
+  renvoyeLe: r.renvoye_le,
+  renvoyeParNom: r.renvoye_par_nom ?? null,
+  fgp: r.fgp ?? '',
+  typeLigne: r.type_ligne ?? 'FGP',
+  clientNom: r.client_nom ?? '',
+  zone: r.zone ?? '',
+  nature: r.nature ?? '',
+});
+
+/** Fiches par identifiant (pour retrouver une fiche renvoyée puis refaite plus tard) */
+export async function fetchFichesParIds(ids: string[]): Promise<ProgrammeOT[]> {
+  const out: ProgrammeOT[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabase.from(VUE).select('*').in('id', ids.slice(i, i + 200));
+    if (error) throw dbError(error, 'Chargement des fiches impossible');
+    out.push(...(data ?? []).map(mapOt));
+  }
+  return out;
+}
+
+/** Motifs passés des fiches renvoyées : fiche → clôtures précédentes (la plus ancienne d'abord) */
+export async function fetchHistoriqueClotures(ids: string[]): Promise<Map<string, ClotureArchivee[]>> {
+  const out = new Map<string, ClotureArchivee[]>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabase
+      .from('historique_clotures_detail')
+      .select('*')
+      .in('situation_id', ids.slice(i, i + 200))
+      .order('traite_le', { ascending: true });
+    if (error) return out; // module pas encore installé
+    for (const r of data ?? []) {
+      const a = mapArchive(r);
+      out.set(a.situationId, [...(out.get(a.situationId) ?? []), a]);
+    }
+  }
+  return out;
+}
+
+/** Clôtures archivées entre from et to (jours inclus) : elles comptent comme « non faites » de leur jour */
+export async function fetchHistoriquePeriode(from: string, to: string): Promise<ClotureArchivee[]> {
+  const fin = new Date(`${to}T00:00:00Z`);
+  fin.setUTCDate(fin.getUTCDate() + 1);
+  const { data, error } = await supabase
+    .from('historique_clotures_detail')
+    .select('*')
+    .gte('traite_le', `${from}T00:00:00Z`)
+    .lt('traite_le', fin.toISOString())
+    .limit(10000);
+  if (error) return [];
+  return (data ?? []).map(mapArchive);
+}
+
+/**
+ * Renvoie des fiches « non faites » à une équipe (null : la même) pour le jour donné : le motif
+ * passé est gardé dans l'historique, la fiche redevient « à faire ». Renvoie le nombre renvoyé.
+ */
+export async function redistribuer(ids: string[], equipe: string | null, date: string, par: Par): Promise<number> {
+  const teamId = equipe ? await teamIdFor(equipe) : null;
+  if (equipe && !teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
+  const { data, error } = await supabase.rpc('redistribuer_fiches', { p_ids: ids, p_team: teamId, p_date: date, p_par: par.id });
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883')
+      throw new Error('Le renvoi des fiches n’est pas encore installé (exécuter supabase_redistribution.sql).');
+    throw dbError(error, 'Renvoi impossible');
+  }
+  return Number(data ?? 0);
+}
+
+// ─── Réclamations d'un faux OK (supabase_parametres.sql, section 5) ──────────
+export interface ReclamationFauxOk {
+  id: string;
+  situationId: string;
+  teamId: string;
+  equipe: string;
+  jourFauxOk: string;
+  motifFauxOk: string | null;
+  noteFauxOk: string | null;
+  points: number;
+  message: string;
+  demandeParNom: string | null;
+  demandeLe: string;
+  statut: 'en_attente' | 'acceptee' | 'refusee';
+  reponse: string | null;
+  traiteParNom: string | null;
+  traiteLe: string | null;
+  fgp: string;
+  typeLigne: string;
+  clientNom: string;
+  numeroOt: string | null;
+  nature: string;
+}
+
+const mapReclamation = (r: Record<string, any>): ReclamationFauxOk => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
+  id: r.id,
+  situationId: r.situation_id,
+  teamId: r.team_id,
+  equipe: r.equipe ?? '',
+  jourFauxOk: r.jour_faux_ok,
+  motifFauxOk: r.motif_faux_ok ?? null,
+  noteFauxOk: r.note_faux_ok ?? null,
+  points: Number(r.points ?? 0),
+  message: r.message ?? '',
+  demandeParNom: r.demande_par_nom ?? null,
+  demandeLe: r.demande_le,
+  statut: r.statut,
+  reponse: r.reponse ?? null,
+  traiteParNom: r.traite_par_nom ?? null,
+  traiteLe: r.traite_le ?? null,
+  fgp: r.fgp ?? '',
+  typeLigne: r.type_ligne ?? 'FGP',
+  clientNom: r.client_nom ?? '',
+  numeroOt: r.numero_ot ?? null,
+  nature: r.nature ?? '',
+});
+
+/** Réclamations : toutes (superviseur) ou celles d'une équipe (chef) ; les en attente d'abord */
+export async function fetchReclamations(opts: { teamId?: string | null; depuisJours?: number } = {}): Promise<ReclamationFauxOk[]> {
+  const depuis = new Date(Date.now() - (opts.depuisJours ?? 30) * 86400000).toISOString();
+  let q = supabase.from('reclamations_faux_ok_detail').select('*').gte('demande_le', depuis).order('demande_le', { ascending: false }).limit(500);
+  if (opts.teamId) q = q.eq('team_id', opts.teamId);
+  const { data, error } = await q;
+  if (error) {
+    // module pas encore installé : pas de réclamations
+    if (error.code === 'PGRST205' || error.code === '42P01') return [];
+    throw dbError(error, 'Chargement des réclamations impossible');
+  }
+  return (data ?? []).map(mapReclamation).sort((a, b) => Number(b.statut === 'en_attente') - Number(a.statut === 'en_attente'));
+}
+
+const installerReclamations = (error: { code?: string }) =>
+  error.code === 'PGRST202' || error.code === '42883' ? new Error('Les réclamations ne sont pas encore installées (exécuter supabase_parametres.sql).') : null;
+
+/** Le chef conteste le faux OK de cette fiche */
+export async function reclamerFauxOk(situationId: string, par: Par, message: string): Promise<void> {
+  const { error } = await supabase.rpc('reclamer_faux_ok', { p_situation: situationId, p_par: par.id, p_message: message });
+  if (error) throw installerReclamations(error) ?? dbError(error, 'Réclamation impossible');
+}
+
+/** L'admin / le superviseur accepte (faux OK annulé, fiche rétablie) ou refuse (raison obligatoire) */
+export async function traiterReclamation(id: string, par: Par, accepter: boolean, reponse = ''): Promise<'acceptee' | 'acceptee_retablie' | 'refusee'> {
+  const { data, error } = await supabase.rpc('traiter_reclamation_faux_ok', { p_id: id, p_par: par.id, p_accepter: accepter, p_reponse: reponse });
+  if (error) throw installerReclamations(error) ?? dbError(error, 'Traitement impossible');
+  return data as 'acceptee' | 'acceptee_retablie' | 'refusee';
 }
 
 // ─── Liaison avec les scans réseau (vue situation_scan) ──────────────────────

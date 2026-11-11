@@ -342,14 +342,23 @@ export default function ImportExcelPage() {
       {/* Nature de l'import : installation, dérangement, ou les deux (détection auto par type) */}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-xs font-semibold text-slate-500">Nature du fichier :</span>
-        <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+        <div className="flex gap-1 sm:gap-2 bg-slate-100 p-1 rounded-xl w-full sm:w-fit">
           {(['mixed', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
             <button
               key={n}
               onClick={() => setNature(n)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
             >
-              {n === 'mixed' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
+              {n === 'mixed' ? (
+                <>
+                  <span className="sm:hidden">Les deux</span>
+                  <span className="hidden sm:inline">Installation + Dérangement</span>
+                </>
+              ) : n === 'installation' ? (
+                'Installation'
+              ) : (
+                'Dérangement'
+              )}
             </button>
           ))}
         </div>

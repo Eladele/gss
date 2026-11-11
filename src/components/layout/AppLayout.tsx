@@ -34,6 +34,7 @@ import {
   X,
   FileSpreadsheet,
   Settings,
+  Activity,
 } from 'lucide-react';
 import { InstallApkButton } from '@/components/InstallApkButton';
 
@@ -62,6 +63,7 @@ import DistributionPage from '@/pages/DistributionPage';
 import PointsPage from '@/pages/PointsPage';
 import ExportSalairePage from '@/pages/ExportSalairePage';
 import ParametresPage from '@/pages/ParametresPage';
+import SurveillancePage from '@/pages/SurveillancePage';
 import { DECHARGE_URL } from '@/utils/programme';
 import { useParametresStore } from '@/store/useParametresStore';
 
@@ -88,6 +90,7 @@ type Page =
   | 'caisses'
   | 'distribution'
   | 'points'
+  | 'surveillance'
   | 'export-salaire'
   | 'parametres';
 
@@ -146,6 +149,7 @@ const NAV: Record<Role, NavItem[]> = {
   superviseur: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
+    { id: 'surveillance', label: 'Surveillance équipes' },
     { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_SUPERVISEUR,
     { id: 'equipes', label: 'Équipes' },
@@ -161,6 +165,7 @@ const NAV: Record<Role, NavItem[]> = {
   admin: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
+    { id: 'surveillance', label: 'Surveillance équipes' },
     { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_ADMIN,
     DEPLOIEMENT_GROUP,
@@ -193,6 +198,7 @@ const NAV: Record<Role, NavItem[]> = {
   directeur: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'statistiques', label: 'Statistiques' },
+    { id: 'surveillance', label: 'Surveillance équipes' },
     { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_ADMIN,
     DEPLOIEMENT_GROUP,
@@ -226,6 +232,7 @@ const PAGE_TITLES: Record<Page, string> = {
   caisses: 'Caisses',
   distribution: 'Distribuer le programme',
   points: 'Points des équipes',
+  surveillance: 'Surveillance des équipes',
   'export-salaire': 'Export Salaires (Excel)',
   parametres: 'Paramètres',
 };
@@ -253,6 +260,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   caisses: Banknote,
   distribution: Send,
   points: Trophy,
+  surveillance: Activity,
   'export-salaire': FileSpreadsheet,
   parametres: Settings,
 };
@@ -370,6 +378,7 @@ export default function AppLayout() {
     caisses: <CaissesPage />,
     distribution: <DistributionPage />,
     points: <PointsPage />,
+    surveillance: <SurveillancePage />,
     'export-salaire': <ExportSalairePage />,
     parametres: <ParametresPage />,
   };
@@ -377,8 +386,8 @@ export default function AppLayout() {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Topbar */}
-      <header className="bg-white border-b border-slate-200 h-14 flex items-center justify-between px-4 sticky top-0 z-40 shadow-sm">
-        <div className="flex items-center gap-2">
+      <header className="bg-white border-b border-slate-200 h-14 flex items-center justify-between gap-2 px-2 sm:px-4 sticky top-0 z-40 shadow-sm">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
           {/* Hamburger Menu button for mobile */}
           <button
             onClick={() => setMenuOpen(true)}
@@ -388,17 +397,17 @@ export default function AppLayout() {
             <MenuIcon className="w-5 h-5" />
           </button>
           <div
-            className="px-2.5 py-1.5 rounded-lg text-white text-sm font-black tracking-wider cursor-pointer"
+            className="px-2.5 py-1.5 rounded-lg text-white text-sm font-black tracking-wider cursor-pointer shrink-0"
             style={{ background: 'linear-gradient(135deg, #1565C0, #00BCD4)' }}
             onClick={() => setPage(defaultPage)}
           >
             GSS
           </div>
-          <span className="font-semibold text-slate-800 text-sm hidden sm:block">{PAGE_TITLES[page]}</span>
+          <span className="font-semibold text-slate-800 text-sm truncate">{PAGE_TITLES[page]}</span>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Bouton permanent : Installer version APK */}
-          <InstallApkButton variant="full" />
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Installer l'application : masqué quand elle est déjà installée */}
+          <InstallApkButton />
           {/* Bouton paramètres notifications */}
           {notifPerm !== 'unsupported' && (
             <button
@@ -424,7 +433,7 @@ export default function AppLayout() {
           )}
           <button
             onClick={() => setPage('notifications')}
-            className="relative px-3 py-1.5 rounded-full hover:bg-slate-100 transition-colors text-xs font-semibold text-slate-600 border border-slate-200"
+            className="relative hidden md:inline-flex px-3 py-1.5 rounded-full hover:bg-slate-100 transition-colors text-xs font-semibold text-slate-600 border border-slate-200"
           >
             Alertes
             {unread > 0 && (
@@ -435,7 +444,8 @@ export default function AppLayout() {
           </button>
           <button
             onClick={() => setPage('profil')}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-200 hover:bg-slate-50 transition-colors"
+            aria-label="Mon profil"
+            className="flex items-center gap-2 p-1 sm:px-3 sm:py-1.5 rounded-full border border-slate-200 hover:bg-slate-50 transition-colors"
           >
             <div
               className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold"

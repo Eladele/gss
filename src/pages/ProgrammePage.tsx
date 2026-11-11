@@ -3,8 +3,22 @@ import { useAppStore } from '@/store/useAppStore';
 import { StatCard, EmptyState, useToast } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
 import { OtCard } from '@/components/programme/OtCard';
-import { cloturer, fetchPenalites, fetchPourPoints, fetchProgramme, fetchScanOts, subscribeProgramme, type Cloture, type ScanOT } from '@/lib/programmeService';
-import { ExternalLink, Flame, ScanLine } from 'lucide-react';
+import {
+  cloturer,
+  fetchPenalites,
+  fetchPourPoints,
+  fetchProgramme,
+  fetchReclamations,
+  fetchHistoriqueClotures,
+  type ClotureArchivee,
+  fetchScanOts,
+  reclamerFauxOk,
+  subscribeProgramme,
+  type Cloture,
+  type ReclamationFauxOk,
+  type ScanOT,
+} from '@/lib/programmeService';
+import { ExternalLink, Flame, MapPin, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
 import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
 import { POINTS, classement, delaiOT, fmtPts, fmtPtsSigne } from '@/utils/points';
@@ -32,6 +46,10 @@ function FichesOT() {
   const [busy, setBusy] = useState<string | null>(null);
   const [sheet, setSheet] = useState<{ ot: ProgrammeOT; mode: 'fait' | 'non_fait' } | null>(null);
   const [scans, setScans] = useState<Map<string, ScanOT>>(new Map());
+  // réclamations de l'équipe sur ses faux OK (la plus récente par fiche)
+  const [reclamations, setReclamations] = useState<Map<string, ReclamationFauxOk>>(new Map());
+  // motifs passés des fiches renvoyées (déjà « non faites »)
+  const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
 
   useEffect(() => {
     if (!team) return;
@@ -46,6 +64,12 @@ function FichesOT() {
             setOts(rows);
             setError('');
             fetchScanOts(rows.map((r) => r.id)).then((m) => alive && setScans(m));
+            fetchHistoriqueClotures(rows.map((r) => r.id)).then((h) => alive && setHistorique(h));
+            if (user.teamId)
+              fetchReclamations({ teamId: user.teamId }).then(
+                (rs) => alive && setReclamations(new Map([...rs].reverse().map((r) => [r.situationId, r]))),
+                () => undefined,
+              );
           },
           (e) => alive && setError(errMsg(e)),
         )
@@ -59,7 +83,7 @@ function FichesOT() {
       unsub();
       document.removeEventListener('visibilitychange', onFocus);
     };
-  }, [team, today]);
+  }, [team, today, user.teamId]);
 
   const change = async (ot: ProgrammeOT, c: Cloture) => {
     setBusy(ot.id);
@@ -97,6 +121,7 @@ function FichesOT() {
     }
   };
 
+  // toutes les fiches ouvertes, y compris le programme de demain distribué d'avance (mélangé)
   const aFaire = ots.filter((o) => o.statut === 'a_faire');
   const termines = ots.filter((o) => o.statut !== 'a_faire' && (o.traiteLe ?? '').slice(0, 10) === today);
   const list = useMemo(() => {
@@ -115,6 +140,20 @@ function FichesOT() {
         (a.zone + a.pco).localeCompare(b.zone + b.pco),
     );
   }, [view, aFaire, termines, q]);
+
+  // Programme regroupé par zone : la zone de la fiche la plus urgente d'abord, puis l'ordre ci-dessus
+  const parZone = useMemo(() => {
+    const m = new Map<string, ProgrammeOT[]>();
+    for (const o of list) {
+      const z = o.zone?.trim() || 'Sans zone';
+      const l = m.get(z);
+      if (l) l.push(o);
+      else m.set(z, [o]);
+    }
+    return [...m.entries()];
+  }, [list]);
+  const nbZone = (z: string, statut: 'a_faire' | 'fini') =>
+    (statut === 'a_faire' ? aFaire : termines).filter((o) => (o.zone?.trim() || 'Sans zone') === z).length;
 
   if (!team) return <EmptyState icon="" text="Aucune équipe associée à votre compte. Contactez votre superviseur." />;
   if (!loaded) return <p className="py-10 text-center text-sm text-slate-400">Chargement du programme…</p>;
@@ -191,8 +230,8 @@ function FichesOT() {
         <StatCard value={der} label="Dérangements" icon="" accent="#E65100" />
         <StatCard value={termines.filter((o) => o.statut === 'fait').length} label="Faits aujourd’hui" icon="" accent="#2E7D32" />
       </div>
-      <div className="flex gap-2 items-center">
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="flex gap-1 bg-slate-100 p-1 rounded-lg max-w-full overflow-x-auto">
           {(
             [
               ['a_faire', `À faire (${aFaire.length})`],
@@ -202,7 +241,9 @@ function FichesOT() {
             <button
               key={id}
               onClick={() => setView(id)}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold ${view === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${
+                view === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+              }`}
             >
               {label}
             </button>
@@ -213,24 +254,68 @@ function FichesOT() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Client, FGP, PCO, n° série…"
-          className="flex-1 min-w-0 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
+          className="w-full sm:w-auto sm:flex-1 min-w-0 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
         />
       </div>
       {list.length === 0 ? (
-        <EmptyState icon="" text={view === 'a_faire' ? 'Aucune fiche à faire. Le prochain programme arrivera avec une notification.' : 'Aucune fiche terminée aujourd’hui.'} />
+        <EmptyState
+          icon=""
+          text={
+            view === 'a_faire'
+              ? 'Aucune fiche à faire. Le prochain programme arrivera avec une notification.'
+              : 'Aucune fiche terminée aujourd’hui.'
+          }
+        />
       ) : (
-        <div className="space-y-3">
-          {list.map((o) => (
-            <OtCard
-              key={o.id}
-              ot={o}
-              scan={scans.get(o.id)}
-              busy={busy === o.id}
-              onFait={() => setSheet({ ot: o, mode: 'fait' })}
-              onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}
-              onReset={() => change(o, { statut: 'a_faire' })}
-            />
-          ))}
+        <div className="space-y-5">
+          {parZone.map(([zone, fiches]) => {
+            const reste = nbZone(zone, 'a_faire');
+            const faites = nbZone(zone, 'fini');
+            const total = reste + faites;
+            return (
+              <section key={zone} className="space-y-3">
+                <div className="sticky top-14 z-10 -mx-1 px-3 py-2 rounded-xl bg-slate-800 text-white flex items-center gap-2 shadow-sm">
+                  <MapPin className="w-4 h-4 text-sky-300 shrink-0" />
+                  <span className="font-black tracking-wide">{zone}</span>
+                  <span className="text-xs text-slate-300">
+                    {view === 'a_faire' ? `${reste} à faire` : `${fiches.length} terminée${fiches.length > 1 ? 's' : ''}`}
+                  </span>
+                  {total > 0 && (
+                    <span className="ml-auto flex items-center gap-2 text-[11px] text-slate-300">
+                      <span className="w-16 h-1.5 rounded-full bg-slate-600 overflow-hidden">
+                        <span className="block h-full bg-emerald-400" style={{ width: `${Math.round((faites / total) * 100)}%` }} />
+                      </span>
+                      {faites}/{total}
+                    </span>
+                  )}
+                </div>
+                {fiches.map((o) => (
+                  <OtCard
+                    key={o.id}
+                    ot={o}
+                    scan={scans.get(o.id)}
+                    busy={busy === o.id}
+                    onFait={() => setSheet({ ot: o, mode: 'fait' })}
+                    onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}
+                    onReset={() => change(o, { statut: 'a_faire' })}
+                    reclamation={reclamations.get(o.id)}
+                    historique={historique.get(o.id)}
+                    onReclamer={async (message) => {
+                      try {
+                        await reclamerFauxOk(o.id, user, message);
+                        showToast(`${ligneLabel(o)} : réclamation envoyée au superviseur`, 'success');
+                        const rs = await fetchReclamations({ teamId: user.teamId });
+                        setReclamations(new Map([...rs].reverse().map((r) => [r.situationId, r])));
+                      } catch (e) {
+                        showToast(errMsg(e), 'error');
+                        throw e;
+                      }
+                    }}
+                  />
+                ))}
+              </section>
+            );
+          })}
         </div>
       )}
       {sheet && (

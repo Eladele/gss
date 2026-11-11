@@ -9,6 +9,10 @@ export interface Bareme {
   faitHorsDelai: number; // fiche faite après son échéance
   nonFait: number; // fiche marquée « non fait »
   coefReseau: number; // fiche faite, motif panne réseau : coefficient du point (0,5 = moitié)
+  sansIntervention: number; // faite dans le délai, motif confirmé par client / modem défectueux / électricité / erreur de signalisation
+  bonusDecharge: number; // … + ce bonus si la décharge est faite
+  bonusScan: number; // … + ce bonus si l'ONT est scanné
+  faitSansPoint: number; // faite, motif installé par quelqu'un / confirmé par client / erreur de signalisation
   penaliteNonTraitee: number; // ni faite ni « non faite » au contrôle de 22 h
   penaliteRetardee: number; // fiche ouverte retardée
   penaliteReaffectee: number; // réaffectée avec la case « pénaliser » cochée
@@ -20,6 +24,10 @@ export const BAREME_DEFAUT: Bareme = {
   faitHorsDelai: 0,
   nonFait: 0,
   coefReseau: 0.5,
+  sansIntervention: 0.5,
+  bonusDecharge: 0.25,
+  bonusScan: 0.25,
+  faitSansPoint: 0,
   penaliteNonTraitee: -1,
   penaliteRetardee: -1,
   penaliteReaffectee: -1,
@@ -32,6 +40,10 @@ const CLES_BAREME: Record<keyof Bareme, string> = {
   faitHorsDelai: 'fait_hors_delai',
   nonFait: 'non_fait',
   coefReseau: 'coef_reseau',
+  sansIntervention: 'sans_intervention',
+  bonusDecharge: 'bonus_decharge',
+  bonusScan: 'bonus_scan',
+  faitSansPoint: 'fait_sans_point',
   penaliteNonTraitee: 'penalite_non_traitee',
   penaliteRetardee: 'penalite_retardee',
   penaliteReaffectee: 'penalite_reaffectee',

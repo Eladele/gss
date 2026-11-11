@@ -33,6 +33,24 @@ const FICHES: LigneBareme[] = [
     max: 1,
     pas: 0.05,
   },
+  {
+    cle: 'sansIntervention',
+    label: 'Fait sans intervention',
+    aide: 'Fiche faite dans le délai avec motif « Modem défectueux » ou « Problème électricité » : ces points au lieu du point entier.',
+    min: 0,
+    max: 10,
+    pas: 0.05,
+  },
+  { cle: 'bonusDecharge', label: '… + bonus décharge', aide: 'Ajouté à une fiche « sans intervention » si la décharge est faite.', min: 0, max: 10, pas: 0.05 },
+  { cle: 'bonusScan', label: '… + bonus scanné', aide: 'Ajouté à une fiche « sans intervention » si l’ONT est scanné.', min: 0, max: 10, pas: 0.05 },
+  {
+    cle: 'faitSansPoint',
+    label: 'Fait sans point',
+    aide: 'Fiche faite avec motif « Installé par quelqu’un », « Confirmé par client » ou « Erreur de signalisation » (0 = aucun point).',
+    min: 0,
+    max: 10,
+    pas: 0.05,
+  },
 ];
 
 const PENALITES: LigneBareme[] = [
@@ -47,6 +65,10 @@ const LIBELLE_BAREME: Record<string, string> = {
   fait_hors_delai: 'Faite hors délai',
   non_fait: 'Non faite',
   coef_reseau: 'Coef. panne réseau',
+  sans_intervention: 'Sans intervention',
+  bonus_decharge: 'Bonus décharge',
+  bonus_scan: 'Bonus scanné',
+  fait_sans_point: 'Fait sans point',
   penalite_non_traitee: 'Non traitée à 22 h',
   penalite_retardee: 'Retardée',
   penalite_reaffectee: 'Réaffectée',
@@ -141,7 +163,13 @@ export default function ParametresPage() {
   const enteteModifie = JSON.stringify(e) !== JSON.stringify(entete);
   const exemple = useMemo(() => {
     const n = (k: keyof Bareme) => (typeof b[k] === 'number' ? (b[k] as number) : 0);
-    return { reseau: n('faitDansDelai') * n('coefReseau'), dans: n('faitDansDelai'), pen: n('penaliteNonTraitee') };
+    return {
+      reseau: n('faitDansDelai') * n('coefReseau'),
+      dans: n('faitDansDelai'),
+      pen: n('penaliteNonTraitee'),
+      leger: n('sansIntervention'),
+      legerComplet: n('sansIntervention') + n('bonusDecharge') + n('bonusScan'),
+    };
   }, [b]);
 
   const enregistrerBareme = async () => {
@@ -205,7 +233,8 @@ export default function ParametresPage() {
         <div className="px-4 py-3 bg-slate-50/70 border-t border-slate-100 text-xs text-slate-600 space-y-1">
           <p>
             Exemple : dérangement fait dans le délai <b>{fmtPtsSigne(exemple.dans)}</b> · même fiche avec panne réseau <b>{fmtPtsSigne(exemple.reseau)}</b> ·
-            fiche oubliée deux soirs <b className="text-red-700">{fmtPts(exemple.pen * 2)}</b>.
+            « modem défectueux » sans décharge ni scan <b>{fmtPtsSigne(exemple.leger)}</b>, avec décharge et scan <b>{fmtPtsSigne(exemple.legerComplet)}</b> · fiche oubliée
+            deux soirs <b className="text-red-700">{fmtPts(exemple.pen * 2)}</b>.
           </p>
           <p>
             Les points des fiches sont recalculés avec le nouveau barème, y compris sur les périodes passées. Les pénalités déjà enregistrées gardent leur

@@ -21,6 +21,8 @@ export default defineConfig({
         orientation: 'portrait',
         scope: './',
         start_url: './',
+        // permet au navigateur de savoir que l'application est installée (bouton « Installer » masqué)
+        related_applications: [{ platform: 'webapp', url: './manifest.webmanifest' }],
         icons: [
           {
             src: 'pwa-icon-192.png',

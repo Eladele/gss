@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Check, ExternalLink, Minus, Plus } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
 import type { Cloture } from '@/lib/programmeService';
-import { DECHARGE_URL, estMotifReseau, ligneLabel, MOTIFS_FAIT, MOTIFS_NON_FAIT, poteauxDuMotif } from '@/utils/programme';
+import { DECHARGE_URL, estMotifLeger, estMotifReseau, estMotifSansPoint, ligneLabel, MOTIFS_FAIT, motifsNonFaitPour, poteauxDuMotif } from '@/utils/programme';
+import { POINTS, fmtPts } from '@/utils/points';
 
 const AUTRE = 'Autre';
 
@@ -46,7 +47,7 @@ export function ClotureSheet({
     ? MOTIFS_FAIT.filter((m) => estInstalleParQuelqun(m.label))
     : fait
       ? MOTIFS_FAIT.filter((m) => !estInstalleParQuelqun(m.label))
-      : MOTIFS_NON_FAIT;
+      : motifsNonFaitPour(ot.nature); // hors zone, poteaux, modem… : seulement pour une installation
   const [motif, setMotif] = useState('');
   const [autre, setAutre] = useState('');
   const [commentaire, setCommentaire] = useState('');
@@ -128,6 +129,16 @@ export function ClotureSheet({
                 </button>
               ))}
             </div>
+            {fait && estMotifSansPoint(motif) && (
+              <p className="mt-2 text-[11px] font-semibold text-slate-700 bg-slate-100 rounded-md px-2 py-1">
+                Ce motif ne rapporte pas de point{POINTS.faitSansPoint ? ` (${fmtPts(POINTS.faitSansPoint)} seulement)` : ''} : la fiche est clôturée « Fait ».
+              </p>
+            )}
+            {fait && estMotifLeger(motif) && (
+              <p className="mt-2 text-[11px] font-semibold text-sky-800 bg-sky-50 rounded-md px-2 py-1">
+                Sans intervention : {fmtPts(POINTS.sansIntervention)} point, +{fmtPts(POINTS.bonusDecharge)} avec la décharge, +{fmtPts(POINTS.bonusScan)} si scanné.
+              </p>
+            )}
             {fait && estMotifReseau(motif) && (
               <p className="mt-2 text-[11px] font-semibold text-amber-800 bg-amber-50 rounded-md px-2 py-1">
                 Panne réseau : cette fiche compte un demi-point.

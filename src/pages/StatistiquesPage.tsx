@@ -286,14 +286,23 @@ export default function StatistiquesPage() {
       </div>
 
       {/* Nature toggle */}
-      <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-fit">
+      <div className="flex gap-1 sm:gap-2 bg-slate-100 p-1 rounded-xl w-full sm:w-fit">
         {(['all', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
           <button
             key={n}
             onClick={() => setNature(n)}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`flex-1 sm:flex-none whitespace-nowrap px-2 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
           >
-            {n === 'all' ? 'Installation + Dérangement' : n === 'installation' ? 'Installation' : 'Dérangement'}
+            {n === 'all' ? (
+              <>
+                <span className="sm:hidden">Tout</span>
+                <span className="hidden sm:inline">Installation + Dérangement</span>
+              </>
+            ) : n === 'installation' ? (
+              'Installation'
+            ) : (
+              'Dérangement'
+            )}
           </button>
         ))}
       </div>
@@ -525,7 +534,7 @@ export default function StatistiquesPage() {
       )}
 
       {/* Équipes les plus actives + courbe de tendance */}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-2 gap-4 sm:gap-6 [&>*]:min-w-0">
         <Card>
           <CardHeader>
             <CardTitle> Équipes les plus actives</CardTitle>
@@ -552,7 +561,7 @@ export default function StatistiquesPage() {
       </div>
 
       {/* Répartition par ville (donut) + par jour de semaine */}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-2 gap-4 sm:gap-6 [&>*]:min-w-0">
         <Card>
           <CardHeader>
             <CardTitle> Répartition par ville</CardTitle>
@@ -572,7 +581,7 @@ export default function StatistiquesPage() {
       </div>
 
       {/* Leaderboard équipes + par type */}
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-2 gap-4 sm:gap-6 [&>*]:min-w-0">
         <Card>
           <CardHeader>
             <CardTitle> Équipes les plus performantes (% conformité)</CardTitle>
