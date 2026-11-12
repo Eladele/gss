@@ -55,6 +55,7 @@ export interface Situation {
   // Rx, ranging et statut réseau ne sont pas stockés sur la situation : ils viennent
   // uniquement du fichier de scan (scan_results), via le FGP.
   closedBy?: string; // nom de la personne ayant clôturé la situation (profiles)
+  motifCloture?: string; // motif choisi par l'équipe à la clôture (Fait / Non fait), ≠ motif de l'OT
 }
 
 export interface Notification {

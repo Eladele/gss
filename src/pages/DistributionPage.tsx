@@ -306,7 +306,8 @@ export default function DistributionPage() {
   };
 
   // ─── Programme déjà distribué ──────────────────────────────────────────
-  const [histDate, setHistDate] = useState(todayISO());
+  // après le contrôle de 22 h : suivi du programme de demain, avec les fiches non traitées reportées
+  const [histDate, setHistDate] = useState(() => (new Date().getUTCHours() >= 22 ? jourOuvreSuivant(todayISO()) : todayISO()));
   const [hist, setHist] = useState<ProgrammeOT[]>([]);
   const [histError, setHistError] = useState('');
   const [armed, setArmed] = useState<string | null>(null);
@@ -335,7 +336,7 @@ export default function DistributionPage() {
   useEffect(() => {
     let alive = true;
     const refresh = () =>
-      Promise.all([fetchProgramme({ from: histDate, to: histDate }), histDate === todayISO() ? fetchEnRetard(histDate) : Promise.resolve([])]).then(
+      Promise.all([fetchProgramme({ from: histDate, to: histDate }), histDate >= todayISO() ? fetchEnRetard(histDate) : Promise.resolve([])]).then(
         ([rows, retard]) => {
           if (!alive) return;
           setHist(rows);
@@ -874,7 +875,9 @@ export default function DistributionPage() {
           <Card className="border-red-200">
             <div className="px-4 py-3 border-b border-red-100 bg-red-50/60">
               <p className="font-bold text-red-800">
-                {enRetard.length} fiche{enRetard.length > 1 ? 's' : ''} non traitée{enRetard.length > 1 ? 's' : ''} après l’échéance
+                {histDate > todayISO()
+                  ? `${enRetard.length} fiche${enRetard.length > 1 ? 's' : ''} reportée${enRetard.length > 1 ? 's' : ''} au ${jourCourt(histDate)} (non traitée${enRetard.length > 1 ? 's' : ''} à l’échéance) : réaffectez-les ou laissez-les à l’équipe`
+                  : `${enRetard.length} fiche${enRetard.length > 1 ? 's' : ''} non traitée${enRetard.length > 1 ? 's' : ''} après l’échéance`}
               </p>
               <p className="text-xs text-red-700/80">
                 Laissez-les à l’équipe ({fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)} à chaque contrôle de 22 h tant qu’elles ne sont pas traitées), réaffectez-les (la nouvelle équipe repart avec sa propre échéance) ou retardez-les.
@@ -1001,7 +1004,7 @@ export default function DistributionPage() {
             showToast(msg, 'success');
             Promise.all([
               fetchProgramme({ from: histDate, to: histDate }),
-              histDate === todayISO() ? fetchEnRetard(histDate) : Promise.resolve([]),
+              histDate >= todayISO() ? fetchEnRetard(histDate) : Promise.resolve([]),
             ]).then(([rows, retard]) => {
               setHist(rows);
               setEnRetard(retard);

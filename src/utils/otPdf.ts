@@ -22,6 +22,8 @@ export interface ParsedOT {
   dis: string; // DIS complet : CA1Z042611/1-4
   ancienDis: string; // dérangement : DIS « ancienne constitution » s'il diffère
   ontSerials: string[]; // 48575443B2FCC9AE
+  ips: string; // OT Réseau (ANS…) : adresse IPS de la constitution, ex. 10.41.132.176
+  ipm: string; // OT Réseau (ANS…) : adresse IPM, ex. 10.42.132.176
   defaut: string; // dérangement : défaut constaté
   abonnement: string; // installation : « Abonnement FTTH 100 Mbps »
   cableFibreM: number | null; // installation : longueur de câble fibre prévue (m)
@@ -189,6 +191,11 @@ function parseBlock(block: string[]): ParsedOT {
   const ontSerials = uniq((ontDroite.length ? ontDroite : ontAll).map((o) => o.m[1].toUpperCase()));
   if (!ontSerials.length) warnings.push('Numéro de série ONT introuvable');
 
+  // adresses IP de la constitution (ANS « Ajout numéro supplément »…) : IPS / IPM
+  const ip = (nom: string) => consLines.join('\n').match(new RegExp(`\\b${nom}\\s*:?\\s*(\\d{1,3}(?:\\.\\d{1,3}){3})\\b`, 'i'))?.[1] ?? '';
+  const ips = ip('IPS');
+  const ipm = ip('IPM');
+
   const zone = nouveau?.zone ?? adresse.match(RE_ZONE)?.[1]?.toUpperCase() ?? '';
   if (!zone) warnings.push('Zone introuvable');
 
@@ -229,6 +236,8 @@ function parseBlock(block: string[]): ParsedOT {
     dis: nouveau?.full ?? '',
     ancienDis: ancien && nouveau && ancien.full !== nouveau.full ? ancien.full : '',
     ontSerials,
+    ips,
+    ipm,
     defaut,
     abonnement: clean(text.match(/Nature\s+abonnement\s*:\s*(.+)/i)?.[1] ?? ''),
     cableFibreM,

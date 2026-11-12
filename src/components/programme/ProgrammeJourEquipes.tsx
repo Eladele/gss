@@ -1,55 +1,63 @@
 import { Fragment, useMemo, useState } from 'react';
-import { CalendarClock, CheckCircle2, ChevronDown, CircleDashed, MapPin, Search, XCircle } from 'lucide-react';
+import { ArrowRightLeft, CalendarClock, CheckCircle2, ChevronDown, CircleDashed, MapPin, RotateCcw, Search, X, XCircle } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
-import { delaiOT, estPourPlusTard, fmtPtsSigne, jourCourt, jourRemise } from '@/utils/points';
-import { NATURE_CLASS, NATURE_LABEL, ligneLabel, type MotifFauxOk } from '@/utils/programme';
+import { delaiOT, estPourPlusTard, fmtPtsSigne, jourCourt, jourOuvreSuivant, jourRemise } from '@/utils/points';
+import { ligneLabel, type MotifFauxOk } from '@/utils/programme';
 import { isoJour } from '@/utils/surveillance';
 import { FauxOkButton } from '@/components/programme/FauxOk';
 
-type Filtre = 'tout' | 'fait' | 'non_fait' | 'a_faire' | 'demain';
+type Filtre = 'tout' | 'fait' | 'non_fait' | 'a_faire' | 'reportee' | 'demain';
 const FILTRES: { id: Filtre; label: string }[] = [
   { id: 'tout', label: 'Toutes' },
   { id: 'fait', label: 'Faites' },
   { id: 'non_fait', label: 'Non faites' },
   { id: 'a_faire', label: 'En cours' },
-  { id: 'demain', label: 'Demain' },
+  { id: 'reportee', label: 'Reportées' },
+  { id: 'demain', label: 'Plus tard' },
 ];
 
 const ORDRE: Record<ProgrammeOT['statut'], number> = { a_faire: 0, non_fait: 1, fait: 2 };
 const zoneDe = (o: ProgrammeOT) => o.zone?.trim() || 'Sans zone';
-const heure = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '');
+const aujourdhui = () => isoJour(new Date());
 
-function Statut({ o, retard, demain }: { o: ProgrammeOT; retard: boolean; demain?: boolean }) {
+type Ligne = { o: ProgrammeOT; d: ReturnType<typeof delaiOT>; demain: boolean; reportee: boolean; renvoyee: boolean };
+
+function Statut({ l }: { l: Ligne }) {
+  const { o, d, demain, reportee } = l;
+  const pill = 'inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap';
   if (demain)
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-800 border border-indigo-200 whitespace-nowrap">
+      <span className={`${pill} bg-indigo-50 text-indigo-800 border-indigo-200`}>
         <CalendarClock className="w-3.5 h-3.5" /> {jourCourt(jourRemise(o.assigneLe, o.dateProgramme))}
       </span>
     );
   if (o.statut === 'fait')
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 whitespace-nowrap">
-        <CheckCircle2 className="w-3.5 h-3.5" /> Fait
+      <span className={`${pill} bg-emerald-50 text-emerald-800 border-emerald-200`}>
+        <CheckCircle2 className="w-3.5 h-3.5" /> Fait{d.etat === 'hors' ? ' hors délai' : ''}
       </span>
     );
   if (o.statut === 'non_fait')
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-red-800 border border-red-200 whitespace-nowrap">
-        <XCircle className="w-3.5 h-3.5" /> Non fait
+      <span className={`${pill} bg-red-50 text-red-800 border-red-200`}>
+        <XCircle className="w-3.5 h-3.5" /> Non fait{l.renvoyee ? ' · renvoyée' : ''}
       </span>
     );
+  if (reportee)
+    return (
+      <span className={`${pill} bg-orange-50 text-orange-800 border-orange-300`} title="Pas traitée à son échéance : reportée au programme de ce jour">
+        <RotateCcw className="w-3.5 h-3.5" /> Reportée ({jourCourt(d.echeance)})
+      </span>
+    );
+  const retard = d.etat === 'retard';
   return (
-    <span
-      className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border whitespace-nowrap ${
-        retard ? 'bg-red-600 text-white border-red-600' : 'bg-sky-50 text-sky-800 border-sky-200'
-      }`}
-    >
+    <span className={`${pill} ${retard ? 'bg-red-600 text-white border-red-600' : 'bg-sky-50 text-sky-800 border-sky-200'}`}>
       <CircleDashed className="w-3.5 h-3.5" /> {retard ? 'En retard' : 'En cours'}
     </span>
   );
 }
 
-/** En-tête de zone dans le programme d'une équipe : « CA3Z05 · 3 faites · 1 non faite · 2 en cours » */
+/** En-tête de zone : « CA3Z05 · 3 faites · 1 non faite · 2 en cours » */
 function ZoneTitre({ zone, z }: { zone: string; z?: { fait: number; non_fait: number; a_faire: number } }) {
   return (
     <span className="flex flex-wrap items-center gap-x-2">
@@ -69,10 +77,12 @@ function ZoneTitre({ zone, z }: { zone: string; z?: { fait: number; non_fait: nu
 }
 
 /**
- * Programme du jour de chaque équipe, pour le superviseur : une ligne par fiche avec le FGP, le
- * client, le motif et l'état (fait, non fait, en cours), regroupée par équipe.
- *   • fiches clôturées ce jour-là ;
- *   • si le jour choisi est aujourd'hui : aussi toutes les fiches encore ouvertes.
+ * Programme d'un jour pour le superviseur, regroupé par équipe puis par zone : FGP, état, motif.
+ *   • fiches clôturées ce jour-là (faites / non faites, y compris celles renvoyées depuis) ;
+ *   • jour en cours ou à venir : fiches ouvertes à faire ce jour-là, dont les « reportées »
+ *     (pas traitées à leur échéance, par ex. après le contrôle de 22 h : elles passent au
+ *     programme du lendemain) ;
+ *   • sélection de fiches → réaffecter (en cours) ou renvoyer (non faites) à une équipe.
  */
 export function ProgrammeJourEquipes({
   ots,
@@ -81,6 +91,9 @@ export function ProgrammeJourEquipes({
   couleur,
   peutSignaler,
   onFauxOk,
+  equipeNames,
+  onReaffecter,
+  onRenvoyer,
 }: {
   ots: ProgrammeOT[];
   jour: string;
@@ -88,58 +101,103 @@ export function ProgrammeJourEquipes({
   couleur: (equipe: string) => string;
   peutSignaler: boolean;
   onFauxOk: (o: ProgrammeOT, motif: MotifFauxOk, note: string) => Promise<void>;
+  equipeNames: string[];
+  onReaffecter: (ids: string[], equipe: string) => Promise<void>;
+  onRenvoyer: (ids: string[], equipe: string, date: string) => Promise<void>;
 }) {
   const [filtre, setFiltre] = useState<Filtre>('tout');
   const [q, setQ] = useState('');
   const [fermees, setFermees] = useState<Set<string>>(new Set());
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [cible, setCible] = useState('');
+  const [dateRenvoi, setDateRenvoi] = useState(() => (jour > aujourdhui() ? jour : aujourdhui()));
+  const [busy, setBusy] = useState(false);
 
   const groupes = useMemo(() => {
     const recherche = q.trim().toLowerCase();
-    const m = new Map<string, { o: ProgrammeOT; d: ReturnType<typeof delaiOT>; demain: boolean }[]>();
+    const m = new Map<string, Ligne[]>();
     for (const o of ots) {
       if (!o.equipe) continue;
       const duJour = o.statut === 'a_faire' ? enCours : !!o.traiteLe && isoJour(new Date(o.traiteLe)) === jour;
       if (!duJour) continue;
-      let l = m.get(o.equipe);
-      if (!l) m.set(o.equipe, (l = []));
-      l.push({ o, d: delaiOT(o), demain: estPourPlusTard(o, jour) });
+      const d = delaiOT(o);
+      const demain = estPourPlusTard(o, jour);
+      // ouverte, échéance passée avant ce jour (jour à venir) : reportée au programme de ce jour
+      const reportee = o.statut === 'a_faire' && !demain && jour > aujourdhui() && d.echeance < jour;
+      const l = m.get(o.equipe) ?? [];
+      l.push({ o, d, demain, reportee, renvoyee: o.id.startsWith('h:') });
+      m.set(o.equipe, l);
     }
     return [...m.entries()]
       .map(([equipe, toutes]) => {
-        const nb = { fait: 0, non_fait: 0, a_faire: 0, retard: 0, demain: 0 };
+        const nb = { fait: 0, non_fait: 0, a_faire: 0, retard: 0, demain: 0, reportee: 0 };
         let points = 0;
-        for (const { o, d, demain } of toutes) {
-          if (demain) {
+        const zones = new Map<string, { fait: number; non_fait: number; a_faire: number }>();
+        for (const l of toutes) {
+          if (l.demain) {
             nb.demain++;
             continue;
           }
-          nb[o.statut]++;
-          if (o.statut === 'a_faire' && d.etat === 'retard') nb.retard++;
-          if (o.statut !== 'a_faire') points += d.points;
+          nb[l.o.statut]++;
+          if (l.reportee) nb.reportee++;
+          else if (l.o.statut === 'a_faire' && l.d.etat === 'retard') nb.retard++;
+          if (l.o.statut !== 'a_faire') points += l.d.points;
+          const z = zones.get(zoneDe(l.o)) ?? { fait: 0, non_fait: 0, a_faire: 0 };
+          z[l.o.statut]++;
+          zones.set(zoneDe(l.o), z);
         }
         const lignes = toutes
-          .filter(({ o, demain }) => filtre === 'tout' || (filtre === 'demain' ? demain : !demain && o.statut === filtre))
-          .filter(({ o }) => !recherche || [o.fgp, o.clientNom, o.motif, o.numeroOt, o.zone, o.pco].join(' ').toLowerCase().includes(recherche))
+          .filter(
+            (l) =>
+              filtre === 'tout' ||
+              (filtre === 'demain' ? l.demain : filtre === 'reportee' ? l.reportee : !l.demain && l.o.statut === filtre),
+          )
+          .filter((l) => !recherche || [l.o.fgp, l.o.motif, l.o.clientNom, l.o.numeroOt].join(' ').toLowerCase().includes(recherche))
           .sort(
             (a, b) =>
               zoneDe(a.o).localeCompare(zoneDe(b.o)) ||
               Number(a.demain) - Number(b.demain) ||
               ORDRE[a.o.statut] - ORDRE[b.o.statut] ||
-              Number(b.d.etat === 'retard') - Number(a.d.etat === 'retard') ||
+              Number(b.reportee || b.d.etat === 'retard') - Number(a.reportee || a.d.etat === 'retard') ||
               (a.o.traiteLe ?? a.d.echeance).localeCompare(b.o.traiteLe ?? b.d.echeance),
           );
-        // par zone : fiches faites / non faites / en cours (sans celles de demain)
-        const zones = new Map<string, { fait: number; non_fait: number; a_faire: number }>();
-        for (const { o, demain } of toutes) {
-          if (demain) continue;
-          const z = zones.get(zoneDe(o)) ?? { fait: 0, non_fait: 0, a_faire: 0 };
-          z[o.statut]++;
-          zones.set(zoneDe(o), z);
-        }
-        return { equipe, nb, points, total: toutes.length, lignes, zones };
+        return { equipe, nb, points, lignes, zones };
       })
       .sort((a, b) => a.equipe.localeCompare(b.equipe));
   }, [ots, jour, enCours, filtre, q]);
+
+  // sélection : fiches ouvertes (à réaffecter) et non faites encore actuelles (à renvoyer)
+  const toutes = groupes.flatMap((g) => g.lignes);
+  const choisies = toutes.filter((l) => sel.has(l.o.id));
+  const aReaffecter = choisies.filter((l) => l.o.statut === 'a_faire').map((l) => l.o.id);
+  const aRenvoyer = choisies.filter((l) => l.o.statut === 'non_fait' && !l.renvoyee).map((l) => l.o.id);
+  const selectionnable = (l: Ligne) => (l.o.statut === 'a_faire' || (l.o.statut === 'non_fait' && !l.renvoyee)) && !l.o.id.startsWith('h:');
+  const basculerSel = (id: string) =>
+    setSel((cur) => {
+      const n = new Set(cur);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const choisirEquipe = (lignes: Ligne[]) =>
+    setSel((cur) => {
+      const ids = lignes.filter(selectionnable).map((l) => l.o.id);
+      const tous = ids.every((id) => cur.has(id));
+      const n = new Set(cur);
+      ids.forEach((id) => (tous ? n.delete(id) : n.add(id)));
+      return n;
+    });
+  const agir = async (f: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await f();
+      setSel(new Set());
+    } catch {
+      /* erreur affichée par la page */
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const basculer = (e: string) =>
     setFermees((cur) => {
@@ -165,143 +223,157 @@ export function ProgrammeJourEquipes({
             </button>
           ))}
         </div>
-        <label className="relative w-full sm:w-56">
+        <label className="relative w-full sm:w-52">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="FGP, client, motif…"
+            placeholder="FGP, motif…"
             aria-label="Rechercher une fiche"
             className="w-full pl-8 pr-2 py-1.5 text-sm rounded-lg border border-slate-200"
           />
         </label>
       </div>
 
+      {/* Barre d'actions sur la sélection */}
+      {peutSignaler && choisies.length > 0 && (
+        <div className="sticky top-14 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-blue-200 bg-blue-50/95 backdrop-blur px-3 py-2 shadow-sm">
+          <span className="text-xs font-bold text-blue-900">
+            {choisies.length} fiche{choisies.length > 1 ? 's' : ''} choisie{choisies.length > 1 ? 's' : ''}
+          </span>
+          <select
+            aria-label="Équipe de destination"
+            value={cible}
+            onChange={(e) => setCible(e.target.value)}
+            className="border border-blue-200 rounded-md px-2 py-1 text-xs bg-white"
+          >
+            <option value="">— Équipe —</option>
+            {equipeNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          {aReaffecter.length > 0 && (
+            <button
+              type="button"
+              disabled={!cible || busy}
+              onClick={() => agir(() => onReaffecter(aReaffecter, cible))}
+              className="inline-flex items-center gap-1 text-xs font-bold rounded-md px-2.5 py-1.5 bg-blue-600 text-white disabled:opacity-40"
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5" /> Réaffecter {aReaffecter.length} en cours
+            </button>
+          )}
+          {aRenvoyer.length > 0 && (
+            <span className="inline-flex flex-wrap items-center gap-1.5">
+              <input
+                type="date"
+                aria-label="Jour du renvoi"
+                min={aujourdhui()}
+                value={dateRenvoi}
+                onChange={(e) => e.target.value && setDateRenvoi(e.target.value)}
+                className="border border-blue-200 rounded-md px-2 py-1 text-xs bg-white"
+              />
+              <button type="button" onClick={() => setDateRenvoi(jourOuvreSuivant(aujourdhui()))} className="text-[11px] font-semibold text-blue-700 px-1">
+                demain
+              </button>
+              <button
+                type="button"
+                disabled={!cible || busy}
+                onClick={() => agir(() => onRenvoyer(aRenvoyer, cible, dateRenvoi))}
+                className="inline-flex items-center gap-1 text-xs font-bold rounded-md px-2.5 py-1.5 bg-indigo-600 text-white disabled:opacity-40"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Renvoyer {aRenvoyer.length} non faite{aRenvoyer.length > 1 ? 's' : ''}
+              </button>
+            </span>
+          )}
+          <button type="button" onClick={() => setSel(new Set())} className="ml-auto p-1 rounded-full text-blue-700 hover:bg-blue-100" aria-label="Vider la sélection">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {groupes.length === 0 && <p className="py-8 text-center text-sm text-slate-400">Aucune fiche pour ce jour.</p>}
 
       {groupes.map((g) => {
         const ouvert = !fermees.has(g.equipe);
+        const choix = g.lignes.filter(selectionnable);
         return (
           <section key={g.equipe} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <button type="button" onClick={() => basculer(g.equipe)} className="w-full flex flex-wrap items-center gap-x-3 gap-y-1 px-3 sm:px-4 py-2.5 text-left hover:bg-slate-50">
-              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: couleur(g.equipe) }} />
-              <span className="font-bold text-slate-900">{g.equipe}</span>
-              <span className="text-xs text-slate-500 flex flex-wrap gap-x-2">
-                <span className="text-emerald-700 font-semibold">{g.nb.fait} faite{g.nb.fait > 1 ? 's' : ''}</span>
-                <span className="text-red-700 font-semibold">{g.nb.non_fait} non faite{g.nb.non_fait > 1 ? 's' : ''}</span>
-                {enCours && (
-                  <span className="text-sky-700 font-semibold">
-                    {g.nb.a_faire} en cours{g.nb.retard ? ` (${g.nb.retard} en retard)` : ''}
-                  </span>
-                )}
-                {g.nb.demain > 0 && <span className="text-indigo-700 font-semibold">{g.nb.demain} pour demain</span>}
-              </span>
-              <span className="ml-auto flex items-center gap-2">
-                <span className={`font-black tabular-nums ${g.points > 0 ? 'text-emerald-700' : g.points < 0 ? 'text-red-700' : 'text-slate-400'}`}>{fmtPtsSigne(g.points)} pt</span>
-                <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
-              </span>
-            </button>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 sm:px-4 py-2.5 hover:bg-slate-50">
+              {peutSignaler && choix.length > 0 && (
+                <input
+                  type="checkbox"
+                  aria-label={`Choisir les fiches de ${g.equipe}`}
+                  checked={choix.every((l) => sel.has(l.o.id))}
+                  onChange={() => choisirEquipe(g.lignes)}
+                />
+              )}
+              <button type="button" onClick={() => basculer(g.equipe)} className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-left min-w-0">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: couleur(g.equipe) }} />
+                <span className="font-bold text-slate-900">{g.equipe}</span>
+                <span className="text-xs text-slate-500 flex flex-wrap gap-x-2">
+                  <span className="text-emerald-700 font-semibold">{g.nb.fait} faite{g.nb.fait > 1 ? 's' : ''}</span>
+                  <span className="text-red-700 font-semibold">{g.nb.non_fait} non faite{g.nb.non_fait > 1 ? 's' : ''}</span>
+                  {enCours && (
+                    <span className="text-sky-700 font-semibold">
+                      {g.nb.a_faire} en cours{g.nb.retard ? ` (${g.nb.retard} en retard)` : ''}
+                    </span>
+                  )}
+                  {g.nb.reportee > 0 && <span className="text-orange-700 font-semibold">{g.nb.reportee} reportée{g.nb.reportee > 1 ? 's' : ''}</span>}
+                  {g.nb.demain > 0 && <span className="text-indigo-700 font-semibold">{g.nb.demain} plus tard</span>}
+                </span>
+                <span className="ml-auto flex items-center gap-2">
+                  <span className={`font-black tabular-nums ${g.points > 0 ? 'text-emerald-700' : g.points < 0 ? 'text-red-700' : 'text-slate-400'}`}>{fmtPtsSigne(g.points)} pt</span>
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
+                </span>
+              </button>
+            </div>
 
             {ouvert && g.lignes.length === 0 && <p className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100">Aucune fiche pour ce filtre.</p>}
 
             {ouvert && g.lignes.length > 0 && (
-              <>
-                {/* ordinateur : tableau */}
-                <table className="hidden md:table w-full text-sm border-t border-slate-100">
-                  <thead>
-                    <tr className="text-[11px] uppercase tracking-wide text-slate-400 bg-slate-50/70">
-                      <th className="text-left font-semibold px-4 py-1.5">FGP</th>
-                      <th className="text-left font-semibold px-2 py-1.5">Client</th>
-                      <th className="text-left font-semibold px-2 py-1.5">Nature</th>
-                      <th className="text-left font-semibold px-2 py-1.5">État</th>
-                      <th className="text-left font-semibold px-2 py-1.5">Motif</th>
-                      <th className="text-left font-semibold px-2 py-1.5">Heure</th>
-                      <th className="text-right font-semibold px-2 py-1.5">Pts</th>
-                      {peutSignaler && <th className="px-2 py-1.5" />}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {g.lignes.map(({ o, d, demain }, i) => (
-                      <Fragment key={o.id}>
-                        {(i === 0 || zoneDe(g.lignes[i - 1].o) !== zoneDe(o)) && (
-                          <tr className="bg-slate-100/80">
-                            <td colSpan={peutSignaler ? 8 : 7} className="px-4 py-1.5 text-xs">
-                              <ZoneTitre zone={zoneDe(o)} z={g.zones.get(zoneDe(o))} />
-                            </td>
-                          </tr>
-                        )}
-                        <tr className={o.statut === 'a_faire' && !demain && d.etat === 'retard' ? 'bg-red-50/40' : ''}>
-                          <td className="px-4 py-2 font-mono font-semibold text-slate-900 whitespace-nowrap">
-                            {ligneLabel(o)}
-                            {o.isUrgent && <span className="ml-1.5 text-[10px] font-sans font-bold text-orange-700">URGENT</span>}
-                          </td>
-                          <td className="px-2 py-2 text-slate-700 max-w-[12rem] truncate">{o.clientNom}</td>
-                          <td className="px-2 py-2">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${NATURE_CLASS[o.nature]}`}>{NATURE_LABEL[o.nature]}</span>
-                          </td>
-                          <td className="px-2 py-2">
-                            <Statut o={o} retard={d.etat === 'retard'} demain={demain} />
-                            {o.id.startsWith('h:') && <span className="ml-1 text-[10px] font-semibold text-amber-700" title="Non faite ce jour-là, puis renvoyée pour la refaire">renvoyée</span>}
-                          </td>
-                          <td className="px-2 py-2 text-slate-700 max-w-[16rem]">
-                            {o.statut === 'a_faire' ? (
-                              <span className="text-xs text-slate-400">échéance {jourCourt(d.echeance)} 22 h</span>
-                            ) : (
-                              o.motif || <span className="text-slate-300">—</span>
-                            )}
-                          </td>
-                          <td className="px-2 py-2 text-slate-500 tabular-nums">{heure(o.traiteLe)}</td>
-                          <td className={`px-2 py-2 text-right font-bold tabular-nums ${d.points > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
-                            {o.statut === 'a_faire' ? '' : fmtPtsSigne(d.points)}
-                          </td>
-                          {peutSignaler && (
-                            <td className="px-2 py-2 text-right">{o.statut === 'fait' && <FauxOkButton compact onConfirm={(m, n) => onFauxOk(o, m, n)} />}</td>
-                          )}
-                        </tr>
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-
-                {/* téléphone : liste */}
-                <ul className="md:hidden divide-y divide-slate-100 border-t border-slate-100">
-                  {g.lignes.map(({ o, d, demain }, i) => (
+              <ul className="divide-y divide-slate-100 border-t border-slate-100">
+                {g.lignes.map((l, i) => {
+                  const { o } = l;
+                  const nouvelleZone = i === 0 || zoneDe(g.lignes[i - 1].o) !== zoneDe(o);
+                  return (
                     <Fragment key={o.id}>
-                      {(i === 0 || zoneDe(g.lignes[i - 1].o) !== zoneDe(o)) && (
-                        <li className="px-3 py-1.5 bg-slate-100/80 text-xs">
+                      {nouvelleZone && (
+                        <li className="px-3 sm:px-4 py-1.5 bg-slate-100/80 text-xs">
                           <ZoneTitre zone={zoneDe(o)} z={g.zones.get(zoneDe(o))} />
                         </li>
                       )}
-                      <li className={`px-3 py-2.5 ${o.statut === 'a_faire' && !demain && d.etat === 'retard' ? 'bg-red-50/40' : ''}`}>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-slate-900 text-sm truncate">{ligneLabel(o)}</span>
-                          <span className={`text-[9px] font-bold px-1 py-0.5 rounded border shrink-0 ${NATURE_CLASS[o.nature]}`}>{NATURE_LABEL[o.nature].slice(0, 3).toUpperCase()}</span>
-                          <span className="ml-auto shrink-0">
-                            <Statut o={o} retard={d.etat === 'retard'} demain={demain} />
-                            {o.id.startsWith('h:') && <span className="ml-1 text-[10px] font-semibold text-amber-700" title="Non faite ce jour-là, puis renvoyée pour la refaire">renvoyée</span>}
-                          </span>
-                        </div>
-                        <div className="flex items-baseline gap-2 mt-0.5">
-                          <p className="text-xs text-slate-600 truncate flex-1">
-                            {o.clientNom}
-                            {o.statut === 'a_faire' ? ` · échéance ${jourCourt(d.echeance)} 22 h` : o.motif ? ` · ${o.motif}` : ''}
-                          </p>
-                          {o.statut !== 'a_faire' && (
-                            <span className="text-[11px] text-slate-400 tabular-nums shrink-0">
-                              {heure(o.traiteLe)} · <b className={d.points > 0 ? 'text-emerald-700' : 'text-slate-400'}>{fmtPtsSigne(d.points)}</b>
-                            </span>
-                          )}
-                        </div>
-                        {peutSignaler && o.statut === 'fait' && (
-                          <div className="mt-1 flex justify-end">
+                      <li
+                        className={`px-3 sm:px-4 py-2 grid grid-cols-[auto_minmax(6.5rem,auto)_auto_1fr] sm:grid-cols-[auto_9rem_11rem_1fr_auto] items-center gap-x-3 gap-y-1 ${
+                          l.reportee || (o.statut === 'a_faire' && !l.demain && l.d.etat === 'retard') ? 'bg-red-50/40' : ''
+                        } ${sel.has(o.id) ? '!bg-blue-50' : ''}`}
+                      >
+                        {peutSignaler && selectionnable(l) ? (
+                          <input type="checkbox" aria-label={`Choisir ${ligneLabel(o)}`} checked={sel.has(o.id)} onChange={() => basculerSel(o.id)} />
+                        ) : (
+                          <span className="w-[13px]" />
+                        )}
+                        <span className="font-mono font-bold text-slate-900 text-sm whitespace-nowrap">
+                          {ligneLabel(o)}
+                          {o.isUrgent && <span className="ml-1.5 text-[10px] font-sans font-bold text-orange-700">URGENT</span>}
+                        </span>
+                        <span>
+                          <Statut l={l} />
+                        </span>
+                        <span className="col-span-4 sm:col-span-1 text-xs sm:text-sm text-slate-700 min-w-0 truncate pl-6 sm:pl-0" title={o.motif}>
+                          {o.statut === 'a_faire' ? <span className="text-slate-400">—</span> : o.motif || <span className="text-slate-300">—</span>}
+                        </span>
+                        {peutSignaler && o.statut === 'fait' && !o.id.startsWith('h:') && (
+                          <span className="col-span-4 sm:col-span-1 justify-self-end">
                             <FauxOkButton compact onConfirm={(m, n) => onFauxOk(o, m, n)} />
-                          </div>
+                          </span>
                         )}
                       </li>
                     </Fragment>
-                  ))}
-                </ul>
-              </>
+                  );
+                })}
+              </ul>
             )}
           </section>
         );

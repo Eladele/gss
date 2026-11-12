@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { useCaisseStore, canDecide } from '@/store/useCaisseStore';
 import { useToast } from '@/components/ui';
@@ -38,32 +38,32 @@ import {
 } from 'lucide-react';
 import { InstallApkButton } from '@/components/InstallApkButton';
 
-// Pages
-import Dashboard from '@/pages/Dashboard';
-import SituationsPage from '@/pages/SituationsPage';
-import ChefSituationsPage from '@/pages/ChefSituationsPage';
-import ProgrammePage from '@/pages/ProgrammePage';
-import ImportExcelPage from '@/pages/ImportExcelPage';
-import EquipesPage from '@/pages/EquipesPage';
-import ZonesPage from '@/pages/ZonesPage';
-import NotificationsPage from '@/pages/NotificationsPage';
-import ProfilPage from '@/pages/ProfilPage';
-import StatistiquesPage from '@/pages/StatistiquesPage';
-import EmployesPage from '@/pages/EmployesPage';
-import VehiculesPage from '@/pages/VehiculesPage';
-import MaterielsPage from '@/pages/MaterielsPage';
-import ScansPage from '@/pages/ScansPage';
-import PretsPage from '@/pages/PretsPage';
-import DeploiementPage from '@/pages/DeploiementPage';
-import MaintenancePage from '@/pages/MaintenancePage';
-import ReseauPage from '@/pages/ReseauPage';
-import CongesPage from '@/pages/CongesPage';
-import CaissesPage from '@/pages/CaissePage';
-import DistributionPage from '@/pages/DistributionPage';
-import PointsPage from '@/pages/PointsPage';
-import ExportSalairePage from '@/pages/ExportSalairePage';
-import ParametresPage from '@/pages/ParametresPage';
-import SurveillancePage from '@/pages/SurveillancePage';
+// Pages (chargées à la demande : l'application démarre plus vite)
+const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const SituationsPage = lazy(() => import('@/pages/SituationsPage'));
+const ChefSituationsPage = lazy(() => import('@/pages/ChefSituationsPage'));
+const ProgrammePage = lazy(() => import('@/pages/ProgrammePage'));
+const ImportExcelPage = lazy(() => import('@/pages/ImportExcelPage'));
+const EquipesPage = lazy(() => import('@/pages/EquipesPage'));
+const ZonesPage = lazy(() => import('@/pages/ZonesPage'));
+const NotificationsPage = lazy(() => import('@/pages/NotificationsPage'));
+const ProfilPage = lazy(() => import('@/pages/ProfilPage'));
+const StatistiquesPage = lazy(() => import('@/pages/StatistiquesPage'));
+const EmployesPage = lazy(() => import('@/pages/EmployesPage'));
+const VehiculesPage = lazy(() => import('@/pages/VehiculesPage'));
+const MaterielsPage = lazy(() => import('@/pages/MaterielsPage'));
+const ScansPage = lazy(() => import('@/pages/ScansPage'));
+const PretsPage = lazy(() => import('@/pages/PretsPage'));
+const DeploiementPage = lazy(() => import('@/pages/DeploiementPage'));
+const MaintenancePage = lazy(() => import('@/pages/MaintenancePage'));
+const ReseauPage = lazy(() => import('@/pages/ReseauPage'));
+const CongesPage = lazy(() => import('@/pages/CongesPage'));
+const CaissesPage = lazy(() => import('@/pages/CaissePage'));
+const DistributionPage = lazy(() => import('@/pages/DistributionPage'));
+const PointsPage = lazy(() => import('@/pages/PointsPage'));
+const ExportSalairePage = lazy(() => import('@/pages/ExportSalairePage'));
+const ParametresPage = lazy(() => import('@/pages/ParametresPage'));
+const SurveillancePage = lazy(() => import('@/pages/SurveillancePage'));
 import { DECHARGE_URL } from '@/utils/programme';
 import { useParametresStore } from '@/store/useParametresStore';
 
@@ -148,7 +148,6 @@ const RH_GROUP: NavGroup = {
 const NAV: Record<Role, NavItem[]> = {
   superviseur: [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'statistiques', label: 'Statistiques' },
     { id: 'surveillance', label: 'Surveillance équipes' },
     { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_SUPERVISEUR,
@@ -164,7 +163,6 @@ const NAV: Record<Role, NavItem[]> = {
   ],
   admin: [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'statistiques', label: 'Statistiques' },
     { id: 'surveillance', label: 'Surveillance équipes' },
     { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_ADMIN,
@@ -190,14 +188,12 @@ const NAV: Record<Role, NavItem[]> = {
   // "lecture seule" dans SituationsPage.tsx) — pas de RH, pas de Réseau.
   consultation: [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'statistiques', label: 'Statistiques' },
     { id: 'situations', label: 'Situations' },
     { id: 'profil', label: 'Profil' },
   ],
   // Directeur — demandes d'alimentation (Caisses) + suivi opérationnel
   directeur: [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'statistiques', label: 'Statistiques' },
     { id: 'surveillance', label: 'Surveillance équipes' },
     { id: 'points', label: 'Points équipes' },
     RACCORDEMENT_GROUP_ADMIN,
@@ -770,10 +766,10 @@ export default function AppLayout() {
         <main className="flex-1 p-4 md:p-6 pb-24 md:pb-6 min-w-0">
           {!parametresPrets ? (
             <div className="py-16 text-center text-sm text-slate-400">Chargement…</div>
-          ) : allowedPages(user.role).includes(page) ? (
-            PageMap[page]
           ) : (
-            PageMap[defaultPage]
+            <Suspense fallback={<div className="py-16 text-center text-sm text-slate-400">Chargement…</div>}>
+              {allowedPages(user.role).includes(page) ? PageMap[page] : PageMap[defaultPage]}
+            </Suspense>
           )}
         </main>
       </div>

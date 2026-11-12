@@ -5,7 +5,7 @@ import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, fmtTel, ligneLabe
 import { TypeBadge } from '@/components/ui';
 import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
-import type { ClotureArchivee, ReclamationFauxOk, ScanOT } from '@/lib/programmeService';
+import type { ClotureArchivee, IpsOT, ReclamationFauxOk, ScanOT } from '@/lib/programmeService';
 import { HistoriqueMotifs } from '@/components/programme/Historique';
 import { ReclamerFauxOk } from '@/components/programme/Reclamation';
 
@@ -53,7 +53,10 @@ export function OtCard({
   reclamation,
   onReclamer,
   historique,
+  ip,
 }: {
+  /** OT Réseau (ANS…) : adresses IPS / IPM de la constitution */
+  ip?: IpsOT;
   /** motifs passés (fiche déjà « non faite » puis renvoyée) */
   historique?: ClotureArchivee[];
   ot: ProgrammeOT;
@@ -143,11 +146,13 @@ export function OtCard({
           )}
           {ot.dis && <CopyChip value={ot.dis} label="DIS" />}
         </div>
-        {ot.ontSerials.length > 0 && (
+        {(ot.ontSerials.length > 0 || ip?.ips || ip?.ipm) && (
           <div className="flex flex-wrap gap-1.5">
             {ot.ontSerials.map((s) => (
               <CopyChip key={s} value={s} label="ONT" />
             ))}
+            {ip?.ips && <CopyChip value={ip.ips} label="IPS" />}
+            {ip?.ipm && <CopyChip value={ip.ipm} label="IPM" />}
           </div>
         )}
         {ot.nature === 'installation' && ot.cableFibreM ? (
@@ -203,7 +208,7 @@ export function OtCard({
       </div>
 
       <div className="px-4 pb-3">
-        <CopyAll ot={ot} />
+        <CopyAll ot={ot} ip={ip} />
       </div>
 
       {(onFait || onNonFait || onReset) && (
@@ -273,13 +278,15 @@ function PhoneChip({ tel }: { tel: string }) {
 }
 
 /** Copie toute la fiche (à coller dans WhatsApp ou un SMS) */
-function CopyAll({ ot }: { ot: ProgrammeOT }) {
+function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
   const text = [
     ligneLabel(ot),
     ot.clientNom,
     ot.telephones.length ? `Tél : ${ot.telephones.join(' / ')}` : '',
     ot.dis ? `DIS ${ot.dis}` : '',
     ot.ontSerials.length ? `ONT ${ot.ontSerials.join(' / ')}` : '',
+    ip?.ips ? `IPS ${ip.ips}` : '',
+    ip?.ipm ? `IPM ${ip.ipm}` : '',
     ot.nature === 'installation' && ot.cableFibreM ? `Câble fibre : ${ot.cableFibreM} m` : '',
     ot.adresse ? `Adresse : ${ot.adresse}` : '',
   ]

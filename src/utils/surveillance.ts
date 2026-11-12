@@ -6,7 +6,7 @@
 //   • une pénalité compte le jour où elle a été donnée (contrôle de 22 h, retard, faux OK) ;
 //   • « à faire » et « en retard » : fiches encore ouvertes (programme en cours, maintenant).
 import type { Penalite, ProgrammeOT } from '@/types';
-import { delaiOT } from '@/utils/points';
+import { delaiOT, estPourPlusTard } from '@/utils/points';
 
 export type Granularite = 'jour' | 'semaine' | 'mois';
 
@@ -129,11 +129,17 @@ export function somme(liste: (Bilan | undefined)[]): Bilan {
 
 /** Programme en cours d'une équipe (fiches ouvertes, maintenant) */
 export function programmeOuvert(ots: ProgrammeOT[], now = Date.now()) {
-  const out = new Map<string, { aFaire: number; enRetard: number; prioritaires: number; urgents: number }>();
+  const out = new Map<string, { aFaire: number; enRetard: number; prioritaires: number; urgents: number; demain: number }>();
+  const jour = isoJour(new Date(now));
   for (const o of ots) {
     if (o.statut !== 'a_faire' || !o.equipe) continue;
     let r = out.get(o.equipe);
-    if (!r) out.set(o.equipe, (r = { aFaire: 0, enRetard: 0, prioritaires: 0, urgents: 0 }));
+    if (!r) out.set(o.equipe, (r = { aFaire: 0, enRetard: 0, prioritaires: 0, urgents: 0, demain: 0 }));
+    // distribuée d'avance (le soir pour demain) : pas « à faire » aujourd'hui
+    if (estPourPlusTard(o, jour)) {
+      r.demain++;
+      continue;
+    }
     const d = delaiOT(o, now);
     r.aFaire++;
     if (d.etat === 'retard') r.enRetard++;
@@ -141,4 +147,56 @@ export function programmeOuvert(ots: ProgrammeOT[], now = Date.now()) {
     if (o.isUrgent) r.urgents++;
   }
   return out;
+}
+
+export interface StatEquipe {
+  equipe: string;
+  installations: number;
+  installationsFaites: number;
+  derangements: number;
+  derangementsFaits: number;
+  faites: number;
+  nonFaites: number;
+  dansDelai: number;
+  horsDelai: number;
+  enCours: number;
+  points: number;
+}
+
+/**
+ * Statistiques d'une période par équipe (export PDF du soir) : fiches clôturées entre debut et
+ * fin (faites / non faites, dans le délai ou hors délai), par nature, et fiches encore ouvertes
+ * si la période est en cours. Les points de chaque fiche suivent le barème (sans les pénalités).
+ */
+export function statsEquipes(ots: ProgrammeOT[], debut: string, fin: string, avecOuvertes: boolean, now = Date.now()): StatEquipe[] {
+  const m = new Map<string, StatEquipe>();
+  for (const o of ots) {
+    if (!o.equipe) continue;
+    const ouverte = o.statut === 'a_faire';
+    const jourClos = o.traiteLe ? isoJour(new Date(o.traiteLe)) : '';
+    if (ouverte ? !avecOuvertes || estPourPlusTard(o, fin) : jourClos < debut || jourClos > fin) continue;
+    let s = m.get(o.equipe);
+    if (!s)
+      m.set(
+        o.equipe,
+        (s = { equipe: o.equipe, installations: 0, installationsFaites: 0, derangements: 0, derangementsFaits: 0, faites: 0, nonFaites: 0, dansDelai: 0, horsDelai: 0, enCours: 0, points: 0 }),
+      );
+    const der = o.nature === 'derangement';
+    if (der) s.derangements++;
+    else s.installations++;
+    if (ouverte) {
+      s.enCours++;
+      continue;
+    }
+    const d = delaiOT(o, now);
+    s.points += d.points;
+    if (o.statut === 'fait') {
+      s.faites++;
+      if (der) s.derangementsFaits++;
+      else s.installationsFaites++;
+      if (d.etat === 'dans') s.dansDelai++;
+      else s.horsDelai++;
+    } else s.nonFaites++;
+  }
+  return [...m.values()].sort((a, b) => b.points - a.points || a.equipe.localeCompare(b.equipe));
 }

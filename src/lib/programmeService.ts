@@ -281,7 +281,34 @@ export async function distribuer(
     if (error) throw dbError(error, 'Distribution impossible');
     crees = data?.length ?? 0;
   }
+  await enregistrerIps(ots);
   return { crees, completees };
+}
+
+// ─── Adresses IP des OT Réseau (IPS / IPM de la constitution, supabase_ot_ip.sql) ─
+export interface IpsOT {
+  ips: string;
+  ipm: string;
+}
+
+/** Garde les IPS / IPM lus dans le PDF (sans bloquer la distribution si la table n'existe pas encore) */
+async function enregistrerIps(ots: Pick<ParsedOT, 'numeroOt' | 'ips' | 'ipm'>[]) {
+  const rows = ots.filter((o) => o.numeroOt && (o.ips || o.ipm)).map((o) => ({ numero_ot: o.numeroOt, ips: o.ips ?? '', ipm: o.ipm ?? '', maj_le: new Date().toISOString() }));
+  if (!rows.length) return;
+  const { error } = await supabase.from('ot_adresses_ip').upsert(rows, { onConflict: 'numero_ot' });
+  if (error) console.warn('Adresses IP non enregistrées (exécuter supabase_ot_ip.sql) :', error.message);
+}
+
+/** IPS / IPM des fiches : n° d'OT → adresses */
+export async function fetchIpsOts(numeros: (string | null | undefined)[]): Promise<Map<string, IpsOT>> {
+  const out = new Map<string, IpsOT>();
+  const liste = [...new Set(numeros.filter((n): n is string => !!n))];
+  for (let i = 0; i < liste.length; i += 200) {
+    const { data, error } = await supabase.from('ot_adresses_ip').select('numero_ot, ips, ipm').in('numero_ot', liste.slice(i, i + 200));
+    if (error) return out; // table pas encore installée
+    for (const r of data ?? []) out.set(r.numero_ot as string, { ips: (r.ips as string) ?? '', ipm: (r.ipm as string) ?? '' });
+  }
+  return out;
 }
 
 export interface Cloture {

@@ -25,24 +25,45 @@ export async function fetchSituations(): Promise<Situation[]> {
   // Supabase limite les SELECT à 1000 lignes par requête par défaut — sans pagination,
   // au-delà de 1000 situations, le refresh de la page en perdait silencieusement une
   // partie (ex: 1552 juste après import, mais seulement 1000 après actualisation).
-  const all: Situation[] = [];
+  // Les pages sont demandées en parallèle (4 à la fois) après un comptage, au lieu
+  // d'attendre chaque page l'une après l'autre : le chargement est bien plus rapide.
   const PAGE = 1000;
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
+  const page = (from: number) =>
+    supabase
       .from('situations_detail')
       .select('*')
       .order('created_at', { ascending: false })
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1);
-    if (error) {
-      console.error('fetchSituations:', error);
-      break;
+  const { count, error: errCount } = await supabase.from('situations_detail').select('id', { count: 'exact', head: true });
+  if (errCount || count == null) {
+    // comptage impossible : lecture page par page, comme avant
+    const all: Situation[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await page(from);
+      if (error) {
+        console.error('fetchSituations:', error);
+        break;
+      }
+      if (!data || data.length === 0) break;
+      all.push(...data.map(mapSituation));
+      if (data.length < PAGE) break;
     }
-    if (!data || data.length === 0) break;
-    all.push(...data.map(mapSituation));
-    if (data.length < PAGE) break;
+    return all;
   }
-  return all;
+  const debuts = Array.from({ length: Math.ceil(count / PAGE) }, (_, i) => i * PAGE);
+  const morceaux: Situation[][] = new Array(debuts.length);
+  for (let i = 0; i < debuts.length; i += 4) {
+    const lot = debuts.slice(i, i + 4);
+    const res = await Promise.all(lot.map(page));
+    res.forEach(({ data, error }, j) => {
+      if (error) console.error('fetchSituations:', error);
+      morceaux[i + j] = (data ?? []).map(mapSituation);
+    });
+  }
+  // une ligne ajoutée pendant la lecture peut apparaître sur deux pages : dédoublonnage
+  const vus = new Set<string>();
+  return morceaux.flat().filter((s) => (vus.has(s.id) ? false : (vus.add(s.id), true)));
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {
@@ -282,6 +303,7 @@ function mapSituation(row: any): Situation {
     importId: row.import_id ?? undefined,
     poteau: row.poteau != null ? Number(row.poteau) : 0,
     closedBy: row.traite_par_nom ?? undefined,
+    motifCloture: row.motif_cloture ?? '',
   };
 }
 

@@ -37,6 +37,10 @@ export default function SituationsPage() {
   const { showToast } = useToast();
 
   const isAdmin = user.role === 'admin' || user.role === 'superviseur';
+  // Motif affiché : celui que l'équipe a choisi à la clôture (Fait / Non fait), jamais le texte de l'OT.
+  // Anciennes clôtures sans motif choisi : le commentaire du NON OK.
+  const motifEquipe = (s: { motifCloture?: string; status: string; comment: string }) =>
+    s.motifCloture || (s.status === 'non_ok' ? s.comment : '') || '';
   // Lecture seule pour le rôle "consultation" (partenaire externe, ex: Moov Mauritel) —
   // aucune action possible (OK, NOK, Modifier, Supprimer, Créer un FGP), même si la
   // page reste visible.
@@ -134,7 +138,7 @@ export default function SituationsPage() {
     Zone: (s) => s.zone || '',
     'Date Dépôt': (s) => s.dateDepo || '',
     'Date Mise en Service': (s) => s.dateClt || '',
-    Motif: (s) => s.motif || '',
+    'Motif équipe': (s) => motifEquipe(s),
     Poteau: (s) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif)),
     Équipe: (s) => s.equipe || '',
     Délai: (s) => (s.dateDepo || s.dateMessage ? calcDelai(s) : -1),
@@ -465,7 +469,7 @@ export default function SituationsPage() {
           Zone: s.zone,
           'Date Dépôt': s.dateDepo || '',
           'Date Mise en Service': s.dateClt || '',
-          Motif: s.motif || '',
+          'Motif équipe': motifEquipe(s),
           Poteau: s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif),
           Équipe: s.equipe || '',
           'Délai (j)': s.dateDepo || s.dateMessage ? calcDelai(s) : '',
@@ -483,8 +487,54 @@ export default function SituationsPage() {
     downloadWorkbookBuffer(buffer as ArrayBuffer, `situations_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
+  // Boutons d'une ligne (tableau et cartes mobiles)
+  const actions = (s: (typeof situations)[number], tableau = false) =>
+    !canAct ? (
+      <span className="text-xs text-slate-300 italic">Lecture seule</span>
+    ) : (
+      <div className={`flex gap-2 items-center ${tableau ? 'flex-nowrap' : 'flex-wrap'}`}>
+        {s.status !== 'ok' && (
+          <button
+            onClick={() => openOkSheet(s)}
+            title="Marquer OK"
+            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
+          >
+            OK
+          </button>
+        )}
+        {s.status !== 'non_ok' && (
+          <button
+            onClick={() => handleMarkNOK(s.id, s.fgp, '')}
+            title="Marquer NON OK"
+            className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-red-100 hover:bg-red-600 hover:text-white text-red-700"
+          >
+            NOK
+          </button>
+        )}
+        {isAdmin && (
+          <BtnEdit
+            onClick={() => openEditSheet(s)}
+            title="Modifier les détails"
+          />
+        )}
+        {isAdmin && (
+          <BtnDelete
+            onClick={() => handleDeleteSituation(s.id, s.fgp)}
+            title="Supprimer"
+          />
+        )}
+      </div>
+    );
+
+  const conformite = (s: (typeof situations)[number]) =>
+    s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
+      <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+        {isHorsDelai(s) ? 'Hors délai' : 'TLID'} · {calcDelai(s)}j
+      </span>
+    ) : null;
+
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-4 sm:space-y-5 animate-fade-in">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-black text-slate-900">Situations</h1>
@@ -493,7 +543,7 @@ export default function SituationsPage() {
             {fStatus === '__default__' && !fDate && !search.trim() && <span className="text-blue-600 font-medium"> — en cours seulement</span>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto [&>*]:flex-1 sm:[&>*]:flex-none">
           <Button variant="outline" onClick={exportToExcel} disabled={filtered.length === 0}>
             Exporter Excel
           </Button>
@@ -507,9 +557,9 @@ export default function SituationsPage() {
 
       {/* ─── Barre d'actions groupées (visible dès qu'une ligne est sélectionnée) ─── */}
       {canAct && selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 flex-wrap bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
-          <span className="text-sm font-semibold text-blue-800">{selectedIds.size} sélectionnée(s)</span>
-          <Select value={bulkEquipe} onChange={(e) => setBulkEquipe(e.target.value)} style={{ width: 'auto' }}>
+        <div className="sticky top-16 z-30 grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3 sm:flex-wrap bg-blue-50 border border-blue-200 rounded-xl px-3 sm:px-4 py-3 shadow-sm">
+          <span className="col-span-2 text-sm font-semibold text-blue-800">{selectedIds.size} sélectionnée(s)</span>
+          <Select value={bulkEquipe} onChange={(e) => setBulkEquipe(e.target.value)} className="w-full sm:w-auto min-w-0">
             <option value="">Réaffecter à...</option>
             {equipes.map((e) => (
               <option key={e.id} value={e.name}>
@@ -524,7 +574,7 @@ export default function SituationsPage() {
             type="date"
             value={bulkDateMES}
             onChange={(e) => setBulkDateMES(e.target.value)}
-            className="border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white"
+            className="border border-slate-200 rounded-lg px-2 py-2 text-sm bg-white w-full sm:w-auto min-w-0"
             title="Date de mise en service à appliquer (défaut : aujourd'hui si vide)"
           />
           <Button variant="success" size="sm" onClick={bulkMarkOK} disabled={bulkLoading}>
@@ -547,8 +597,8 @@ export default function SituationsPage() {
       <Card>
         <CardHeader>
           {/* Filters */}
-          <div className="flex items-center gap-2 flex-wrap w-full">
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 flex-1 min-w-48">
+          <div className="grid grid-cols-2 gap-2 w-full md:flex md:items-center md:flex-wrap">
+            <div className="col-span-2 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 md:flex-1 md:min-w-48">
               <span className="text-slate-400"></span>
               <input
                 className="bg-transparent text-sm focus:outline-none flex-1"
@@ -557,7 +607,7 @@ export default function SituationsPage() {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <Select value={fType} onChange={(e) => setFType(e.target.value)} style={{ width: 'auto' }}>
+            <Select value={fType} onChange={(e) => setFType(e.target.value)} className="w-full md:w-auto min-w-0">
               <option value="">Tous types</option>
               {['CPL', 'DRG', 'TRL', 'CST', 'ANS', 'CLS', 'CMI', 'RLR'].map((t) => (
                 <option key={t} value={t}>
@@ -565,7 +615,7 @@ export default function SituationsPage() {
                 </option>
               ))}
             </Select>
-            <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} style={{ width: 'auto' }}>
+            <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} className="w-full md:w-auto min-w-0">
               <option value="">Toutes équipes</option>
               {equipes.map((e) => (
                 <option key={e.id} value={e.name}>
@@ -573,7 +623,7 @@ export default function SituationsPage() {
                 </option>
               ))}
             </Select>
-            <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} style={{ width: 'auto' }}>
+            <Select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className="w-full md:w-auto min-w-0">
               <option value="__default__">En cours (par défaut)</option>
               <option value="">Tous statuts</option>
               <option value="pending">En attente</option>
@@ -585,16 +635,99 @@ export default function SituationsPage() {
               type="date"
               value={fDate}
               onChange={(e) => setFDate(e.target.value)}
-              className="border border-slate-200 rounded-lg px-2 py-2 text-sm"
+              className="border border-slate-200 rounded-lg px-2 py-2 text-sm w-full md:w-auto min-w-0 bg-white"
               title="Filtrer par date de dépôt"
             />
+            {/* Tri sur téléphone (sur grand écran : clic sur les en-têtes du tableau) */}
+            <Select
+              value={sortBy ? `${sortBy}|${sortDir}` : ''}
+              onChange={(e) => {
+                const [col, dir] = e.target.value.split('|');
+                setSortBy(col || null);
+                setSortDir(dir === 'asc' ? 'asc' : 'desc');
+              }}
+              className="col-span-2 w-full md:hidden"
+            >
+              <option value="">Tri : ordre d'arrivée</option>
+              <option value="Date Message|desc">Date message (récentes)</option>
+              <option value="Date Message|asc">Date message (anciennes)</option>
+              <option value="Délai|desc">Délai (plus long)</option>
+              <option value="FGP|asc">FGP</option>
+              <option value="Équipe|asc">Équipe</option>
+              <option value="Statut|asc">Statut</option>
+            </Select>
           </div>
         </CardHeader>
 
         {filtered.length === 0 ? (
           <EmptyState icon="" text="Aucune situation trouvée" />
         ) : (
-          <div className="overflow-x-auto">
+          <>
+          {/* Téléphone : une carte par situation */}
+          <div className="md:hidden divide-y divide-slate-100">
+            {canAct && (
+              <label className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-500 bg-slate-50">
+                <input type="checkbox" className="w-4 h-4" checked={allPageSelected} onChange={toggleSelectPage} />
+                Tout sélectionner (cette page)
+              </label>
+            )}
+            {paginated.map((s) => {
+              const nbPoteaux = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+              const motif = motifEquipe(s);
+              return (
+                <div
+                  key={s.id}
+                  className={`px-4 py-3 ${selectedIds.has(s.id) ? 'bg-blue-50/70' : s.isUrgent ? 'bg-orange-50/40' : ''}`}
+                >
+                  <div className="flex items-start gap-3">
+                    {canAct && (
+                      <input
+                        type="checkbox"
+                        className="mt-1 w-4 h-4 shrink-0"
+                        checked={selectedIds.has(s.id)}
+                        onChange={() => toggleSelectOne(s.id)}
+                        aria-label={`Sélectionner ${s.fgp}`}
+                      />
+                    )}
+                    <div className="flex-1 min-w-0 space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-black text-slate-900 tracking-wide">{s.fgp}</span>
+                        <TypeBadge type={s.type} />
+                        <span className="ml-auto">
+                          <StatusBadge status={s.status} />
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500">
+                        <ZoneChip zone={s.zone} />
+                        {s.equipe && <EquipeTag name={s.equipe} color={getEquipeColor(s.equipe, equipes)} />}
+                        {(s.dateMessage || s.dateDepo) && <span>{s.dateMessage || s.dateDepo}</span>}
+                        {s.dateClt && <span className="text-green-700">→ {s.dateClt}</span>}
+                      </div>
+                      {(conformite(s) || nbPoteaux > 0 || s.closedBy) && (
+                        <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                          {conformite(s)}
+                          {nbPoteaux > 0 && (
+                            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">
+                              {nbPoteaux} poteau{nbPoteaux > 1 ? 'x' : ''}
+                            </span>
+                          )}
+                          {s.closedBy && <span className="text-slate-400">par {s.closedBy}</span>}
+                        </div>
+                      )}
+                      {motif && (
+                        <p className={`text-xs rounded-lg px-2.5 py-1.5 ${s.status === 'non_ok' ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'}`}>
+                          <span className="font-semibold">Motif : </span>
+                          {motif}
+                        </p>
+                      )}
+                      <div className="pt-0.5">{actions(s)}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
@@ -613,7 +746,7 @@ export default function SituationsPage() {
                       'Zone',
                       'Date Dépôt',
                       'Date Mise en Service',
-                      'Motif',
+                      'Motif équipe',
                       'Poteau',
                       'Équipe',
                       'Délai',
@@ -685,11 +818,11 @@ export default function SituationsPage() {
                         <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
                       )}
                       {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-500 max-w-40 truncate" title={s.status === 'non_ok' && s.comment ? s.comment : s.motif}>
-                          {s.status === 'non_ok' && s.comment ? (
-                            <span className="text-red-600 font-medium">{s.comment}</span>
+                        <td className="px-3 py-3 text-xs max-w-48 truncate" title={[motifEquipe(s), s.comment && s.comment !== motifEquipe(s) ? s.comment : ''].filter(Boolean).join(' — ')}>
+                          {motifEquipe(s) ? (
+                            <span className={s.status === 'non_ok' ? 'text-red-600 font-medium' : 'text-slate-600'}>{motifEquipe(s)}</span>
                           ) : (
-                            s.motif || '—'
+                            <span className="text-slate-300">—</span>
                           )}
                         </td>
                       )}
@@ -781,46 +914,11 @@ export default function SituationsPage() {
                       {!isEnCoursView && (
                         <td className="px-3 py-3 text-xs text-slate-500">{s.closedBy || '—'}</td>
                       )}
-                      <td className="px-3 py-3">
+                      <td className="px-3 py-3 whitespace-nowrap">
                         <StatusBadge status={s.status} />
                       </td>
                       <td className="px-3 py-3">
-                        {!canAct ? (
-                          <span className="text-xs text-slate-300 italic">Lecture seule</span>
-                        ) : (
-                          <div className="flex gap-2 flex-wrap items-center">
-                            {s.status !== 'ok' && (
-                              <button
-                                onClick={() => openOkSheet(s)}
-                                title="Marquer OK"
-                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-green-100 hover:bg-green-600 hover:text-white text-green-700"
-                              >
-                                OK
-                              </button>
-                            )}
-                            {s.status !== 'non_ok' && (
-                              <button
-                                onClick={() => handleMarkNOK(s.id, s.fgp, '')}
-                                title="Marquer NON OK"
-                                className="px-3 py-2 text-xs font-bold rounded-lg transition-colors active:scale-95 bg-red-100 hover:bg-red-600 hover:text-white text-red-700"
-                              >
-                                NOK
-                              </button>
-                            )}
-                            {isAdmin && (
-                              <BtnEdit
-                                onClick={() => openEditSheet(s)}
-                                title="Modifier les détails"
-                              />
-                            )}
-                            {isAdmin && (
-                              <BtnDelete
-                                onClick={() => handleDeleteSituation(s.id, s.fgp)}
-                                title="Supprimer"
-                              />
-                            )}
-                          </div>
-                        )}
+                        {actions(s, true)}
                       </td>
                     </tr>
                   );
@@ -828,6 +926,7 @@ export default function SituationsPage() {
               </tbody>
             </table>
           </div>
+          </>
         )}
 
         {filtered.length > 0 && (
@@ -907,7 +1006,7 @@ export default function SituationsPage() {
             </Select>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-slate-500 block mb-1.5">
                 Date Message <span className="text-slate-300 font-normal">(optionnel)</span>
@@ -932,7 +1031,7 @@ export default function SituationsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-slate-500 block mb-1.5">
                 Date Mise en Service <span className="text-slate-300 font-normal">(si déjà résolu — passe le FGP en OK)</span>

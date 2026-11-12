@@ -10,7 +10,9 @@ import {
   fetchProgramme,
   fetchReclamations,
   fetchHistoriqueClotures,
+  fetchIpsOts,
   type ClotureArchivee,
+  type IpsOT,
   fetchScanOts,
   reclamerFauxOk,
   subscribeProgramme,
@@ -50,6 +52,8 @@ function FichesOT() {
   const [reclamations, setReclamations] = useState<Map<string, ReclamationFauxOk>>(new Map());
   // motifs passés des fiches renvoyées (déjà « non faites »)
   const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
+  // OT Réseau (ANS…) : IPS / IPM de la constitution
+  const [ips, setIps] = useState<Map<string, IpsOT>>(new Map());
 
   useEffect(() => {
     if (!team) return;
@@ -65,6 +69,7 @@ function FichesOT() {
             setError('');
             fetchScanOts(rows.map((r) => r.id)).then((m) => alive && setScans(m));
             fetchHistoriqueClotures(rows.map((r) => r.id)).then((h) => alive && setHistorique(h));
+            fetchIpsOts(rows.map((r) => r.numeroOt)).then((m) => alive && setIps(m));
             if (user.teamId)
               fetchReclamations({ teamId: user.teamId }).then(
                 (rs) => alive && setReclamations(new Map([...rs].reverse().map((r) => [r.situationId, r]))),
@@ -300,6 +305,7 @@ function FichesOT() {
                     onReset={() => change(o, { statut: 'a_faire' })}
                     reclamation={reclamations.get(o.id)}
                     historique={historique.get(o.id)}
+                    ip={o.numeroOt ? ips.get(o.numeroOt) : undefined}
                     onReclamer={async (message) => {
                       try {
                         await reclamerFauxOk(o.id, user, message);

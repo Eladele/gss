@@ -1,173 +1,308 @@
+// Tableau de bord (Dashboard et Statistiques réunis) :
+//   • « Vue d'ensemble »   : chiffres clés et graphiques de la période (ancienne page Statistiques)
+//   • « Rapports »         : relevés détaillés par ville et type, backlog, NON OK
+//   • « Progression équipes » : avancement de chaque équipe (ancien Dashboard)
+// Seul l'onglet ouvert est calculé et dessiné, et les filtres sont communs.
+// Exports : Excel, et deux PDF des délais (par ville / par équipe) pour la période et les filtres choisis.
+import { useMemo, useState } from 'react';
+import { FileDown, FileSpreadsheet, Upload } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
-import { getEquipeColor, statusColors } from '@/utils';
-import { isHorsDelai } from '@/utils/stats';
-import { StatCard, Card, CardHeader, CardTitle, TypeBadge, StatusBadge, ZoneChip, EquipeTag, ProgressBar, Button } from '@/components/ui';
+import {
+  statsByEquipe,
+  statsByVille,
+  statsByType,
+  repeatDerangementByClient,
+  inPeriod,
+  exportStatsToExcel,
+  MERGED_TYPES,
+  statsDelaiDetailleParVilleEtType,
+  statsBacklogParAnciennete,
+  statsNonOk,
+  type PeriodFilter,
+} from '@/utils/stats';
+import { Card, Button, Select, useToast } from '@/components/ui';
+import { errMsg } from '@/utils';
+import VueEnsemble from '@/components/dashboard/VueEnsemble';
+import RapportsDetailles from '@/components/dashboard/RapportsDetailles';
+import ProgressionEquipes from '@/components/dashboard/ProgressionEquipes';
+import { exporterStatsDelais, fr } from '@/utils/rapportPdf';
+import {
+  ANNEES_SELECT,
+  MOIS_FR,
+  dateRef,
+  firstOfMonthStr,
+  matchesNature,
+  presetToRange,
+  todayStr,
+  villesDesEquipes,
+  type NatureFilter,
+  type PeriodPreset,
+} from '@/components/dashboard/commun';
 
-type Page = string;
+type Onglet = 'apercu' | 'rapports' | 'equipes';
+const ONGLETS: { id: Onglet; label: string; court: string }[] = [
+  { id: 'apercu', label: "Vue d'ensemble", court: 'Aperçu' },
+  { id: 'rapports', label: 'Rapports', court: 'Rapports' },
+  { id: 'equipes', label: 'Progression équipes', court: 'Équipes' },
+];
+const CLE_ONGLET = 'gss.dashboard.onglet';
 
-export default function Dashboard({ onNavigate }: { onNavigate: (p: any) => void }) {
+function ongletMemorise(): Onglet {
+  try {
+    const v = localStorage.getItem(CLE_ONGLET);
+    return v === 'rapports' || v === 'equipes' ? v : 'apercu';
+  } catch {
+    return 'apercu';
+  }
+}
+
+export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-excel') => void }) {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
   const loading = useAppStore((s) => s.loading);
   const loadAll = useAppStore((s) => s.loadAll);
+  const user = useAppStore((s) => s.user)!;
+  const { showToast } = useToast();
 
-  const total = situations.length;
-  const ok = situations.filter((s) => s.status === 'ok').length;
-  const nok = situations.filter((s) => s.status === 'non_ok').length;
-  const pending = situations.filter((s) => s.status === 'pending').length;
-  // Situations non closes (en attente/en cours) et déjà hors délai — indicateur
-  // opérationnel bien plus utile qu'un compteur "Urgences" qu'on ne crée plus.
-  const horsDelai = situations.filter((s) => (s.status === 'pending' || s.status === 'in_progress') && isHorsDelai(s)).length;
+  const [onglet, setOngletState] = useState<Onglet>(ongletMemorise);
+  const setOnglet = (o: Onglet) => {
+    setOngletState(o);
+    try {
+      localStorage.setItem(CLE_ONGLET, o);
+    } catch {
+      /* stockage indisponible : sans importance */
+    }
+  };
+  const [nature, setNature] = useState<NatureFilter>('installation');
+  const [preset, setPreset] = useState<PeriodPreset>('mois');
+  const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
+  const [customTo, setCustomTo] = useState(todayStr());
+  const [fEquipe, setFEquipe] = useState('');
+  // ville verrouillée pour un superviseur régional (villeScope)
+  const [fVille, setFVille] = useState(user.villeScope ?? '');
+  const [pdfEnCours, setPdfEnCours] = useState<'villes' | 'equipes' | null>(null);
 
+  const period: PeriodFilter = useMemo(
+    () => (preset === 'custom' ? { from: customFrom, to: customTo } : presetToRange(preset)),
+    [preset, customFrom, customTo],
+  );
+  const villeDe = useMemo(() => villesDesEquipes(equipes), [equipes]);
+  const equipesFiltrees = useMemo(
+    () => equipes.filter((e) => (!fVille || (e.ville ?? 'Nouakchott') === fVille) && (!fEquipe || e.name.toLowerCase() === fEquipe.toLowerCase())),
+    [equipes, fVille, fEquipe],
+  );
+  const villes = useMemo(() => [...new Set(equipes.map((e) => e.ville ?? 'Nouakchott'))].sort(), [equipes]);
+
+  // équipe + ville (toutes dates) → + période → + nature
+  const scopedSansPeriode = useMemo(
+    () =>
+      situations.filter((s) => {
+        if (fEquipe && s.equipe?.toLowerCase() !== fEquipe.toLowerCase()) return false;
+        if (fVille && villeDe(s.equipe) !== fVille) return false;
+        return true;
+      }),
+    [situations, fEquipe, fVille, villeDe],
+  );
+  const scopedAll = useMemo(() => scopedSansPeriode.filter((s) => inPeriod(dateRef(s), period)), [scopedSansPeriode, period]);
+  const scoped = useMemo(() => scopedAll.filter((s) => matchesNature(s, nature)), [scopedAll, nature]);
+
+  const libellePeriode =
+    preset === 'tout'
+      ? 'toute la période'
+      : preset === 'jour'
+        ? "aujourd'hui"
+        : preset === 'semaine'
+          ? 'cette semaine'
+          : preset === 'mois'
+            ? 'ce mois'
+            : `${MOIS_FR[Number(customFrom.slice(5, 7)) - 1]} ${customFrom.slice(0, 4)}`;
+  // titre du PDF : « Novembre 2026 », « semaine du 09/11/2026 »…
+  const periodePdf =
+    preset === 'tout'
+      ? 'toute la période'
+      : preset === 'jour'
+        ? fr(todayStr())
+        : preset === 'semaine'
+          ? `semaine du ${fr(period.from ?? todayStr())}`
+          : `${MOIS_FR[Number((period.from ?? todayStr()).slice(5, 7)) - 1]} ${(period.from ?? todayStr()).slice(0, 4)}`;
+  const filtresTexte = [fEquipe && `équipe ${fEquipe}`, fVille && `ville ${fVille}`].filter(Boolean).join(' - ');
+
+  const exporterExcel = async () => {
+    try {
+      const installTypes = MERGED_TYPES.filter((t) => !['CST', 'RLR', 'ANS'].includes(t));
+      await exportStatsToExcel({
+        fileName: `stats_${nature}_${period.from ?? 'all'}_${period.to ?? 'all'}.xlsx`,
+        byEquipe: statsByEquipe(scoped, equipes),
+        byVille: statsByVille(scoped, equipes),
+        byType: statsByType(scoped),
+        repeats: repeatDerangementByClient(scopedAll),
+        situations: scoped,
+        installDetail: statsDelaiDetailleParVilleEtType(scopedAll, equipes, installTypes),
+        cstDetail: statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['CST']),
+        drgVilleDetail: statsByVille(scopedAll.filter((s) => s.type === 'DRG'), equipes),
+        nonOkDetail: statsNonOk(scopedAll, equipes),
+        backlogRows: statsBacklogParAnciennete(scopedSansPeriode),
+      });
+    } catch (e) {
+      showToast('Export impossible : ' + errMsg(e), 'error');
+    }
+  };
+
+  const exporterPdf = async (mode: 'villes' | 'equipes') => {
+    setPdfEnCours(mode);
+    try {
+      await exporterStatsDelais(
+        { situations: scopedAll, periode: periodePdf, du: period.from, au: period.to, equipes: equipesFiltrees, villeDe, filtres: mode === 'villes' ? (fVille ? `ville ${fVille}` : '') : filtresTexte, auteur: user.name },
+        mode,
+      );
+    } catch (e) {
+      showToast('Export PDF impossible : ' + errMsg(e), 'error');
+    } finally {
+      setPdfEnCours(null);
+    }
+  };
+
+  const setMois = (annee: string, mois: string) => {
+    const lastDay = new Date(Number(annee), Number(mois), 0).getDate();
+    setCustomFrom(`${annee}-${mois}-01`);
+    setCustomTo(`${annee}-${mois}-${String(lastDay).padStart(2, '0')}`);
+  };
   const today = new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-black text-slate-900">Dashboard</h1>
-          <p className="text-slate-400 text-sm mt-0.5 capitalize">{today}</p>
+    <div className="space-y-4 sm:space-y-6 animate-fade-in">
+      {/* En-tête */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-black text-slate-900">Tableau de bord</h1>
+          <p className="text-slate-400 text-sm mt-0.5">
+            <span className="capitalize">{today}</span>
+            {loading && <span className="ml-2 text-blue-600 animate-pulse">· chargement…</span>}
+          </p>
         </div>
-        <Button icon="" onClick={() => onNavigate('import-excel')}>
-          Importer Programme
-        </Button>
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 w-full sm:w-auto">
+          <Button variant="outline" size="sm" onClick={() => exporterPdf('villes')} disabled={scopedAll.length === 0 || !!pdfEnCours} title={`Dans / hors délai par catégorie et par ville, poteaux — ${periodePdf}`}>
+            <FileDown className="w-4 h-4 mr-1 inline" /> {pdfEnCours === 'villes' ? 'PDF…' : 'PDF délais villes'}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => exporterPdf('equipes')} disabled={scopedAll.length === 0 || !!pdfEnCours} title={`Toutes les équipes : installations et dérangements, dans / hors délai — ${periodePdf}`}>
+            <FileDown className="w-4 h-4 mr-1 inline" /> {pdfEnCours === 'equipes' ? 'PDF…' : 'PDF classement équipes'}
+          </Button>
+          <Button variant="outline" size="sm" onClick={exporterExcel} disabled={scoped.length === 0}>
+            <FileSpreadsheet className="w-4 h-4 mr-1 inline" /> Excel
+          </Button>
+          {onNavigate && (user.role === 'admin' || user.role === 'superviseur') && (
+            <Button size="sm" onClick={() => onNavigate('import-excel')}>
+              <Upload className="w-4 h-4 mr-1 inline" /> Importer
+            </Button>
+          )}
+        </div>
       </div>
 
-      {loading && (
-        <div className="flex items-center gap-2 text-sm text-slate-400 animate-pulse">
-          <span></span> Chargement des données...
+      {/* Filtres communs aux trois onglets */}
+      <Card className="p-3 sm:p-4 space-y-3">
+        <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl sm:w-fit">
+          {(['all', 'installation', 'derangement'] as NatureFilter[]).map((n) => (
+            <button
+              key={n}
+              onClick={() => setNature(n)}
+              className={`whitespace-nowrap px-2 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all ${nature === n ? 'bg-white shadow text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {n === 'all' ? 'Tout' : n === 'installation' ? 'Installation' : 'Dérangement'}
+            </button>
+          ))}
         </div>
+        <div className="grid grid-cols-2 md:flex md:flex-wrap gap-2">
+          <Select value={preset} onChange={(e) => setPreset(e.target.value as PeriodPreset)} className="w-full md:w-auto min-w-0">
+            <option value="tout">Toute la période</option>
+            <option value="jour">Aujourd'hui</option>
+            <option value="semaine">Cette semaine</option>
+            <option value="mois">Ce mois</option>
+            <option value="custom">Choisir un mois</option>
+          </Select>
+          {preset === 'custom' && (
+            <>
+              <Select value={String(Number(customFrom.slice(5, 7)))} onChange={(e) => setMois(customFrom.slice(0, 4), e.target.value.padStart(2, '0'))} className="w-full md:w-auto min-w-0">
+                {MOIS_FR.map((label, i) => (
+                  <option key={i} value={i + 1}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+              <Select value={customFrom.slice(0, 4)} onChange={(e) => setMois(e.target.value, customFrom.slice(5, 7))} className="w-full md:w-auto min-w-0">
+                {ANNEES_SELECT.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </Select>
+            </>
+          )}
+          <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} className="w-full md:w-auto min-w-0">
+            <option value="">Toutes équipes</option>
+            {equipes
+              .filter((e) => !fVille || (e.ville ?? 'Nouakchott') === fVille)
+              .map((e) => (
+                <option key={e.id} value={e.name}>
+                  {e.name}
+                </option>
+              ))}
+          </Select>
+          <Select
+            value={fVille}
+            onChange={(e) => setFVille(e.target.value)}
+            className="w-full md:w-auto min-w-0"
+            disabled={!!user.villeScope}
+            title={user.villeScope ? `Restreint à ${user.villeScope}` : undefined}
+          >
+            <option value="">Toutes villes</option>
+            {villes.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </Card>
+
+      {/* Onglets */}
+      <div className="flex gap-1 overflow-x-auto border-b border-slate-200 -mx-1 px-1">
+        {ONGLETS.map((o) => (
+          <button
+            key={o.id}
+            onClick={() => setOnglet(o.id)}
+            className={`shrink-0 px-3 sm:px-4 py-2.5 text-sm font-bold border-b-2 -mb-px transition-colors ${onglet === o.id ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+          >
+            <span className="sm:hidden">{o.court}</span>
+            <span className="hidden sm:inline">{o.label}</span>
+          </button>
+        ))}
+        <span className="ml-auto self-center text-xs text-slate-400 whitespace-nowrap pl-3 hidden sm:inline">
+          {scoped.length} fiche{scoped.length > 1 ? 's' : ''} · {libellePeriode}
+        </span>
+      </div>
+
+      {onglet === 'apercu' && (
+        <VueEnsemble
+          scoped={scoped}
+          scopedAll={scopedAll}
+          scopedSansPeriode={scopedSansPeriode}
+          nature={nature}
+          period={period}
+          equipes={equipes}
+          villeDe={villeDe}
+          nbVilles={villes.length}
+        />
+      )}
+      {onglet === 'rapports' && <RapportsDetailles scoped={scoped} scopedAll={scopedAll} scopedSansPeriode={scopedSansPeriode} equipes={equipes} villeDe={villeDe} />}
+      {onglet === 'equipes' && (
+        <ProgressionEquipes
+          scoped={scoped}
+          equipes={equipesFiltrees}
+          onActualiser={loadAll}
+          chargement={loading}
+        />
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-        <StatCard value={total} label="Total" icon="" accent="#1565C0" />
-        <StatCard value={ok} label="OK" icon="" accent="#2E7D32" />
-        <StatCard value={nok} label="NON OK" icon="" accent="#C62828" />
-        <StatCard value={pending} label="En Attente" icon="" accent="#546E7A" />
-        <StatCard value={horsDelai} label="Hors Délai" icon="" accent="#E65100" />
-      </div>
-
-      {/* Equipe progress */}
-      <Card>
-        <CardHeader>
-          <CardTitle> Progression par Équipe</CardTitle>
-          <Button variant="outline" size="sm" onClick={loadAll} disabled={loading}>
-            {' '}
-            Actualiser
-          </Button>
-        </CardHeader>
-        <div className="p-5 space-y-5">
-          {(equipes.length > 0 ? equipes : []).map((eq) => {
-            const eqSits = situations.filter((s) => s.equipe?.toLowerCase() === eq.name.toLowerCase());
-            const eqOk = eqSits.filter((s) => s.status === 'ok').length;
-            const eqNok = eqSits.filter((s) => s.status === 'non_ok').length;
-            const eqPend = eqSits.filter((s) => s.status === 'pending' || s.status === 'urgent').length;
-            const pct = eqSits.length ? Math.round((eqOk / eqSits.length) * 100) : 0;
-            return (
-              <details key={eq.id} className="group bg-slate-50/50 rounded-xl border border-slate-100 overflow-hidden">
-                <summary className="cursor-pointer p-3 hover:bg-slate-50 transition-colors list-none flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <EquipeTag name={eq.name} color={eq.color} />
-                      <span className="text-xs font-medium text-slate-600">{eq.leader}</span>
-                      <span className="text-xs text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
-                        {eqOk}/{eqSits.length} OK
-                      </span>
-                      {eqNok > 0 && (
-                        <span className="text-xs text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded border border-red-100">
-                          {eqNok} NOK
-                        </span>
-                      )}
-                      {eqPend > 0 && (
-                        <span className="text-xs text-blue-600 font-medium bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
-                          {eqPend} restant
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-bold" style={{ color: eq.color }}>
-                        {pct}%
-                      </span>
-                      <span className="text-slate-400 group-open:rotate-180 transition-transform">▼</span>
-                    </div>
-                  </div>
-                  <ProgressBar value={pct} color={eq.color} />
-                </summary>
-
-                {eqSits.length > 0 ? (
-                  <div className="p-3 border-t border-slate-100 bg-white">
-                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                      {eqSits.map((s) => (
-                        <div
-                          key={s.id}
-                          className="flex items-center justify-between p-2 rounded-lg border border-slate-100 hover:border-slate-200 text-sm"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-slate-700">{s.fgp}</span>
-                            {s.isUrgent && <span className="text-[10px] text-orange-500"></span>}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <ZoneChip zone={s.zone} />
-                            <StatusBadge status={s.status} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-3 border-t border-slate-100 text-xs text-slate-400 text-center bg-white">Aucune situation</div>
-                )}
-              </details>
-            );
-          })}
-        </div>
-      </Card>
-
-      {/* Recent table */}
-      <Card>
-        <CardHeader>
-          <CardTitle> Situations Récentes</CardTitle>
-          <Button variant="outline" size="sm" onClick={() => onNavigate('situations')}>
-            Voir tout →
-          </Button>
-        </CardHeader>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-100">
-                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">FGP</th>
-                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Type</th>
-                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Zone</th>
-                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Équipe</th>
-                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide">Statut</th>
-                <th className="text-left px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide hidden md:table-cell">Motif</th>
-              </tr>
-            </thead>
-            <tbody>
-              {situations.slice(0, 10).map((s) => (
-                <tr key={s.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-slate-800">{s.fgp}</td>
-                  <td className="px-4 py-3">
-                    <TypeBadge type={s.type} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <ZoneChip zone={s.zone} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe)} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={s.status} />
-                  </td>
-                  <td className="px-4 py-3 text-xs text-slate-400 max-w-32 truncate hidden md:table-cell">{s.motif || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
     </div>
   );
 }

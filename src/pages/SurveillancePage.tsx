@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Download, Eye, X } from 'lucide-react';
+import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Download, Eye, FileText, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, useToast } from '@/components/ui';
 import {
@@ -11,10 +11,15 @@ import {
   subscribeProgramme,
   traiterReclamation,
   type ReclamationFauxOk,
+  fetchHistoriquePeriode,
+  fetchFichesParIds,
+  reassign,
+  redistribuer,
+  type ClotureArchivee,
 } from '@/lib/programmeService';
 import { ProgrammeJourEquipes } from '@/components/programme/ProgrammeJourEquipes';
 import { ReclamationsPanel } from '@/components/programme/Reclamation';
-import { ETAT_DELAI, POINTS, delaiOT, fmtPts, fmtPtsSigne, jourCourt } from '@/utils/points';
+import { ETAT_DELAI, POINTS, delaiOT, fmtPts, fmtPtsSigne, jourCourt, jourOuvreSuivant } from '@/utils/points';
 import { MOTIF_PENALITE, NATURE_CLASS, NATURE_LABEL, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
 import {
   NB_PERIODES,
@@ -27,6 +32,7 @@ import {
   periodesEvolution,
   programmeOuvert,
   somme,
+  statsEquipes,
   type Bilan,
   type Granularite,
 } from '@/utils/surveillance';
@@ -71,9 +77,17 @@ export default function SurveillancePage() {
   const { showToast } = useToast();
   const aujourdhui = isoJour(new Date());
   const [g, setG] = useState<Granularite>('jour');
-  const [jour, setJour] = useState(aujourdhui);
+  // après le contrôle de 22 h, on prépare le programme du lendemain (fiches non traitées reportées)
+  const demainOuvre = jourOuvreSuivant(aujourdhui);
+  const [jour, setJour] = useState(() => (new Date().getUTCHours() >= 22 ? demainOuvre : aujourdhui));
+  // filtres : équipe, zone, ville
+  const [fEquipe, setFEquipe] = useState('');
+  const [fZone, setFZone] = useState('');
+  const [fVille, setFVille] = useState('');
   const [mesure, setMesure] = useState<Mesure>('points');
-  const [ots, setOts] = useState<ProgrammeOT[]>([]);
+  const [otsBruts, setOts] = useState<ProgrammeOT[]>([]);
+  const [archives, setArchives] = useState<ClotureArchivee[]>([]);
+  const [basesArchives, setBasesArchives] = useState<ProgrammeOT[]>([]);
   const [penalites, setPenalites] = useState<Penalite[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -87,15 +101,24 @@ export default function SurveillancePage() {
   const colonnes = useMemo(() => [...cles].reverse(), [cles]);
   // tout ce qu'il faut pour l'évolution : de la plus ancienne période à la fin de la période choisie
   const depuis = periode(cles[0], g).debut;
-  const enCours = debut <= aujourdhui && aujourdhui <= fin;
+  // jour : en cours ou à venir (programme ouvert affiché) ; semaine / mois : contient aujourd'hui
+  const enCours = g === 'jour' ? debut >= aujourdhui : debut <= aujourdhui && aujourdhui <= fin;
+  const maxJour = g === 'jour' ? demainOuvre : aujourdhui;
 
   useEffect(() => {
     let vivant = true;
     const charger = () => {
       if (peutSignaler) fetchReclamations().then((r) => vivant && setReclamations(r), () => undefined);
-      return Promise.all([fetchSurveillance(depuis, fin), fetchPenalites(depuis, fin)])
+      return Promise.all([fetchSurveillance(depuis, fin), fetchPenalites(depuis, fin), fetchHistoriquePeriode(depuis, fin)])
+        .then(async ([o, p, h]) => {
+          // fiches renvoyées puis refaites après la période : rechargées pour garder leur « non fait »
+          const connues = new Set(o.map((x) => x.id));
+          const manquantes = [...new Set(h.map((x) => x.situationId))].filter((id) => !connues.has(id));
+          const autres = manquantes.length ? await fetchFichesParIds(manquantes) : [];
+          return [o, p, h, autres] as const;
+        })
         .then(
-          ([o, p]) => vivant && (setOts(o), setPenalites(p), setError('')),
+          ([o, p, h, autres]) => vivant && (setOts(o), setPenalites(p), setArchives(h), setBasesArchives(autres), setError('')),
           (e) => vivant && setError(errMsg(e)),
         )
         .finally(() => vivant && setLoaded(true));
@@ -117,6 +140,28 @@ export default function SurveillancePage() {
       showToast(errMsg(e), 'error');
     }
   };
+  /** Fiches en cours (ou reportées après 22 h) confiées à une autre équipe */
+  const reaffecter = async (ids: string[], equipe: string) => {
+    try {
+      const n = await reassign(ids, equipe, { par: user });
+      showToast(`${n} fiche${n > 1 ? 's' : ''} réaffectée${n > 1 ? 's' : ''} à ${equipe}`, 'success');
+      setVersion((v) => v + 1);
+    } catch (e) {
+      showToast(errMsg(e), 'error');
+      throw e;
+    }
+  };
+  /** Fiches « non faites » renvoyées (motif passé gardé) */
+  const renvoyer = async (ids: string[], equipe: string, date: string) => {
+    try {
+      const n = await redistribuer(ids, equipe, date, user);
+      showToast(`${n} fiche${n > 1 ? 's' : ''} renvoyée${n > 1 ? 's' : ''} à ${equipe} pour le ${jourCourt(date)} — motifs gardés`, 'success');
+      setVersion((v) => v + 1);
+    } catch (e) {
+      showToast(errMsg(e), 'error');
+      throw e;
+    }
+  };
   const traiter = async (r: ReclamationFauxOk, accepter: boolean, reponse: string) => {
     try {
       const res = await traiterReclamation(r.id, user, accepter, reponse);
@@ -133,7 +178,43 @@ export default function SurveillancePage() {
     }
   };
 
-  const parEquipe = useMemo(() => bilans(ots, penalites, g), [ots, penalites, g]);
+  // « non faites » puis renvoyées : elles comptent toujours comme non faites du jour où elles l'ont été
+  const ots = useMemo(() => {
+    const parId = new Map([...basesArchives, ...otsBruts].map((o) => [o.id, o]));
+    const passees = archives
+      .filter((h) => h.statut === 'non_ok')
+      .flatMap((h) => {
+        // la fiche telle qu'elle est aujourd'hui, avec le motif et le jour de ce « non fait »
+        const base = parId.get(h.situationId);
+        if (!base) return [];
+        return {
+          ...base,
+          id: `h:${h.id}`,
+          equipe: h.equipe,
+          statut: 'non_fait' as const,
+          motif: h.motif,
+          traiteLe: h.traiteLe,
+          isUrgent: false,
+        };
+      });
+    const villeDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.ville ?? '';
+    return ([...otsBruts, ...passees] as ProgrammeOT[]).filter(
+      (o) => (!fEquipe || o.equipe === fEquipe) && (!fZone || (o.zone ?? '').trim() === fZone) && (!fVille || villeDe(o.equipe) === fVille),
+    );
+  }, [otsBruts, archives, basesArchives, fEquipe, fZone, fVille, equipes]);
+  const zonesConnues = useMemo(() => [...new Set(otsBruts.map((o) => (o.zone ?? '').trim()).filter(Boolean))].sort(), [otsBruts]);
+  const villes = useMemo(() => [...new Set(equipes.map((e) => e.ville).filter((v): v is NonNullable<typeof v> => !!v))].sort(), [equipes]);
+  const penalitesFiltrees = useMemo(() => {
+    const villeDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.ville ?? '';
+    const zoneFiche = new Map(otsBruts.map((o) => [o.id, (o.zone ?? '').trim()]));
+    return penalites.filter(
+      (p) =>
+        (!fEquipe || p.equipe === fEquipe) &&
+        (!fVille || villeDe(p.equipe) === fVille) &&
+        (!fZone || zoneFiche.get(p.situationId) === fZone),
+    );
+  }, [penalites, fEquipe, fZone, fVille, equipes, otsBruts]);
+  const parEquipe = useMemo(() => bilans(ots, penalitesFiltrees, g), [ots, penalitesFiltrees, g]);
   const ouvert = useMemo(() => programmeOuvert(ots), [ots]);
   const cle = clePeriode(debut, g);
 
@@ -155,13 +236,128 @@ export default function SurveillancePage() {
     [noms, parEquipe, ouvert, cle, enCours],
   );
   const total = somme(lignes.map((l) => l.b));
-  const totalOuvert = [...ouvert.values()].reduce((a, o) => ({ aFaire: a.aFaire + o.aFaire, enRetard: a.enRetard + o.enRetard }), { aFaire: 0, enRetard: 0 });
+  const totalOuvert = [...ouvert.values()].reduce(
+    (a, o) => ({ aFaire: a.aFaire + o.aFaire, enRetard: a.enRetard + o.enRetard, demain: a.demain + o.demain }),
+    { aFaire: 0, enRetard: 0, demain: 0 },
+  );
 
   const valeur = (b: Bilan | undefined) => (!b ? 0 : mesure === 'points' ? b.points : mesure === 'faites' ? b.faites : b.nonFaites);
   const evolution = useMemo(
     () => noms.map((equipe) => ({ equipe, cellules: colonnes.map((k) => parEquipe.get(equipe)?.get(k)) })).filter((l) => l.cellules.some(Boolean)),
     [noms, colonnes, parEquipe],
   );
+
+  /** PDF du soir : statistiques par équipe (chef, installations / dérangements, faites, délai) */
+  const exporterPdf = async () => {
+    try {
+      const [{ jsPDF }, modTable] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+      // selon le bundler, la fonction est l'export par défaut ou « autoTable »
+      const mt = modTable as unknown as { default?: unknown; autoTable?: unknown };
+      const autoTable = (typeof mt.default === 'function' ? mt.default : (mt.autoTable ?? (mt.default as { default?: unknown })?.default)) as typeof import('jspdf-autotable').default;
+      const pdfTxt = (s: string) => s.replace(/\u2212/g, '-').replace(/[\u2019]/g, "'");
+      const stats = statsEquipes(ots, debut, fin, enCours);
+      const chefDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.leader || '-';
+      const pts = (eq: string, base: number) => {
+        const b = parEquipe.get(eq)?.get(cle);
+        return b ? b.points : base;
+      };
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      doc.setFontSize(15);
+      doc.text(pdfTxt(`Surveillance des équipes - ${libellePeriode(debut, g, true)}`), 14, 15);
+      doc.setFontSize(9);
+      doc.setTextColor(100);
+      const filtres = [fVille && `ville ${fVille}`, fEquipe && `équipe ${fEquipe}`, fZone && `zone ${fZone}`].filter(Boolean).join(' · ');
+      doc.text(
+        pdfTxt(`Édité le ${new Date().toLocaleString('fr-FR')} par ${user.name}${filtres ? ` · ${filtres}` : ''} · une fiche compte le jour de sa clôture`),
+        14,
+        21,
+      );
+      const total = stats.reduce(
+        (t, s) => ({
+          installations: t.installations + s.installations,
+          installationsFaites: t.installationsFaites + s.installationsFaites,
+          derangements: t.derangements + s.derangements,
+          derangementsFaits: t.derangementsFaits + s.derangementsFaits,
+          faites: t.faites + s.faites,
+          nonFaites: t.nonFaites + s.nonFaites,
+          dansDelai: t.dansDelai + s.dansDelai,
+          horsDelai: t.horsDelai + s.horsDelai,
+          enCours: t.enCours + s.enCours,
+          points: t.points + pts(s.equipe, s.points),
+        }),
+        { installations: 0, installationsFaites: 0, derangements: 0, derangementsFaits: 0, faites: 0, nonFaites: 0, dansDelai: 0, horsDelai: 0, enCours: 0, points: 0 },
+      );
+      const taux = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)} %` : '-');
+      autoTable(doc, {
+        startY: 26,
+        head: [['Équipe', "Chef d'équipe", 'Installations', 'dont faites', 'Dérangements', 'dont faits', 'Faites', 'Non faites', 'Dans le délai', 'Hors délai', ...(enCours ? ['En cours'] : []), 'Points']].map(
+          (r) => r.map(pdfTxt),
+        ),
+        body: stats.map((s) =>
+          [
+            s.equipe,
+            chefDe(s.equipe),
+            s.installations,
+            s.installationsFaites,
+            s.derangements,
+            s.derangementsFaits,
+            s.faites,
+            s.nonFaites,
+            `${s.dansDelai} (${taux(s.dansDelai, s.faites)})`,
+            s.horsDelai,
+            ...(enCours ? [s.enCours] : []),
+            fmtPts(pts(s.equipe, s.points)),
+          ].map((v) => pdfTxt(String(v))),
+        ),
+        foot: [
+          [
+            'Total',
+            '',
+            total.installations,
+            total.installationsFaites,
+            total.derangements,
+            total.derangementsFaits,
+            total.faites,
+            total.nonFaites,
+            `${total.dansDelai} (${taux(total.dansDelai, total.faites)})`,
+            total.horsDelai,
+            ...(enCours ? [total.enCours] : []),
+            fmtPts(total.points),
+          ].map((v) => pdfTxt(String(v))),
+        ],
+        styles: { fontSize: 9, cellPadding: 1.8 },
+        headStyles: { fillColor: [30, 41, 59] },
+        footStyles: { fillColor: [226, 232, 240], textColor: 20, fontStyle: 'bold' },
+        columnStyles: { 0: { fontStyle: 'bold' } },
+      });
+      // détail de chaque équipe : FGP, nature, état, motif
+      if (g === 'jour') {
+        for (const s of stats) {
+          const fiches = ots
+            .filter((o) => o.equipe === s.equipe)
+            .filter((o) => (o.statut === 'a_faire' ? enCours : !!o.traiteLe && isoJour(new Date(o.traiteLe)) === debut));
+          if (!fiches.length) continue;
+          autoTable(doc, {
+            head: [[`${s.equipe}${chefDe(s.equipe) !== '-' ? ` - chef : ${chefDe(s.equipe)}` : ''}`, 'Zone', 'Nature', 'État', 'Motif'].map(pdfTxt)],
+            body: fiches
+              .sort((a, b) => (a.zone ?? '').localeCompare(b.zone ?? '') || a.statut.localeCompare(b.statut))
+              .map((o) => {
+                const d = delaiOT(o);
+                const etat = o.statut === 'fait' ? (d.etat === 'dans' ? 'Fait (dans le délai)' : 'Fait (hors délai)') : o.statut === 'non_fait' ? 'Non fait' : d.etat === 'retard' ? 'En retard' : 'En cours';
+                return [ligneLabel(o), o.zone ?? '', o.nature === 'derangement' ? 'Dérangement' : 'Installation', etat, o.statut === 'a_faire' ? '' : o.motif].map((v) => pdfTxt(String(v ?? '')));
+              }),
+            startY: (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6,
+            styles: { fontSize: 8, cellPadding: 1.2 },
+            headStyles: { fillColor: [71, 85, 105] },
+            margin: { top: 12 },
+          });
+        }
+      }
+      doc.save(`surveillance_${g}_${debut}.pdf`);
+    } catch (e) {
+      showToast(errMsg(e), 'error');
+    }
+  };
 
   const exporter = async () => {
     try {
@@ -229,7 +425,7 @@ export default function SurveillancePage() {
                 type="date"
                 aria-label="Choisir une date"
                 value={jour}
-                max={aujourdhui}
+                max={maxJour}
                 onChange={(e) => e.target.value && setJour(e.target.value)}
                 className="absolute inset-0 opacity-0 cursor-pointer"
               />
@@ -237,8 +433,8 @@ export default function SurveillancePage() {
             <button
               type="button"
               aria-label="Période suivante"
-              disabled={fin >= aujourdhui}
-              onClick={() => setJour(decaler(debut, g, 1) > aujourdhui ? aujourdhui : decaler(debut, g, 1))}
+              disabled={fin >= maxJour}
+              onClick={() => setJour(decaler(debut, g, 1) > maxJour ? maxJour : decaler(debut, g, 1))}
               className="p-2 rounded-lg hover:bg-slate-100 disabled:opacity-30"
             >
               <ChevronRight className="w-4 h-4" />
@@ -249,10 +445,36 @@ export default function SurveillancePage() {
               Aujourd’hui
             </button>
           )}
-          <Button variant="outline" size="sm" className="sm:ml-auto" icon={<Download className="w-3.5 h-3.5" />} onClick={exporter} disabled={!loaded}>
-            <span className="hidden sm:inline">Exporter Excel</span>
-            <span className="sm:hidden">Excel</span>
-          </Button>
+          <span className="flex gap-2 sm:ml-auto">
+            <Button variant="outline" size="sm" icon={<FileText className="w-3.5 h-3.5" />} onClick={exporterPdf} disabled={!loaded}>
+              PDF
+            </Button>
+            <Button variant="outline" size="sm" icon={<Download className="w-3.5 h-3.5" />} onClick={exporter} disabled={!loaded}>
+              Excel
+            </Button>
+          </span>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {[
+            { label: 'Ville', value: fVille, set: setFVille, options: villes as string[] },
+            { label: 'Équipe', value: fEquipe, set: setFEquipe, options: equipes.filter((e) => !fVille || e.ville === fVille).map((e) => e.name) },
+            { label: 'Zone', value: fZone, set: setFZone, options: zonesConnues },
+          ].map((f) => (
+            <select
+              key={f.label}
+              aria-label={`Filtrer par ${f.label.toLowerCase()}`}
+              value={f.value}
+              onChange={(e) => f.set(e.target.value)}
+              className={`min-w-0 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white ${f.value ? 'border-blue-400 text-blue-900 font-semibold' : 'border-slate-200 text-slate-600'}`}
+            >
+              <option value="">{f.label} : toutes</option>
+              {f.options.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ))}
         </div>
         <p className="text-[11px] sm:text-xs text-slate-500 mt-2">
           Une fiche compte le jour où elle a été clôturée (« Fait » ou « Non fait »), avec les points du barème ; une pénalité, le jour où elle a été donnée.
@@ -272,7 +494,7 @@ export default function SurveillancePage() {
         <Kpi label="Points" value={fmtPtsSigne(total.points)} cls={couleurPoints(total.points)} />
         {enCours ? (
           <>
-            <Kpi label="À faire (maintenant)" value={totalOuvert.aFaire} cls="text-sky-700" />
+            <Kpi label="À faire (maintenant)" value={totalOuvert.aFaire} cls="text-sky-700" sub={totalOuvert.demain ? `+ ${totalOuvert.demain} pour demain` : undefined} />
             <Kpi label="En retard" value={totalOuvert.enRetard} cls={totalOuvert.enRetard ? 'text-red-700' : 'text-slate-400'} />
           </>
         ) : (
@@ -284,7 +506,17 @@ export default function SurveillancePage() {
       {!loaded ? (
         <p className="py-10 text-center text-sm text-slate-400">Chargement…</p>
       ) : g === 'jour' ? (
-        <ProgrammeJourEquipes ots={ots} jour={debut} enCours={enCours} couleur={couleur} peutSignaler={peutSignaler} onFauxOk={fauxOk} />
+        <ProgrammeJourEquipes
+          ots={ots}
+          jour={debut}
+          enCours={enCours}
+          couleur={couleur}
+          peutSignaler={peutSignaler}
+          onFauxOk={fauxOk}
+          equipeNames={equipes.map((e) => e.name)}
+          onReaffecter={reaffecter}
+          onRenvoyer={renvoyer}
+        />
       ) : lignes.length === 0 ? (
         <p className="py-10 text-center text-sm text-slate-400">Aucune activité pour cette période.</p>
       ) : (
