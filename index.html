@@ -1,7 +1,10 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" translate="no" class="notranslate">
   <head>
     <meta charset="UTF-8" />
+    <!-- Pas de traduction automatique (Chrome, Edge…) : elle déforme les termes (FGP, OK, NON OK…)
+         et fait planter React (erreur « removeChild ») -->
+    <meta name="google" content="notranslate" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>GSS Program Manager · FTTH</title>
     <meta name="description" content="Application de gestion des situations FTTH — Suivi installations, dérangements, équipes et programmes." />

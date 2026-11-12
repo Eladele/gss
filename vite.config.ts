@@ -14,6 +14,8 @@ export default defineConfig({
       manifest: {
         name: 'GSS Program Manager · FTTH',
         short_name: 'GSS',
+        lang: 'fr',
+        dir: 'ltr',
         description: 'Application de gestion des situations FTTH — Suivi installations, dérangements, équipes et programmes.',
         theme_color: '#1565C0',
         background_color: '#f8fafc',
