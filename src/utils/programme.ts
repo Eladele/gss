@@ -143,3 +143,33 @@ export const ligneLabel = (o: { typeLigne?: string; fgp: string }) => `${o.typeL
 
 /** Application décharge (ouverte dans un nouvel onglet) */
 export const DECHARGE_URL = 'https://41.188.123.36/ftth-intervention/nouvelle';
+
+// ─── Application ID du fixe (OT ANS) ─────────────────────────────────────────
+// Calculé depuis le DIS de l'OT, ex. TZ1Z032712/2-8 → A/0/1/6/32 :
+//   • zone sur 6 caractères (TZ1Z03), puis le PCO (2712/2), puis le port du PCO (8) ;
+//   • PCO = hub (1 à 4) + série (1 à 16 ; hub 1 : 1-4, hub 2 : 5-8, hub 3 : 9-12, hub 4 : 13-16)
+//     + 2 chiffres (11, 12, 21, 22) + « /1 » ou « /2 » ;
+//   • chaque série = 8 PCO dans l'ordre x11/1, x11/2, x12/1, x12/2, x21/1, x21/2, x22/1, x22/2,
+//     de 8 ports chacun = 64 ONU ; port de l'OLT (Port ID 0 à 15) = série − 1 ;
+//   • Application ID = A/0/(hub − 1)/(série − 1)/(rang du PCO dans la série × 8 + port du PCO).
+export const APP_ID_PREFIXE = 'A/0';
+export interface ApplicationId {
+  id: string;
+  hub: number;
+  serie: number;
+  portOlt: number;
+  onuId: number;
+}
+export function applicationIdDepuisDis(dis: string | null | undefined): ApplicationId | null {
+  const d = (dis ?? '').replace(/\s+/g, '').toUpperCase();
+  if (d.length < 10) return null;
+  const m = /^([1-4])(\d{1,2})([12])([12])\/([12])-(\d{1,2})$/.exec(d.slice(6));
+  if (!m) return null;
+  const hub = Number(m[1]);
+  const serie = Number(m[2]);
+  const port = Number(m[6]);
+  if (serie < (hub - 1) * 4 + 1 || serie > hub * 4 || port < 1 || port > 8) return null;
+  const rang = ((Number(m[3]) - 1) * 2 + (Number(m[4]) - 1)) * 2 + (Number(m[5]) - 1); // 0 à 7
+  const onuId = rang * 8 + port; // 1 à 64
+  return { id: `${APP_ID_PREFIXE}/${hub - 1}/${serie - 1}/${onuId}`, hub, serie, portOlt: serie - 1, onuId };
+}

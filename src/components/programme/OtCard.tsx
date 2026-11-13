@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Cable, Check, ClipboardCopy, Copy, Flame, MapPin, Phone, RotateCcw, X } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, fmtTel, ligneLabel } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, applicationIdDepuisDis, fmtTel, ligneLabel } from '@/utils/programme';
 import { TypeBadge } from '@/components/ui';
 import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
@@ -70,6 +70,7 @@ export function OtCard({
   busy?: boolean;
   scan?: ScanOT;
 }) {
+  const appId = appIdAns(ot);
   const st = STATUT_OT[ot.statut];
   const delai = delaiOT(ot);
   const today = new Date().toISOString().slice(0, 10);
@@ -146,8 +147,9 @@ export function OtCard({
           )}
           {ot.dis && <CopyChip value={ot.dis} label="DIS" />}
         </div>
-        {(ot.ontSerials.length > 0 || ip?.ips || ip?.ipm) && (
+        {(ot.ontSerials.length > 0 || ip?.ips || ip?.ipm || appId) && (
           <div className="flex flex-wrap gap-1.5">
+            {appId && <CopyChip value={appId.id} label="Application ID" />}
             {ot.ontSerials.map((s) => (
               <CopyChip key={s} value={s} label="ONT" />
             ))}
@@ -278,6 +280,9 @@ function PhoneChip({ tel }: { tel: string }) {
 }
 
 /** Copie toute la fiche (à coller dans WhatsApp ou un SMS) */
+/** Application ID du fixe : seulement pour les OT ANS (calculé depuis le DIS) */
+const appIdAns = (ot: ProgrammeOT) => ((ot.typeOt ?? '').toUpperCase() === 'ANS' ? applicationIdDepuisDis(ot.dis) : null);
+
 function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
   const text = [
     ligneLabel(ot),
@@ -287,6 +292,7 @@ function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
     ot.ontSerials.length ? `ONT ${ot.ontSerials.join(' / ')}` : '',
     ip?.ips ? `IPS ${ip.ips}` : '',
     ip?.ipm ? `IPM ${ip.ipm}` : '',
+    appIdAns(ot) ? `Application ID ${appIdAns(ot)?.id}` : '',
     ot.nature === 'installation' && ot.cableFibreM ? `Câble fibre : ${ot.cableFibreM} m` : '',
     ot.adresse ? `Adresse : ${ot.adresse}` : '',
   ]
