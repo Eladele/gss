@@ -1,10 +1,14 @@
 import { Fragment, useMemo, useState } from 'react';
 import { ArrowRightLeft, CalendarClock, CheckCircle2, ChevronDown, CircleDashed, MapPin, RotateCcw, Search, X, XCircle } from 'lucide-react';
-import type { ProgrammeOT } from '@/types';
+import type { ProgrammeOT, SituationType } from '@/types';
+import { TypeBadge } from '@/components/ui';
 import { delaiOT, estPourPlusTard, fmtPtsSigne, jourCourt, jourOuvreSuivant, jourRemise } from '@/utils/points';
 import { ligneLabel, type MotifFauxOk } from '@/utils/programme';
 import { isoJour } from '@/utils/surveillance';
 import { FauxOkButton } from '@/components/programme/FauxOk';
+
+/** Type d'OT (DRG, CPL, CLS, TRL, RLR, CST, ANS) ; à défaut, d'après la nature */
+const typeDe = (o: ProgrammeOT) => (o.typeOt || (o.nature === 'derangement' ? 'DRG' : 'INST')).toUpperCase();
 
 type Filtre = 'tout' | 'fait' | 'non_fait' | 'a_faire' | 'reportee' | 'demain';
 const FILTRES: { id: Filtre; label: string }[] = [
@@ -152,7 +156,7 @@ export function ProgrammeJourEquipes({
               filtre === 'tout' ||
               (filtre === 'demain' ? l.demain : filtre === 'reportee' ? l.reportee : !l.demain && l.o.statut === filtre),
           )
-          .filter((l) => !recherche || [l.o.fgp, l.o.motif, l.o.clientNom, l.o.numeroOt].join(' ').toLowerCase().includes(recherche))
+          .filter((l) => !recherche || [typeDe(l.o), l.o.fgp, l.o.motif, l.o.clientNom, l.o.numeroOt].join(' ').toLowerCase().includes(recherche))
           .sort(
             (a, b) =>
               zoneDe(a.o).localeCompare(zoneDe(b.o)) ||
@@ -345,7 +349,7 @@ export function ProgrammeJourEquipes({
                         </li>
                       )}
                       <li
-                        className={`px-3 sm:px-4 py-2 grid grid-cols-[auto_minmax(6.5rem,auto)_auto_1fr] sm:grid-cols-[auto_9rem_11rem_1fr_auto] items-center gap-x-3 gap-y-1 ${
+                        className={`px-3 sm:px-4 py-2 grid grid-cols-[auto_minmax(9.5rem,auto)_auto_1fr] sm:grid-cols-[auto_12.5rem_11rem_1fr_auto] items-center gap-x-3 gap-y-1 ${
                           l.reportee || (o.statut === 'a_faire' && !l.demain && l.d.etat === 'retard') ? 'bg-red-50/40' : ''
                         } ${sel.has(o.id) ? '!bg-blue-50' : ''}`}
                       >
@@ -354,7 +358,11 @@ export function ProgrammeJourEquipes({
                         ) : (
                           <span className="w-[13px]" />
                         )}
-                        <span className="font-mono font-bold text-slate-900 text-sm whitespace-nowrap">
+                        <span className="font-mono font-bold text-slate-900 text-sm whitespace-nowrap flex items-center gap-2">
+                          {/* type d'OT devant le FGP : DRG, CPL, CST, ANS… */}
+                          <span className="inline-flex w-11 justify-center font-sans">
+                            <TypeBadge type={typeDe(o) as SituationType} />
+                          </span>
                           {ligneLabel(o)}
                           {o.isUrgent && <span className="ml-1.5 text-[10px] font-sans font-bold text-orange-700">URGENT</span>}
                         </span>

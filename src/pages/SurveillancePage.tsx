@@ -338,13 +338,13 @@ export default function SurveillancePage() {
             .filter((o) => (o.statut === 'a_faire' ? enCours : !!o.traiteLe && isoJour(new Date(o.traiteLe)) === debut));
           if (!fiches.length) continue;
           autoTable(doc, {
-            head: [[`${s.equipe}${chefDe(s.equipe) !== '-' ? ` - chef : ${chefDe(s.equipe)}` : ''}`, 'Zone', 'Nature', 'État', 'Motif'].map(pdfTxt)],
+            head: [[`${s.equipe}${chefDe(s.equipe) !== '-' ? ` - chef : ${chefDe(s.equipe)}` : ''}`, 'Type', 'Zone', 'État', 'Motif'].map(pdfTxt)],
             body: fiches
               .sort((a, b) => (a.zone ?? '').localeCompare(b.zone ?? '') || a.statut.localeCompare(b.statut))
               .map((o) => {
                 const d = delaiOT(o);
                 const etat = o.statut === 'fait' ? (d.etat === 'dans' ? 'Fait (dans le délai)' : 'Fait (hors délai)') : o.statut === 'non_fait' ? 'Non fait' : d.etat === 'retard' ? 'En retard' : 'En cours';
-                return [ligneLabel(o), o.zone ?? '', o.nature === 'derangement' ? 'Dérangement' : 'Installation', etat, o.statut === 'a_faire' ? '' : o.motif].map((v) => pdfTxt(String(v ?? '')));
+                return [ligneLabel(o), (o.typeOt || (o.nature === 'derangement' ? 'DRG' : 'Installation')).toUpperCase(), o.zone ?? '', etat, o.statut === 'a_faire' ? '' : o.motif].map((v) => pdfTxt(String(v ?? '')));
               }),
             startY: (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6,
             styles: { fontSize: 8, cellPadding: 1.2 },
@@ -624,9 +624,8 @@ export default function SurveillancePage() {
                           <td
                             key={colonnes[j]}
                             title={b ? `${b.faites} faites · ${b.nonFaites} non faites · ${b.penalites} pénalités · ${fmtPts(b.points)} pt` : undefined}
-                            className={`px-2 py-2 text-center tabular-nums ${colonnes[j] === cle ? 'bg-blue-50/60' : ''} ${
-                              !b ? 'text-slate-200' : mesure === 'points' ? `font-bold ${couleurPoints(v)}` : 'text-slate-700'
-                            }`}
+                            className={`px-2 py-2 text-center tabular-nums ${colonnes[j] === cle ? 'bg-blue-50/60' : ''} ${!b ? 'text-slate-200' : mesure === 'points' ? `font-bold ${couleurPoints(v)}` : 'text-slate-700'
+                              }`}
                           >
                             {!b ? '·' : mesure === 'points' ? fmtPts(v) : v}
                           </td>
