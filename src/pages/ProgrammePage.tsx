@@ -20,7 +20,7 @@ import {
   type ReclamationFauxOk,
   type ScanOT,
 } from '@/lib/programmeService';
-import { ExternalLink, Flame, MapPin, ScanLine } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Eye, EyeOff, Flame, ListTodo, MapPin, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
 import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
 import { POINTS, classement, delaiOT, fmtPts, fmtPtsSigne } from '@/utils/points';
@@ -44,6 +44,24 @@ function FichesOT() {
   const [loaded, setLoaded] = useState(!team);
   const [error, setError] = useState('');
   const [view, setView] = useState<'a_faire' | 'termine'>('a_faire');
+  // encadré « installations à scanner » replié ou non (mémorisé sur cet appareil)
+  const [scanCache, setScanCache] = useState(() => {
+    try {
+      return localStorage.getItem('gss.chef.masquerScan') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const basculerScan = () => {
+    setScanCache((v) => {
+      try {
+        localStorage.setItem('gss.chef.masquerScan', v ? '0' : '1');
+      } catch {
+        /* stockage indisponible */
+      }
+      return !v;
+    });
+  };
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [sheet, setSheet] = useState<{ ot: ProgrammeOT; mode: 'fait' | 'non_fait' } | null>(null);
@@ -201,11 +219,23 @@ function FichesOT() {
       <PointsEquipe team={team} />
       {aScanner.length > 0 && (
         <div className="rounded-xl border border-red-200 bg-red-50/60 p-3 space-y-2">
-          <p className="flex items-center gap-2 text-sm font-bold text-red-800">
-            <ScanLine className="w-4 h-4" /> {aScanner.length} installation{aScanner.length > 1 ? 's' : ''} à scanner
-          </p>
-          <p className="text-[11px] text-red-700">Non scannée{aScanner.length > 1 ? 's' : ''} dans le dernier fichier de scan importé après l’installation.</p>
-          {aScanner.map((o) => (
+          <div className="flex items-center gap-2">
+            <p className="flex items-center gap-2 text-sm font-bold text-red-800">
+              <ScanLine className="w-4 h-4" /> {aScanner.length} installation{aScanner.length > 1 ? 's' : ''} à scanner
+            </p>
+            <button
+              type="button"
+              onClick={basculerScan}
+              className="ml-auto shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-red-200 text-xs font-bold text-red-700 hover:bg-red-50"
+            >
+              {scanCache ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              {scanCache ? 'Afficher' : 'Masquer'}
+            </button>
+          </div>
+          {!scanCache && (
+            <p className="text-[11px] text-red-700">Non scannée{aScanner.length > 1 ? 's' : ''} dans le dernier fichier de scan importé après l’installation.</p>
+          )}
+          {!scanCache && aScanner.map((o) => (
             <div key={o.id} className="bg-white rounded-lg px-3 py-2 text-sm border border-red-100">
               <p className="font-semibold text-slate-800 truncate">
                 {ligneLabel(o)} · {o.clientNom}
@@ -236,21 +266,25 @@ function FichesOT() {
         <StatCard value={termines.filter((o) => o.statut === 'fait').length} label="Faits aujourd’hui" icon="" accent="#2E7D32" />
       </div>
       <div className="flex flex-wrap gap-2 items-center">
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-lg max-w-full overflow-x-auto">
+        {/* Onglets À faire / Terminées : gros boutons bien visibles */}
+        <div className="grid grid-cols-2 gap-2 w-full sm:w-auto">
           {(
             [
-              ['a_faire', `À faire (${aFaire.length})`],
-              ['termine', `Terminées (${termines.length})`],
+              ['a_faire', 'À faire', aFaire.length, ListTodo, 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-600/20', 'text-blue-700 border-blue-200'],
+              ['termine', 'Terminées', termines.length, CheckCircle2, 'bg-emerald-600 border-emerald-600 text-white shadow-md shadow-emerald-600/20', 'text-emerald-700 border-emerald-200'],
             ] as const
-          ).map(([id, label]) => (
+          ).map(([id, label, n, Icone, actif, inactif]) => (
             <button
               key={id}
               onClick={() => setView(id)}
-              className={`px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${
-                view === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'
+              aria-pressed={view === id}
+              className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border-2 text-sm font-bold whitespace-nowrap transition active:scale-95 ${
+                view === id ? actif : `bg-white hover:bg-slate-50 ${inactif}`
               }`}
             >
+              <Icone className="w-4 h-4" />
               {label}
+              <span className={`min-w-6 px-1.5 py-0.5 rounded-full text-xs font-black ${view === id ? 'bg-white/25' : 'bg-slate-100 text-slate-700'}`}>{n}</span>
             </button>
           ))}
         </div>

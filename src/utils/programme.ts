@@ -173,3 +173,18 @@ export function applicationIdDepuisDis(dis: string | null | undefined): Applicat
   const onuId = rang * 8 + port; // 1 à 64
   return { id: `${APP_ID_PREFIXE}/${hub - 1}/${serie - 1}/${onuId}`, hub, serie, portOlt: serie - 1, onuId };
 }
+
+/**
+ * OT ANS (ajout numéro supplémentaire) : par le type, ou à défaut par le sous-type de l'OT
+ * (une fiche déjà importée d'Excel peut avoir gardé un autre type), ou par ses adresses IPS / IPM.
+ */
+export function estOtAns(ot: { typeOt?: string; sousType?: string }, avecIp = false): boolean {
+  if ((ot.typeOt ?? '').trim().toUpperCase() === 'ANS') return true;
+  const s = (ot.sousType ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return /numero\s+suppl|ajout\s+num|supplementaire/.test(s) || avecIp;
+}
+
+/** Application ID d'une fiche : depuis son DIS, sinon depuis son PCO et son port */
+export function applicationIdFiche(ot: { dis?: string; pco?: string; port?: string | number | null }): ApplicationId | null {
+  return applicationIdDepuisDis(ot.dis) ?? (ot.pco && ot.port ? applicationIdDepuisDis(`ZZZZZZ${ot.pco}-${ot.port}`) : null);
+}

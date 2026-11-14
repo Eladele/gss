@@ -12,6 +12,7 @@
 import type { Equipe, Situation } from '@/types';
 import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
 import { isHorsDelai } from '@/utils/stats';
+import { delaiOT } from '@/utils/points';
 import { poteauxDe } from '@/components/dashboard/commun';
 
 export const fr = (s: string) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '');
@@ -21,11 +22,6 @@ export const CATEGORIES = [
   { id: 'inst', label: 'Installations (CPL/TRL/CMI/CLS/RLR)', court: 'Installations', types: ['CPL', 'TRL', 'CMI', 'CLS', 'RLR'] },
   { id: 'cst', label: 'CST', court: 'CST', types: ['CST'] },
   { id: 'ans', label: 'ANS', court: 'ANS', types: ['ANS'] },
-  { id: 'drg', label: 'Dérangements (DRG)', court: 'DRG', types: ['DRG'] },
-] as const;
-/** Classement des équipes : toutes les installations réunies, et les dérangements */
-const DEUX_CATEGORIES = [
-  { id: 'inst', label: 'Installations (tous types)', court: 'Installations', types: ['CPL', 'TRL', 'CMI', 'CLS', 'RLR', 'CST', 'ANS'] },
   { id: 'drg', label: 'Dérangements (DRG)', court: 'DRG', types: ['DRG'] },
 ] as const;
 
@@ -164,24 +160,29 @@ export interface OptionsStats {
   auteur: string;
 }
 
+const nomFichier = (periode: string) =>
+  periode
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .toLowerCase() || 'periode';
+const texteDates = (o: OptionsStats) => (o.du && o.au ? (o.du === o.au ? `le ${fr(o.du)}` : `du ${fr(o.du)} au ${fr(o.au)}`) : 'toutes dates');
+
 export async function exporterStatsDelais(o: OptionsStats, mode: 'villes' | 'equipes') {
+  if (mode === 'equipes') return exporterClassementEquipes(o);
   const { jsPDF, autoTable } = await outilsPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const dates = o.du && o.au ? (o.du === o.au ? `le ${fr(o.du)}` : `du ${fr(o.du)} au ${fr(o.au)}`) : 'toutes dates';
-  const villes = mode === 'villes';
-  let y = entete(doc, `${villes ? 'Statistiques des délais' : 'Classement des équipes'} - ${o.periode}`, [
-    `Période : ${dates}${o.filtres ? ` - ${o.filtres}` : ''}`,
-    villes
-      ? 'Installations = CPL/TRL/CMI/CLS/RLR réunis ; CST, ANS et DRG à part. Poteaux : fiches OK. Les NON OK ne comptent pas dans les délais.'
-      : 'Installations = tous les types (CPL, TRL, CMI, CLS, RLR, CST, ANS) ; dérangements = DRG. Les NON OK ne comptent pas dans les délais.',
+  let y = entete(doc, `Statistiques des délais - ${o.periode}`, [
+    `Période : ${texteDates(o)}${o.filtres ? ` - ${o.filtres}` : ''}`,
+    'Installations = CPL/TRL/CMI/CLS/RLR réunis ; CST, ANS et DRG à part. Poteaux : fiches OK. Les NON OK ne comptent pas dans les délais.',
     `Édité le ${new Date().toLocaleString('fr-FR')} par ${o.auteur}`,
   ]);
-  const cats = villes ? CATEGORIES : DEUX_CATEGORIES;
 
   // 1. Synthèse : une ligne par catégorie
   y = sousTitre(doc, y, 'Synthèse');
   const tot: Delais = { dans: 0, hors: 0 };
-  const body = cats.map((c) => {
+  const body = CATEGORIES.map((c) => {
     const d = delais(o.situations, c.types);
     tot.dans += d.dans;
     tot.hors += d.hors;
@@ -198,80 +199,187 @@ export async function exporterStatsDelais(o: OptionsStats, mode: 'villes' | 'equ
   });
   y = finY(doc) + 10;
 
-  if (villes) {
-    // 2. Par ville (sans nom d'équipe) : délais des 4 catégories + poteaux posés
-    const parVille = new Map<string, Situation[]>();
-    o.situations.forEach((s) => {
-      const v = o.villeDe(s.equipe);
-      const l = parVille.get(v);
-      if (l) l.push(s);
-      else parVille.set(v, [s]);
-    });
-    const noms = [...parVille.keys()].sort();
-    const poteaux = (l: Situation[]) => l.reduce((n, s) => n + (s.status === 'ok' ? poteauxDe(s) : 0), 0);
-    const head = enteteGroupe(['Ville']);
-    head[0].push({ content: 'Poteaux', rowSpan: 2 });
-    y = sousTitre(doc, y, 'Par ville');
-    autoTable(doc, {
-      ...STYLE,
-      startY: y,
-      head,
-      body: noms.map((v) => [v, ...toutesCats(parVille.get(v) ?? []), poteaux(parVille.get(v) ?? [])].map(t)),
-      foot: noms.length > 1 ? [['Total', ...toutesCats(o.situations), poteaux(o.situations)].map(t)] : undefined,
-      columnStyles: { ...STYLE.columnStyles, [1 + CATEGORIES.length * 3]: { fontStyle: 'bold', textColor: [109, 76, 65] } },
-      didParseCell: colorier(1, CATEGORIES.length * 3),
-    });
-  } else {
-    // 2. Classement de toutes les équipes : installations et dérangements, dans / hors délai
-    const parEquipe = new Map<string, Situation[]>();
-    o.situations.forEach((s) => {
-      const k = (s.equipe || '').toLowerCase();
-      const l = parEquipe.get(k);
-      if (l) l.push(s);
-      else parEquipe.set(k, [s]);
-    });
-    const lignes = o.equipes.map((e) => {
-      const l = parEquipe.get(e.name.toLowerCase()) ?? [];
-      const ins = delais(l, DEUX_CATEGORIES[0].types);
-      const drg = delais(l, DEUX_CATEGORIES[1].types);
-      const tout = { dans: ins.dans + drg.dans, hors: ins.hors + drg.hors };
-      return { e, ins, drg, tout, n: tout.dans + tout.hors, taux: tout.dans + tout.hors ? tout.dans / (tout.dans + tout.hors) : -1 };
-    });
-    // le top : le plus de fiches traitées, puis le meilleur taux dans le délai
-    lignes.sort((a, b) => b.n - a.n || b.taux - a.taux || a.e.name.localeCompare(b.e.name));
-    const quatre = (d: Delais) => [d.dans + d.hors, d.dans, d.hors, pct(d.dans, d)];
-    y = sousTitre(doc, y, 'Classement des équipes');
-    autoTable(doc, {
-      ...STYLE,
-      startY: y,
-      pageBreak: 'auto',
-      head: [
-        [
-          ...['Rang', 'Équipe', "Chef d'équipe", 'Ville'].map((p) => ({ content: t(p), rowSpan: 2 })),
-          { content: 'Installations', colSpan: 4 },
-          { content: t('Dérangements'), colSpan: 4 },
-          { content: 'Total', colSpan: 4 },
-        ],
-        ['Nombre', 'Dans délai', 'Hors délai', '% dans délai', 'Nombre', 'Dans délai', 'Hors délai', '% dans délai', 'Nombre', 'Dans délai', 'Hors délai', '% dans délai'].map(t),
-      ],
-      body: lignes.map((x, i) => [x.n ? i + 1 : '-', x.e.name, x.e.leader || '-', x.e.ville ?? 'Nouakchott', ...quatre(x.ins), ...quatre(x.drg), ...quatre(x.tout)].map(t)),
-      foot: [['', 'Total', '', '', ...quatre(delais(o.situations, DEUX_CATEGORIES[0].types)), ...quatre(delais(o.situations, DEUX_CATEGORIES[1].types)), ...quatre(tot)].map(t)],
-      columnStyles: { 0: { halign: 'center', fontStyle: 'bold' }, 1: { halign: 'left', fontStyle: 'bold' }, 2: { halign: 'left' }, 3: { halign: 'left' }, 4: { fontStyle: 'bold' }, 8: { fontStyle: 'bold' }, 12: { fontStyle: 'bold' } },
-      didParseCell: (data) => {
-        if (data.section !== 'body' || data.column.index < 4) return;
-        const k = (data.column.index - 4) % 4;
-        if (k === 1) data.cell.styles.textColor = VERT;
-        else if (k === 2) data.cell.styles.textColor = ROUGE;
-      },
-    });
-  }
+  // 2. Par ville (sans nom d'équipe) : délais des 4 catégories + poteaux posés
+  const parVille = new Map<string, Situation[]>();
+  o.situations.forEach((s) => {
+    const v = o.villeDe(s.equipe);
+    const l = parVille.get(v);
+    if (l) l.push(s);
+    else parVille.set(v, [s]);
+  });
+  const noms = [...parVille.keys()].sort();
+  const poteaux = (l: Situation[]) => l.reduce((n, s) => n + (s.status === 'ok' ? poteauxDe(s) : 0), 0);
+  const head = enteteGroupe(['Ville']);
+  head[0].push({ content: 'Poteaux', rowSpan: 2 });
+  y = sousTitre(doc, y, 'Par ville');
+  autoTable(doc, {
+    ...STYLE,
+    startY: y,
+    head,
+    body: noms.map((v) => [v, ...toutesCats(parVille.get(v) ?? []), poteaux(parVille.get(v) ?? [])].map(t)),
+    foot: noms.length > 1 ? [['Total', ...toutesCats(o.situations), poteaux(o.situations)].map(t)] : undefined,
+    columnStyles: { ...STYLE.columnStyles, [1 + CATEGORIES.length * 3]: { fontStyle: 'bold', textColor: [109, 76, 65] } },
+    didParseCell: colorier(1, CATEGORIES.length * 3),
+  });
 
   piedDePage(doc);
-  const nom = o.periode
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9]+/g, '_')
-    .replace(/^_|_$/g, '')
-    .toLowerCase();
-  doc.save(`${villes ? 'stats_delais_villes' : 'classement_equipes'}_${nom || 'periode'}.pdf`);
+  doc.save(`stats_delais_villes_${nomFichier(o.periode)}.pdf`);
+}
+
+// ─── Classement des équipes ──────────────────────────────────────────────────
+//
+// Pour chaque équipe, les installations (tous types) et les dérangements à part :
+//   • Faites / Non faites / En cours / En retard (fiches encore ouvertes) ;
+//   • Hors délai chef : faite, mais après l'échéance de l'équipe (22 h) — dérangement non fait
+//     le jour où il a été donné, installation faite après 22 h le lendemain du jour où elle a été
+//     donnée (ou le jour même si elle était déjà en retard en arrivant). Compte seulement pour
+//     le chef : la fiche reste « faite » ;
+//   • Hors délai officiel : délai de l'application depuis la date du message — dérangement 24 h
+//     (48 h si câble distribution / transport coupé), installation 48 h (jours ouvrés).
+
+type EtatChef = 'dans' | 'hors' | 'retard' | 'en_cours' | 'non_fait' | null;
+
+/** État de la fiche pour le chef (échéance 22 h de l'équipe) ; null si la fiche n'a pas été distribuée */
+function etatChef(s: Situation): EtatChef {
+  if (!s.numeroOt) return null;
+  const statut = s.status === 'ok' ? 'fait' : s.status === 'non_ok' ? 'non_fait' : 'a_faire';
+  const ref = s.dateProgramme || s.dateRecu || s.dateMessage || s.dateDepo || new Date().toISOString().slice(0, 10);
+  return delaiOT({
+    nature: s.type === 'DRG' ? 'derangement' : 'installation',
+    statut,
+    dateRecu: s.dateRecu ?? null,
+    dateProgramme: ref,
+    traiteLe: s.traiteLe ?? s.updatedAt ?? null,
+    assigneLe: s.assigneLe ?? null,
+    motif: s.motifCloture,
+    echeanceEquipe: s.echeanceEquipe ?? null,
+    prioritaire: s.prioritaire,
+  }).etat;
+}
+
+interface Compte {
+  total: number;
+  faites: number;
+  nonFaites: number;
+  enCours: number;
+  enRetard: number;
+  horsChef: number;
+  horsOfficiel: number;
+}
+const compteVide = (): Compte => ({ total: 0, faites: 0, nonFaites: 0, enCours: 0, enRetard: 0, horsChef: 0, horsOfficiel: 0 });
+function ajouter(c: Compte, s: Situation) {
+  c.total++;
+  const chef = etatChef(s);
+  if (s.status === 'ok') {
+    c.faites++;
+    if (chef === 'hors') c.horsChef++;
+    if (isHorsDelai(s)) c.horsOfficiel++;
+  } else if (s.status === 'non_ok') c.nonFaites++;
+  // encore ouverte : en retard si l'échéance de l'équipe est passée (sans programme : le délai officiel)
+  else if (chef ? chef === 'retard' : isHorsDelai(s)) c.enRetard++;
+  else c.enCours++;
+}
+const sept = (c: Compte) => [c.total, c.faites, c.nonFaites, c.enCours, c.enRetard, c.horsChef, c.horsOfficiel];
+const COLONNES = ['Total', 'Faites', 'Non faites', 'En cours', 'En retard', 'Hors délai chef', 'Hors délai officiel'];
+
+async function exporterClassementEquipes(o: OptionsStats) {
+  const { jsPDF, autoTable } = await outilsPdf();
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  let y = entete(doc, `Classement des équipes - ${o.periode}`, [
+    `Période : ${texteDates(o)}${o.filtres ? ` - ${o.filtres}` : ''} - installations = tous les types (CPL, TRL, CMI, CLS, RLR, CST, ANS), dérangements = DRG`,
+    "Hors délai chef : faite après l'échéance de l'équipe (22 h ; dérangement le jour donné, installation le lendemain, le jour même si déjà en retard).",
+    'Hors délai officiel : dérangement 24 h (48 h si câble distribution / transport coupé), installation 48 h après la date du message.',
+    `Édité le ${new Date().toLocaleString('fr-FR')} par ${o.auteur}`,
+  ]);
+
+  const estDrg = (s: Situation) => s.type === 'DRG';
+  const totIns = compteVide();
+  const totDrg = compteVide();
+  const parEquipe = new Map<string, { ins: Compte; drg: Compte }>();
+  for (const s of o.situations) {
+    const k = (s.equipe || '').toLowerCase();
+    let e = parEquipe.get(k);
+    if (!e) parEquipe.set(k, (e = { ins: compteVide(), drg: compteVide() }));
+    ajouter(estDrg(s) ? e.drg : e.ins, s);
+    ajouter(estDrg(s) ? totDrg : totIns, s);
+  }
+
+  // 1. Synthèse
+  y = sousTitre(doc, y, 'Synthèse');
+  const somme = (a: Compte, b: Compte): Compte => ({
+    total: a.total + b.total,
+    faites: a.faites + b.faites,
+    nonFaites: a.nonFaites + b.nonFaites,
+    enCours: a.enCours + b.enCours,
+    enRetard: a.enRetard + b.enRetard,
+    horsChef: a.horsChef + b.horsChef,
+    horsOfficiel: a.horsOfficiel + b.horsOfficiel,
+  });
+  const couleurs = (debut: number) => (data: { section: string; column: { index: number }; cell: { styles: { textColor: unknown; fontStyle?: unknown } } }) => {
+    if (data.section !== 'body' || data.column.index < debut) return;
+    const k = (data.column.index - debut) % 7;
+    if (k > 0 && (data.cell as { raw?: unknown }).raw === '0') {
+      data.cell.styles.textColor = [170, 178, 189]; // zéro : en gris
+      return;
+    }
+    if (k === 1) data.cell.styles.textColor = VERT;
+    else if (k === 2 || k >= 4) data.cell.styles.textColor = ROUGE;
+    if (k === 0) data.cell.styles.fontStyle = 'bold';
+  };
+  autoTable(doc, {
+    ...STYLE,
+    startY: y,
+    head: [['Catégorie', ...COLONNES].map(t)],
+    body: [
+      ['Installations', ...sept(totIns)].map(t),
+      ['Dérangements', ...sept(totDrg)].map(t),
+    ],
+    foot: [['Total', ...sept(somme(totIns, totDrg))].map(t)],
+    styles: { ...STYLE.styles, fontSize: 10, cellPadding: 2.2 },
+    columnStyles: { 0: { halign: 'left', fontStyle: 'bold', cellWidth: 60 } },
+    didParseCell: couleurs(1),
+  });
+  y = finY(doc) + 9;
+
+  // 2. Classement : le plus de fiches faites, puis le moins de hors délai (chef + officiel)
+  const lignes = o.equipes.map((e) => {
+    const c = parEquipe.get(e.name.toLowerCase()) ?? { ins: compteVide(), drg: compteVide() };
+    const tout = somme(c.ins, c.drg);
+    return { e, ...c, tout };
+  });
+  lignes.sort(
+    (a, b) =>
+      b.tout.faites - a.tout.faites ||
+      a.tout.horsChef + a.tout.horsOfficiel - (b.tout.horsChef + b.tout.horsOfficiel) ||
+      b.tout.total - a.tout.total ||
+      a.e.name.localeCompare(b.e.name),
+  );
+  const sansEquipe = parEquipe.get('');
+  y = sousTitre(doc, y, 'Classement des équipes');
+  const court = ['Total', 'Faites', 'Non faites', 'En cours', 'En retard', 'H.D. chef', 'H.D. officiel'];
+  autoTable(doc, {
+    ...STYLE,
+    startY: y,
+    pageBreak: 'auto',
+    styles: { ...STYLE.styles, fontSize: 7.5, cellPadding: 1.3 },
+    headStyles: { ...STYLE.headStyles, fontSize: 7.5 },
+    head: [
+      [
+        ...['Rang', 'Équipe', "Chef d'équipe"].map((p) => ({ content: t(p), rowSpan: 2 })),
+        { content: 'Installations', colSpan: 7 },
+        { content: t('Dérangements'), colSpan: 7 },
+      ],
+      [...court, ...court].map(t),
+    ],
+    body: [
+      ...lignes.map((x, i) => [x.tout.total ? i + 1 : '-', x.e.name, x.e.leader || '-', ...sept(x.ins), ...sept(x.drg)].map(t)),
+      ...(sansEquipe && sansEquipe.ins.total + sansEquipe.drg.total > 0 ? [['-', 'Non affectées', '-', ...sept(sansEquipe.ins), ...sept(sansEquipe.drg)].map(t)] : []),
+    ],
+    foot: [['', 'Total', '', ...sept(totIns), ...sept(totDrg)].map(t)],
+    columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 10 }, 1: { halign: 'left', fontStyle: 'bold' }, 2: { halign: 'left' } },
+    didParseCell: couleurs(3),
+  });
+
+  piedDePage(doc);
+  doc.save(`classement_equipes_${nomFichier(o.periode)}.pdf`);
 }

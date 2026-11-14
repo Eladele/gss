@@ -19,6 +19,7 @@ import {
 } from '@/utils/leaves';
 import type { ExportPreview } from '@/utils/leaves';
 import { ExportPreviewModal } from '@/components/ExportPreviewModal';
+import { exporterSalairesPdf, exporterSalairesPdfSepares } from '@/utils/salairesPdf';
 import { SignaturePad } from '@/components/signaturePad';
 import { DEFAULT_SIGNATURE } from '@/utils/signature';
 import type { Employee, Loan } from '@/types';
@@ -37,6 +38,7 @@ import {
   FolderArchive,
   ChevronLeft,
   ChevronRight,
+  FileText,
 } from 'lucide-react';
 
 const FEUILLES_DISPO = ['BPM', 'Caisse', 'BII', 'Récap'];
@@ -219,6 +221,33 @@ export default function ExportSalairePage() {
     }
   };
 
+  // PDF A4 : même contenu que l'Excel (une ou plusieurs pages par feuille)
+  const handleExportPdf = async (separes = false) => {
+    if (!feuilles.length) {
+      showToast('Sélectionnez au moins une feuille à exporter', 'error');
+      return;
+    }
+    try {
+      setExporting(true);
+      const p = buildExportPreview(exportOpts());
+      if (!p.sheets.length) {
+        showToast('Aucune feuille à exporter pour ce mois', 'error');
+        return;
+      }
+      if (separes) {
+        const n = await exporterSalairesPdfSepares(p, 'Salaires', exportMonth);
+        showToast(`${n} PDF téléchargé${n > 1 ? 's' : ''} ✅`, 'success');
+      } else {
+        await exporterSalairesPdf(p, `Salaires_${exportMonth}.pdf`);
+        showToast('PDF A4 généré ✅', 'success');
+      }
+    } catch (err) {
+      showToast(`Erreur lors de la génération du PDF : ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handleExportSepares = async () => {
     if (!feuilles.length) {
       showToast('Sélectionnez au moins une feuille à exporter', 'error');
@@ -294,6 +323,9 @@ export default function ExportSalairePage() {
           <Button onClick={handleExportUnique} disabled={exporting} icon={<Download className="w-4 h-4" />}>
             {exporting ? 'Génération...' : 'Exporter Excel'}
           </Button>
+          <Button variant="outline" onClick={() => handleExportPdf()} disabled={exporting} icon={<FileText className="w-4 h-4 text-red-600" />}>
+            Exporter PDF (A4)
+          </Button>
         </div>
       </div>
 
@@ -363,6 +395,15 @@ export default function ExportSalairePage() {
                 icon={<FolderArchive className="w-4 h-4 text-amber-600" />}
               >
                 Fichiers séparés par banque
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full text-xs mt-2"
+                onClick={() => handleExportPdf(true)}
+                disabled={exporting}
+                icon={<FileText className="w-4 h-4 text-red-600" />}
+              >
+                PDF séparés par banque
               </Button>
             </div>
           </div>
@@ -631,6 +672,7 @@ export default function ExportSalairePage() {
         preview={preview}
         onClose={() => setPreview(null)}
         onConfirm={handleExportUnique}
+        onPdf={() => handleExportPdf()}
       />
     </div>
   );

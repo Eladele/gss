@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react';
 import { Button, Input, Modal, Select, Textarea, useToast } from '@/components/ui';
 import { useCaisseStore, isComptable, isDirecteur, isSuperviseurCaisse } from '@/store/useCaisseStore';
 import { useAppStore } from '@/store/useAppStore';
-import type { Caisse, CaisseOperation, CaisseOpType } from '@/types';
 import { CATEGORIES, guessCategorie, guessChantier, mru, parseWhatsApp, todayISO, shortDate, soldes, type ParsedLine } from '@/utils/caisse';
 import { errMsg } from '@/utils';
+import { Caisse, CaisseOperation, CaisseOpType } from '@/types';
 
 const label = 'block text-xs font-semibold text-slate-500 mb-1.5';
 
@@ -228,22 +228,63 @@ export function OperationModal({
 }
 
 // ─── Collage d'un message WhatsApp → plusieurs dépenses ────────────────────
+/** Clé d'une opération pour reconnaître un message déjà enregistré (même caisse, type, date, montant, libellé) */
+const cleOp = (o: { caisseId: string; type: string; date: string; montant: number; libelle: string }) =>
+  [o.caisseId, o.type, o.date, Math.round(o.montant), o.libelle.trim().toLowerCase()].join('|');
+
 export function WhatsAppModal({ open, onClose, preferredCaisse }: { open: boolean; onClose: () => void; preferredCaisse?: string | null }) {
   const user = useAppStore((s) => s.user)!;
-  const { caisses, addOperations } = useCaisseStore();
+  const { caisses, operations, addOperations } = useCaisseStore();
   const { showToast } = useToast();
   const compta = isComptable(user);
+  const directeur = isDirecteur(user);
+  // dépenses : superviseur (demande) et comptable ; alimentations : comptable et directeur (directes)
+  const peutDepense = compta || isSuperviseurCaisse(user);
+  const peutAlim = compta || directeur;
   const actives = caisses.filter((c) => c.actif && (!isSuperviseurCaisse(user) || c.titulaireId === user.id));
   const [caisseId, setCaisseId] = useState(() => defaultCaisseId(actives, user.id, preferredCaisse));
+  const [type, setType] = useState<CaisseOpType>(peutDepense ? 'depense' : 'alimentation');
   const [date, setDate] = useState(todayISO());
   const [text, setText] = useState('');
   const [overrides, setOverrides] = useState<Record<number, ParsedLine['categorie']>>({});
   const [removed, setRemoved] = useState<Set<number>>(new Set());
+  const [gardeDoublons, setGardeDoublons] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
+  const alim = type === 'alimentation';
 
   const lines = useMemo(() => parseWhatsApp(text, date), [text, date]);
-  const kept = lines.map((l, i) => ({ ...l, i, categorie: overrides[i] ?? l.categorie })).filter((l) => !removed.has(l.i));
+  // opérations déjà enregistrées (pour ne pas compter deux fois un message collé à nouveau)
+  const existantes = useMemo(
+    () => new Set(operations.filter((o) => o.statut !== 'annulee' && o.statut !== 'rejetee').map(cleOp)),
+    [operations],
+  );
+  const lignes = lines.map((l, i) => {
+    const libelle = alim && !/alim|envoi|versement|transfert|recu|reçu/i.test(l.libelle) ? `Alimentation ${l.libelle}`.trim() : l.libelle;
+    const doublon = existantes.has(cleOp({ caisseId, type, date: l.date, montant: l.montant, libelle: alim ? libelle : l.libelle }));
+    return { ...l, i, libelle: alim ? libelle : l.libelle, categorie: overrides[i] ?? l.categorie, doublon };
+  });
+  const kept = lignes.filter((l) => !removed.has(l.i) && (!l.doublon || gardeDoublons.has(l.i)));
   const total = kept.reduce((s, l) => s + l.montant, 0);
+  const nbDoublons = lignes.filter((l) => l.doublon && !removed.has(l.i) && !gardeDoublons.has(l.i)).length;
+
+  // regroupement par message (date + émetteur) et totaux par émetteur
+  const groupes = new Map<number, typeof lignes>();
+  lignes.forEach((l) => {
+    if (removed.has(l.i)) return;
+    const g = groupes.get(l.message);
+    if (g) g.push(l);
+    else groupes.set(l.message, [l]);
+  });
+  const messages = [...groupes.values()];
+  const totaux = new Map<string, { n: number; total: number }>();
+  kept.forEach((l) => {
+    const k = l.emetteur || '—';
+    const x = totaux.get(k) ?? { n: 0, total: 0 };
+    x.n++;
+    x.total += l.montant;
+    totaux.set(k, x);
+  });
+  const parEmetteur = [...totaux.entries()].sort((a, b) => b[1].total - a[1].total);
 
   const submit = async () => {
     setSaving(true);
@@ -251,17 +292,23 @@ export function WhatsAppModal({ open, onClose, preferredCaisse }: { open: boolea
       await addOperations(
         kept.map((l) => ({
           caisseId,
-          type: 'depense' as const,
+          type,
           montant: l.montant,
           date: l.date,
           libelle: l.libelle,
-          categorie: l.categorie,
+          categorie: alim ? ('alimentation' as const) : l.categorie,
           chantier: l.chantier,
-          statut: compta ? ('validee' as const) : ('en_attente' as const),
+          // alimentation : toujours directe (comptable, directeur) ; dépense : directe pour la comptable
+          statut: alim || compta ? ('validee' as const) : ('en_attente' as const),
           source: 'whatsapp',
+          emetteur: l.emetteur,
         })),
       );
-      showToast(compta ? `${kept.length} dépenses enregistrées` : `${kept.length} demandes envoyées à la comptabilité`, 'success');
+      const quoi = alim ? 'alimentation' : 'dépense';
+      showToast(
+        alim || compta ? `${kept.length} ${quoi}${kept.length > 1 ? 's' : ''} enregistrée${kept.length > 1 ? 's' : ''} · ${mru(total)} MRU` : `${kept.length} demandes envoyées à la comptabilité`,
+        'success',
+      );
       onClose();
     } catch (e) {
       showToast(errMsg(e, 'Enregistrement impossible'), 'error');
@@ -270,11 +317,35 @@ export function WhatsAppModal({ open, onClose, preferredCaisse }: { open: boolea
     }
   };
 
+  const reinit = () => {
+    setOverrides({});
+    setRemoved(new Set());
+    setGardeDoublons(new Set());
+  };
+
   return (
-    <Modal open={open} onClose={onClose} title="Coller un message WhatsApp">
+    <Modal open={open} onClose={onClose} title="Coller des messages WhatsApp">
       <div className="space-y-4">
+        {peutDepense && peutAlim && (
+          <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-xl">
+            {(['depense', 'alimentation'] as const).map((ty) => (
+              <button
+                key={ty}
+                type="button"
+                onClick={() => {
+                  setType(ty);
+                  reinit();
+                }}
+                className={`py-2 rounded-lg text-sm font-bold ${type === ty ? (ty === 'depense' ? 'bg-white shadow text-slate-900' : 'bg-white shadow text-emerald-700') : 'text-slate-500'}`}
+              >
+                {ty === 'depense' ? 'Dépenses' : 'Alimentations'}
+              </button>
+            ))}
+          </div>
+        )}
         <p className="text-xs text-slate-500">
-          Collez le message tel qu’il est écrit. Chaque ligne avec un montant devient une dépense ; vérifiez la catégorie avant d’envoyer.
+          Collez un ou plusieurs messages tels quels, avec leur en-tête « [3/9, 11:35] ElAdel: ». Chaque ligne avec un montant devient
+          {alim ? ' une alimentation' : ' une dépense'}, à la date du message et au nom de son émetteur.
         </p>
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -288,7 +359,7 @@ export function WhatsAppModal({ open, onClose, preferredCaisse }: { open: boolea
             </Select>
           </div>
           <div>
-            <label className={label} htmlFor="wa-date">Date par défaut</label>
+            <label className={label} htmlFor="wa-date">Date si le message n’en a pas</label>
             <Input id="wa-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </div>
         </div>
@@ -298,51 +369,102 @@ export function WhatsAppModal({ open, onClose, preferredCaisse }: { open: boolea
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            setOverrides({});
-            setRemoved(new Set());
+            reinit();
           }}
-          placeholder={'Bonjour\nCarburant 3200\n3 poteau 600\nLocation depot 1500'}
+          placeholder={'[3/9, 11:35] ElAdel: Slm\nCarburant 3200\n3 poteau 600\n[3/9, 18:49] 7abib: Bonjour,\n1000 frais transport matériel kaedi'}
         />
-        {kept.length > 0 && (
-          <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-64 overflow-y-auto">
-            {lines.map((l, i) =>
-              removed.has(i) ? null : (
-                <div key={i} className="flex items-center gap-2 px-3 py-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-800 truncate">
-                      {l.libelle} <span className="text-xs text-slate-400 font-normal">{shortDate(l.date)}</span>
-                    </p>
-                    <select
-                      aria-label="Catégorie"
-                      className="mt-0.5 text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white"
-                      value={overrides[i] ?? l.categorie}
-                      onChange={(e) => setOverrides((o) => ({ ...o, [i]: e.target.value as ParsedLine['categorie'] }))}
-                    >
-                      {CATEGORIES.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.label}
-                        </option>
-                      ))}
-                    </select>
+
+        {messages.length > 0 && (
+          <div className="border border-slate-200 rounded-xl max-h-80 overflow-y-auto">
+            {messages.map((g) => {
+              const t0 = g[0];
+              const sousTotal = g.filter((l) => !l.doublon || gardeDoublons.has(l.i)).reduce((s, l) => s + l.montant, 0);
+              return (
+                <div key={t0.message} className="border-b border-slate-100 last:border-0">
+                  <div className="sticky top-0 z-[1] flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-xs">
+                    <span className="font-bold text-slate-700">{shortDate(t0.date)}</span>
+                    {t0.emetteur && <span className="px-1.5 py-0.5 rounded bg-white border border-slate-200 font-semibold text-slate-600">{t0.emetteur}</span>}
+                    <span className="ml-auto font-bold tabular-nums text-slate-700">{mru(sousTotal)}</span>
                   </div>
-                  <span className="text-sm font-semibold tabular-nums">{mru(l.montant)}</span>
-                  <button
-                    type="button"
-                    aria-label="Retirer la ligne"
-                    className="text-slate-300 hover:text-red-600 px-1 text-lg leading-none"
-                    onClick={() => setRemoved((s) => new Set(s).add(i))}
-                  >
-                    ×
-                  </button>
+                  {g.map((l) => (
+                    <div key={l.i} className={`flex items-center gap-2 px-3 py-2 ${l.doublon && !gardeDoublons.has(l.i) ? 'opacity-50' : ''}`}>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800 truncate">
+                          {l.libelle}
+                          {l.date !== t0.date && <span className="text-xs text-slate-400 font-normal"> · {shortDate(l.date)}</span>}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {!alim && (
+                            <select
+                              aria-label="Catégorie"
+                              className="text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white"
+                              value={l.categorie}
+                              onChange={(e) => setOverrides((o) => ({ ...o, [l.i]: e.target.value as ParsedLine['categorie'] }))}
+                            >
+                              {CATEGORIES.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.label}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                          {l.doublon && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setGardeDoublons((s) => {
+                                  const n = new Set(s);
+                                  if (n.has(l.i)) n.delete(l.i);
+                                  else n.add(l.i);
+                                  return n;
+                                })
+                              }
+                              className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800"
+                            >
+                              {gardeDoublons.has(l.i) ? 'Enregistrer quand même ✓' : 'Déjà enregistrée — ignorée'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <span className={`text-sm font-semibold tabular-nums ${alim ? 'text-emerald-700' : ''}`}>{mru(l.montant)}</span>
+                      <button
+                        type="button"
+                        aria-label="Retirer la ligne"
+                        className="text-slate-300 hover:text-red-600 px-1 text-lg leading-none"
+                        onClick={() => setRemoved((s) => new Set(s).add(l.i))}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ),
-            )}
+              );
+            })}
           </div>
         )}
+
         {kept.length > 0 && (
-          <div className="flex justify-between text-sm font-semibold text-slate-700 px-1">
-            <span>Total</span>
-            <span className="tabular-nums">{mru(total)} MRU</span>
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5">
+            {parEmetteur.length > 1 &&
+              parEmetteur.map(([nom, x]) => (
+                <div key={nom} className="flex justify-between text-xs text-slate-600">
+                  <span>
+                    {nom} · {x.n} ligne{x.n > 1 ? 's' : ''}
+                  </span>
+                  <span className="tabular-nums font-semibold">{mru(x.total)} MRU</span>
+                </div>
+              ))}
+            <div className={`flex justify-between text-sm font-black ${alim ? 'text-emerald-800' : 'text-slate-900'} ${parEmetteur.length > 1 ? 'pt-1.5 border-t border-slate-200' : ''}`}>
+              <span>
+                Total · {kept.length} ligne{kept.length > 1 ? 's' : ''} · {messages.length} message{messages.length > 1 ? 's' : ''}
+              </span>
+              <span className="tabular-nums">{mru(total)} MRU</span>
+            </div>
+            {nbDoublons > 0 && (
+              <p className="text-[11px] text-amber-700">
+                {nbDoublons} ligne{nbDoublons > 1 ? 's' : ''} déjà enregistrée{nbDoublons > 1 ? 's' : ''} (même date, montant et libellé) : non comptée{nbDoublons > 1 ? 's' : ''}.
+              </p>
+            )}
           </div>
         )}
         <div className="flex gap-3">
@@ -350,7 +472,11 @@ export function WhatsAppModal({ open, onClose, preferredCaisse }: { open: boolea
             Annuler
           </Button>
           <Button className="flex-1 justify-center" onClick={submit} disabled={!kept.length || saving || !caisseId}>
-            {saving ? 'Envoi…' : kept.length ? `${compta ? 'Enregistrer' : 'Envoyer'} ${kept.length} ligne${kept.length > 1 ? 's' : ''}` : 'Rien à envoyer'}
+            {saving
+              ? 'Envoi…'
+              : kept.length
+                ? `${alim || compta ? 'Enregistrer' : 'Envoyer'} ${kept.length} ligne${kept.length > 1 ? 's' : ''}`
+                : 'Rien à envoyer'}
           </Button>
         </div>
       </div>

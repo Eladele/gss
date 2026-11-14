@@ -247,6 +247,11 @@ export default function CaissesPage() {
             </Button>
           </>
         )}
+        {directeur && !superviseur && !compta && caisses.length > 0 && (
+          <Button variant="outline" icon={<ClipboardPaste className="w-4 h-4" />} onClick={() => setWaOpen(true)}>
+            Coller WhatsApp (alimentations)
+          </Button>
+        )}
         {(compta || directeur) && (
           <Button
             variant="success"
@@ -581,6 +586,7 @@ function OpRows({
               <span className="block text-xs text-slate-500 truncate">
                 {caisseName(o.caisseId)} · {alim ? 'Alimentation' : c.label}
                 {o.chantier ? ` · ${o.chantier}` : ''}
+                {o.emetteur ? ` · ${o.emetteur}` : ''}
                 {showStatut ? ` · ${shortDate(o.date)}` : ''}
               </span>
             </span>
@@ -628,7 +634,7 @@ function Journal({
       if (month !== 'all' && !o.date.startsWith(month)) return false;
       if (cat !== 'all' && o.categorie !== cat) return false;
       if (s) {
-        const hay = [o.libelle, o.chantier, o.note, o.demandeParNom, String(o.montant)]
+        const hay = [o.libelle, o.chantier, o.note, o.demandeParNom, o.emetteur, String(o.montant)]
           .join(' ')
           .toLowerCase()
           .normalize('NFD')
@@ -767,7 +773,7 @@ function Bilan({ caisses, operations, caisseFilter }: { caisses: Caisse[]; opera
       ws.getColumn(3).numFmt = '#,##0';
 
       const wj = wb.addWorksheet('Journal');
-      wj.addRow(['Date', 'Caisse', 'Type', 'Description', 'Catégorie', 'Lieu', 'Montant', 'Statut', 'Demandé par', 'Traité par', 'Motif refus', 'Note']).font = { bold: true };
+      wj.addRow(['Date', 'Caisse', 'Type', 'Description', 'Catégorie', 'Lieu', 'Montant', 'Statut', 'Demandé par', 'Traité par', 'Motif refus', 'Note', 'Émetteur']).font = { bold: true };
       operations
         .filter((o) => inP(o) && (caisseFilter === 'all' || o.caisseId === caisseFilter))
         .sort((a, b) => a.date.localeCompare(b.date))
@@ -785,6 +791,7 @@ function Bilan({ caisses, operations, caisseFilter }: { caisses: Caisse[]; opera
             o.traiteParNom ?? '',
             o.motifRejet ?? '',
             o.note,
+            o.emetteur,
           ]),
         );
       wj.getColumn(7).numFmt = '#,##0';
@@ -941,6 +948,7 @@ function DetailModal({
       {row('Motif du refus', op.motifRejet)}
       {row('Note', op.note)}
       {row('Source', op.source === 'whatsapp' ? 'Message WhatsApp' : op.source === 'bankily' ? 'Reçu Bankily' : '')}
+      {row('Émetteur du message', op.emetteur)}
 
       <div className="flex flex-wrap gap-2 mt-5">
         {pending && canDecide(user, op) && (

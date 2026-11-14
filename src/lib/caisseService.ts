@@ -40,6 +40,7 @@ function mapOperation(r: any): CaisseOperation {
     motifRejet: r.motif_rejet ?? null,
     note: r.note ?? '',
     source: r.source ?? 'app',
+    emetteur: r.emetteur ?? '',
     createdAt: r.created_at,
   };
 }
@@ -138,6 +139,8 @@ export interface NewOperation {
   note?: string;
   statut: CaisseOpStatut;
   source?: string;
+  /** auteur du message WhatsApp (colonne « emetteur », supabase_caisse_whatsapp.sql) */
+  emetteur?: string;
 }
 
 /** Insère une ou plusieurs opérations en UNE requête : la base envoie alors
@@ -164,7 +167,16 @@ export async function insertOperations(
     // Une opération créée déjà validée (alimentation par la comptable) est traitée par son auteur
     ...(o.statut === 'validee' ? { traite_par: by.id, traite_le: now } : {}),
   }));
-  const { data, error } = await supabase.from('caisse_operations').insert(rows).select(OP_SELECT);
+  const avecEmetteur = ops.some((o) => o.emetteur);
+  const lignes = avecEmetteur ? rows.map((r, i) => ({ ...r, emetteur: ops[i].emetteur ?? '' })) : rows;
+  let { data, error } = await supabase.from('caisse_operations').insert(lignes).select(OP_SELECT);
+  // colonne « emetteur » pas encore créée : l'émetteur est gardé dans la note
+  if (error && avecEmetteur && /emetteur/i.test(error.message ?? '')) {
+    ({ data, error } = await supabase
+      .from('caisse_operations')
+      .insert(rows.map((r, i) => ({ ...r, note: [r.note, ops[i].emetteur ? `Émetteur : ${ops[i].emetteur}` : ''].filter(Boolean).join(' · ') })))
+      .select(OP_SELECT));
+  }
   if (error) throw dbError(error, 'Enregistrement impossible');
   return (data ?? []).map(mapOperation);
 }

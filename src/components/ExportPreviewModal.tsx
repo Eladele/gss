@@ -1,11 +1,64 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui';
 import { SOCIETE, enteteBanque } from '@/utils/leaves';
-import type { ExportPreview, PreviewVirementSheet, PreviewRecapSheet } from '@/utils/leaves';
+import type { ExportPreview, PreviewVirementSheet, PreviewRecapSheet, PreviewCaisseSheet } from '@/utils/leaves';
 
 const C = { accent: '#0A7F94', dark: '#075A68', band: '#EAF5F7', total: '#D6EDF1', info: '#F4FAFB', border: '#B9DCE2' };
 const fmt = (n?: number) => (n == null ? '' : n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const cell = { border: `1px solid ${C.border}` };
+
+/** État « Salaires personnel réseau par caisse » (paiement en espèces) */
+function CaisseView({ s, logo }: { s: PreviewCaisseSheet; logo: string }) {
+  const noir = { border: '1px solid #000' };
+  return (
+    <div className="bg-white shadow border border-slate-200 mx-auto p-6 text-[13px] text-slate-900" style={{ maxWidth: 820, fontFamily: '"Times New Roman", serif' }}>
+      <img src={logo} alt="GSS" className="h-16 mb-3" />
+      <p>{SOCIETE.siege}</p>
+      <p>{SOCIETE.rc}</p>
+      <p>{SOCIETE.nif}</p>
+      <div className="flex justify-end gap-16 mt-4">
+        <span>{SOCIETE.ville}</span>
+        <span>Le {s.dateStr}</span>
+      </div>
+      <p className="text-center font-bold text-base mt-1">{s.titre}</p>
+      <table className="w-full border-collapse mt-1 text-xs">
+        <thead>
+          <tr>
+            <th colSpan={4} />
+            <th className="pb-0.5 font-bold text-center">{s.mois}</th>
+            <th colSpan={2} />
+          </tr>
+          <tr style={{ background: '#D9D9D9' }}>
+            {['Ordre', 'Mle', 'NOM et PRENOM', 'Téléphone', 'Montant (MRU)', 'Date', 'Emargement'].map((h) => (
+              <th key={h} className="px-2 py-1.5 font-bold text-center" style={noir}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {s.rows.map((r) => (
+            <tr key={r.ordre} style={{ height: 28 }}>
+              <td className="px-2 text-center" style={noir}>{r.ordre}</td>
+              <td className="px-2 text-center" style={noir}>{r.mle}</td>
+              <td className="px-2" style={noir}>{r.name}</td>
+              <td className="px-2 text-center whitespace-nowrap" style={noir}>{r.telephone}</td>
+              <td className="px-2 text-right whitespace-nowrap" style={noir}>{fmt(r.montant)}</td>
+              <td style={{ ...noir, minWidth: 70 }} />
+              <td style={{ ...noir, minWidth: 110 }} />
+            </tr>
+          ))}
+          <tr className="font-bold" style={{ background: '#BFBFBF' }}>
+            <td colSpan={4} className="px-2 py-1.5 text-center" style={noir}>TOTAL</td>
+            <td className="px-2 py-1.5 text-right whitespace-nowrap" style={noir}>{fmt(s.total)}</td>
+            <td colSpan={2} style={noir} />
+          </tr>
+        </tbody>
+      </table>
+      <p className="font-bold mt-4">Arrêtez le présent état à la somme de</p>
+      <p className="font-bold">{s.totalLettres}</p>
+      <p className="text-right font-bold underline mt-4 pr-10">{SOCIETE.signataire}</p>
+    </div>
+  );
+}
 
 function VirementView({ s, logo, signature }: { s: PreviewVirementSheet; logo: string; signature: string }) {
   const heads = ['Ordre', 'Mle', 'NOM et PRENOM', 'Banque', s.banque === 'BPM' ? 'Numéro de compte' : 'RIB', 'Montant (MRU)'];
@@ -99,12 +152,14 @@ function RecapView({ s }: { s: PreviewRecapSheet }) {
 }
 
 export function ExportPreviewModal({
-  open, preview, onClose, onConfirm,
+  open, preview, onClose, onConfirm, onPdf,
 }: {
   open: boolean;
   preview: ExportPreview | null;
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
+  /** export PDF A4 du même contenu (facultatif) */
+  onPdf?: () => void | Promise<void>;
 }) {
   const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -149,15 +204,35 @@ export function ExportPreviewModal({
               ))}
             </div>
             <div className="flex-1 overflow-auto p-4">
-              {sheet.kind === 'virement'
-                ? <VirementView s={sheet} logo={preview.logo} signature={preview.signature} />
-                : <RecapView s={sheet} />}
+              {sheet.kind === 'virement' ? (
+                <VirementView s={sheet} logo={preview.logo} signature={preview.signature} />
+              ) : sheet.kind === 'caisse' ? (
+                <CaisseView s={sheet} logo={preview.logo} />
+              ) : (
+                <RecapView s={sheet} />
+              )}
             </div>
           </>
         )}
 
         <div className="flex justify-end gap-3 px-5 py-3 border-t border-slate-200 bg-white rounded-b-xl">
           <Button variant="outline" onClick={onClose}>Fermer</Button>
+          {onPdf && (
+            <Button
+              variant="outline"
+              disabled={busy || preview.sheets.length === 0}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await onPdf();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Télécharger en PDF (A4)
+            </Button>
+          )}
           <Button onClick={confirm} disabled={busy || preview.sheets.length === 0}>
             {busy ? 'Génération…' : 'Télécharger le fichier Excel'}
           </Button>

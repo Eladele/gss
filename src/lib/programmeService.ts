@@ -248,7 +248,8 @@ export async function distribuer(
     const ex = existantes.get(`${o.fgp}|${o.nature}`);
     const type = o.typeOt || (o.nature === 'derangement' ? 'DRG' : 'CPL');
     if (ex) {
-      aCompleter.push({ id: ex.id, type: ex.type || type, ...colonnesOt(o), cree_par_ot: false });
+      // le type lu sur l'OT (ANS, CST…) l'emporte sur celui d'un ancien import Excel
+      aCompleter.push({ id: ex.id, type: o.typeOt || ex.type || type, ...colonnesOt(o), cree_par_ot: false });
     } else {
       const debut = o.dateRecu ?? dateProgramme;
       aCreer.push({

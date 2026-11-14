@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Cable, Check, ClipboardCopy, Copy, Flame, MapPin, Phone, RotateCcw, X } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, applicationIdDepuisDis, fmtTel, ligneLabel } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, applicationIdFiche, estOtAns, fmtTel, ligneLabel } from '@/utils/programme';
 import { TypeBadge } from '@/components/ui';
 import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
@@ -70,7 +70,7 @@ export function OtCard({
   busy?: boolean;
   scan?: ScanOT;
 }) {
-  const appId = appIdAns(ot);
+  const appId = appIdAns(ot, ip);
   const st = STATUT_OT[ot.statut];
   const delai = delaiOT(ot);
   const today = new Date().toISOString().slice(0, 10);
@@ -234,8 +234,12 @@ export function OtCard({
             </div>
           ) : (
             onReset && (
-              <button disabled={busy} onClick={onReset} className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1 px-1">
-                <RotateCcw className="w-3.5 h-3.5" /> Remettre à faire
+              <button
+                disabled={busy}
+                onClick={onReset}
+                className="w-full py-2.5 rounded-xl border-2 border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 font-bold text-sm inline-flex items-center justify-center gap-2 active:scale-95 transition"
+              >
+                <RotateCcw className="w-4 h-4" /> Remettre à faire
               </button>
             )
           )}
@@ -279,10 +283,10 @@ function PhoneChip({ tel }: { tel: string }) {
   );
 }
 
-/** Copie toute la fiche (à coller dans WhatsApp ou un SMS) */
-/** Application ID du fixe : seulement pour les OT ANS (calculé depuis le DIS) */
-const appIdAns = (ot: ProgrammeOT) => ((ot.typeOt ?? '').toUpperCase() === 'ANS' ? applicationIdDepuisDis(ot.dis) : null);
+/** Application ID du fixe : OT ANS (par le type, le sous-type ou les IPS / IPM), calculé depuis le DIS */
+const appIdAns = (ot: ProgrammeOT, ip?: IpsOT) => (estOtAns(ot, !!(ip?.ips || ip?.ipm)) ? applicationIdFiche(ot) : null);
 
+/** Copie toute la fiche (à coller dans WhatsApp ou un SMS) */
 function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
   const text = [
     ligneLabel(ot),
@@ -292,7 +296,7 @@ function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
     ot.ontSerials.length ? `ONT ${ot.ontSerials.join(' / ')}` : '',
     ip?.ips ? `IPS ${ip.ips}` : '',
     ip?.ipm ? `IPM ${ip.ipm}` : '',
-    appIdAns(ot) ? `Application ID ${appIdAns(ot)?.id}` : '',
+    appIdAns(ot, ip) ? `Application ID ${appIdAns(ot, ip)?.id}` : '',
     ot.nature === 'installation' && ot.cableFibreM ? `Câble fibre : ${ot.cableFibreM} m` : '',
     ot.adresse ? `Adresse : ${ot.adresse}` : '',
   ]

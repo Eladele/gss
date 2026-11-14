@@ -1,11 +1,11 @@
 import { Fragment, useMemo, useState } from 'react';
 import { ArrowRightLeft, CalendarClock, CheckCircle2, ChevronDown, CircleDashed, MapPin, RotateCcw, Search, X, XCircle } from 'lucide-react';
-import type { ProgrammeOT, SituationType } from '@/types';
 import { TypeBadge } from '@/components/ui';
 import { delaiOT, estPourPlusTard, fmtPtsSigne, jourCourt, jourOuvreSuivant, jourRemise } from '@/utils/points';
 import { ligneLabel, type MotifFauxOk } from '@/utils/programme';
 import { isoJour } from '@/utils/surveillance';
 import { FauxOkButton } from '@/components/programme/FauxOk';
+import { ProgrammeOT, SituationType } from '@/types';
 
 /** Type d'OT (DRG, CPL, CLS, TRL, RLR, CST, ANS) ; à défaut, d'après la nature */
 const typeDe = (o: ProgrammeOT) => (o.typeOt || (o.nature === 'derangement' ? 'DRG' : 'INST')).toUpperCase();

@@ -100,10 +100,22 @@ export function ClotureSheet({
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-2xl shadow-2xl animate-slide-up max-h-[92vh] overflow-y-auto">
         <div className="p-5 space-y-4 max-w-lg mx-auto">
           <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto" />
-          <div>
-            <p className={`font-black text-lg ${fait ? 'text-green-700' : 'text-red-700'}`}>
+          {/* En-tête : action + FGP (type d'OT, client, zone) pour savoir quelle fiche on clôture */}
+          <div className={`rounded-2xl border-2 p-3.5 ${fait ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+            <p className={`text-xs font-black uppercase tracking-wider ${fait ? 'text-green-700' : 'text-red-700'}`}>
+              {fait ? 'Confirmer fait' : 'Confirmer non fait'}
             </p>
-            <p className="text-sm text-slate-500 truncate">{ot.clientNom}</p>
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              {ot.typeOt && (
+                <span className={`px-2 py-0.5 rounded-md text-[11px] font-black text-white ${fait ? 'bg-green-700' : 'bg-red-700'}`}>{ot.typeOt}</span>
+              )}
+              <span className="font-mono font-black text-2xl text-slate-900 tracking-wide">{ligneLabel(ot)}</span>
+            </div>
+            <p className="text-sm text-slate-600 truncate mt-0.5">
+              {ot.clientNom || '—'}
+              {ot.zone ? <span className="text-slate-400"> · {ot.zone}</span> : null}
+              {ot.nature ? <span className="text-slate-400"> · {ot.nature === 'derangement' ? 'Dérangement' : 'Installation'}</span> : null}
+            </p>
           </div>
 
           <div>

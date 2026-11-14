@@ -184,7 +184,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
           <Button variant="outline" size="sm" onClick={() => exporterPdf('villes')} disabled={scopedAll.length === 0 || !!pdfEnCours} title={`Dans / hors délai par catégorie et par ville, poteaux — ${periodePdf}`}>
             <FileDown className="w-4 h-4 mr-1 inline" /> {pdfEnCours === 'villes' ? 'PDF…' : 'PDF délais villes'}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => exporterPdf('equipes')} disabled={scopedAll.length === 0 || !!pdfEnCours} title={`Toutes les équipes : installations et dérangements, dans / hors délai — ${periodePdf}`}>
+          <Button variant="outline" size="sm" onClick={() => exporterPdf('equipes')} disabled={scopedAll.length === 0 || !!pdfEnCours} title={`Toutes les équipes : faites, non faites, en cours, en retard, hors délai chef et officiel — ${periodePdf}`}>
             <FileDown className="w-4 h-4 mr-1 inline" /> {pdfEnCours === 'equipes' ? 'PDF…' : 'PDF classement équipes'}
           </Button>
           <Button variant="outline" size="sm" onClick={exporterExcel} disabled={scoped.length === 0}>

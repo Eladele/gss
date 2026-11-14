@@ -10,8 +10,16 @@ export const DELAI_THRESHOLD_INSTALLATION = 2;
 // Conservé pour compatibilité (ancien code qui référence encore ce nom)
 export const DEFAULT_DELAI_THRESHOLD = DELAI_THRESHOLD_INSTALLATION;
 
-function delaiThresholdFor(s: Situation): number {
-  return s.type === 'DRG' ? DELAI_THRESHOLD_DRG : DELAI_THRESHOLD_INSTALLATION;
+// Dérangement causé par un câble de distribution ou de transport coupé : 48 h (2 j) au lieu de 24 h.
+export const DELAI_THRESHOLD_DRG_CABLE = 2;
+const sansAccent = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+/** Motif « Câble distribution coupé » ou « Câble transport coupé » (choisi par l'équipe) */
+export const estMotifCableCoupe = (motif?: string | null) => !!motif && /cable\s+(de\s+)?(distribution|transport)\s+coupe/.test(sansAccent(motif));
+
+/** Délai officiel en jours ouvrés : DRG 24 h (48 h si câble distribution / transport coupé), installation 48 h */
+export function delaiThresholdFor(s: Pick<Situation, 'type' | 'motifCloture'>): number {
+  if (s.type !== 'DRG') return DELAI_THRESHOLD_INSTALLATION;
+  return estMotifCableCoupe(s.motifCloture) ? DELAI_THRESHOLD_DRG_CABLE : DELAI_THRESHOLD_DRG;
 }
 
 // ─── Jours fériés / fêtes (Mauritanie) ─────────────────────────────────────────

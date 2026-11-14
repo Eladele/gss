@@ -86,23 +86,68 @@ export interface ParsedLine {
   date: string;
   categorie: Exclude<CaisseCategorie, 'alimentation'>;
   chantier: string;
+  /** auteur du message WhatsApp (« ElAdel ») ; '' si l'en-tête n'a pas été collé */
+  emetteur: string;
+  /** numéro du message dans le collage (0, 1, 2…) : les lignes d'un même message sont groupées */
+  message: number;
 }
 
-/** Transforme un message WhatsApp en lignes de dépense.
- *  « 3 poteau 600 » → 600 (le plus grand nombre est le montant) ;
- *  « Le 11/09/2026 Poteau rosso 300 » → date 11/09 ;
- *  les en-têtes « [14/9, 8:04] ElAdel: » et « Bonjour » sont ignorés. */
+// Marques de sens d'écriture (RTL/LTR) que WhatsApp met dans les dates en arabe
+const MARQUES = /[\u200e\u200f\u202a-\u202e\u2066-\u2069\u061c]/g;
+const CHIFFRES_ARABES = /[\u0660-\u0669\u06f0-\u06f9]/g;
+const latin = (s: string) =>
+  s.replace(MARQUES, '').replace(CHIFFRES_ARABES, (c) => String((c.charCodeAt(0) & 0xf) % 10)).replace(/\u060c/g, ',');
+
+/** Date ISO depuis jour / mois / année (année absente : celle de la date par défaut, ou la précédente
+ *  si la date tomberait dans le futur — un collage de décembre fait en janvier) */
+function isoDepuis(j: string, m: string, a: string | undefined, baseDate: string): string | null {
+  const jour = Number(j);
+  const mois = Number(m);
+  if (!jour || !mois || jour > 31 || mois > 12) return null;
+  let an = a ? Number(a.length === 2 ? '20' + a : a) : Number(baseDate.slice(0, 4));
+  const iso = (y: number) => `${y}-${String(mois).padStart(2, '0')}-${String(jour).padStart(2, '0')}`;
+  if (!a && iso(an) > baseDate && iso(an).slice(0, 7) > baseDate.slice(0, 7)) an -= 1;
+  return iso(an);
+}
+
+/** En-tête d'un message WhatsApp copié, ex. :
+ *   « [3/9، 11:35 ص] ElAdel: Slm »              (WhatsApp en arabe, jour/mois)
+ *   « [03/09/2026 11:35:12] ElAdel: Slm »        (iPhone)
+ *   « 03/09/2026, 11:35 - ElAdel: Slm »          (Android, export de discussion) */
+function enteteMessage(line: string, baseDate: string): { date: string | null; emetteur: string; reste: string } | null {
+  const crochets = /^\s*\[\s*(\d{1,2})\s*[/.-]\s*(\d{1,2})(?:\s*[/.-]\s*(\d{2,4}))?[^\]]*\]\s*([^:]{1,40}?)\s*:\s?(.*)$/.exec(line);
+  const tiret = /^\s*(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4}),?\s+\d{1,2}:\d{2}[^-]*-\s*([^:]{1,40}?)\s*:\s?(.*)$/.exec(line);
+  const m = crochets ?? tiret;
+  if (!m) return null;
+  return { date: isoDepuis(m[1], m[2], m[3], baseDate), emetteur: m[4].trim(), reste: m[5] ?? '' };
+}
+
+/** Transforme un ou plusieurs messages WhatsApp collés en lignes (dépenses ou alimentations).
+ *  • chaque en-tête « [14/9, 8:04] ElAdel: » donne la date et l'émetteur des lignes qui suivent,
+ *    jusqu'au message suivant (sans en-tête : la date par défaut) ;
+ *  • « 3 poteau 600 » → 600 (le plus grand nombre est le montant) ;
+ *  • « Le 11/09/2026 Poteau rosso 300 » → date 11/09 pour cette ligne ;
+ *  • « Bonjour », « Slm »… et les lignes sans montant sont ignorés. */
 export function parseWhatsApp(text: string, baseDate: string): ParsedLine[] {
   const out: ParsedLine[] = [];
-  const year = baseDate.slice(0, 4);
-  text.split(/\n/).forEach((raw) => {
-    let line = raw.replace(/^\s*\[[^\]]*\]\s*[^:]{1,40}:\s*/, '').trim();
+  let dateMsg = baseDate;
+  let emetteur = '';
+  let message = -1;
+  latin(text).split(/\r?\n/).forEach((raw) => {
+    let line = raw;
+    const ent = enteteMessage(raw, baseDate);
+    if (ent) {
+      message++;
+      dateMsg = ent.date ?? baseDate;
+      emetteur = ent.emetteur;
+      line = ent.reste;
+    } else if (message < 0) message = 0;
+    line = line.trim();
     if (!line) return;
-    let date = baseDate;
+    let date = dateMsg;
     const dm = line.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
     if (dm) {
-      const y = dm[3] ? (dm[3].length === 2 ? '20' + dm[3] : dm[3]) : year;
-      date = `${y}-${dm[2].padStart(2, '0')}-${dm[1].padStart(2, '0')}`;
+      date = isoDepuis(dm[1], dm[2], dm[3], baseDate) ?? dateMsg;
       line = line.replace(dm[0], ' ');
     }
     // nombres isolés uniquement : « CI1Z01 » (code zone) n'est pas un montant
@@ -119,7 +164,7 @@ export function parseWhatsApp(text: string, baseDate: string): ParsedLine[] {
       .trim();
     if (!libelle) libelle = 'Dépense';
     libelle = libelle.charAt(0).toUpperCase() + libelle.slice(1);
-    out.push({ libelle, montant: best.v, date, categorie: guessCategorie(libelle), chantier: guessChantier(libelle) });
+    out.push({ libelle, montant: best.v, date, categorie: guessCategorie(libelle), chantier: guessChantier(libelle), emetteur, message: Math.max(0, message) });
   });
   return out;
 }

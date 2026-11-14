@@ -56,6 +56,14 @@ export interface Situation {
   // uniquement du fichier de scan (scan_results), via le FGP.
   closedBy?: string; // nom de la personne ayant clôturé la situation (profiles)
   motifCloture?: string; // motif choisi par l'équipe à la clôture (Fait / Non fait), ≠ motif de l'OT
+  // Fiche du programme (distribuée par OT) : de quoi calculer le délai de l'équipe (échéance 22 h)
+  numeroOt?: string;
+  assigneLe?: string | null; // remise à l'équipe
+  dateProgramme?: string | null;
+  dateRecu?: string | null; // « OT reçu le »
+  traiteLe?: string | null; // clôture par l'équipe
+  echeanceEquipe?: string | null;
+  prioritaire?: boolean;
 }
 
 export interface Notification {
@@ -279,6 +287,8 @@ export interface CaisseOperation {
   motifRejet: string | null;
   note: string;
   source: string;
+  /** auteur du message WhatsApp d'où vient l'opération (« ElAdel ») ; '' sinon */
+  emetteur: string;
   createdAt: string;
 }
 

@@ -37,8 +37,8 @@ import {
   type Granularite,
 } from '@/utils/surveillance';
 import { downloadWorkbookBuffer } from '@/utils/stats';
-import type { Penalite, ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
+import { Penalite, ProgrammeOT } from '@/types';
 
 const GRANULARITES: { id: Granularite; label: string }[] = [
   { id: 'jour', label: 'Jour' },

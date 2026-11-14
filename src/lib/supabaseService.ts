@@ -304,6 +304,13 @@ function mapSituation(row: any): Situation {
     poteau: row.poteau != null ? Number(row.poteau) : 0,
     closedBy: row.traite_par_nom ?? undefined,
     motifCloture: row.motif_cloture ?? '',
+    numeroOt: row.numero_ot ?? undefined,
+    assigneLe: row.assigne_le ?? row.created_at ?? null,
+    dateProgramme: row.date_programme ?? null,
+    dateRecu: row.date_recu ?? row.date_message ?? row.date_depo ?? null,
+    traiteLe: row.traite_le ?? null,
+    echeanceEquipe: row.echeance_equipe ?? null,
+    prioritaire: !!row.prioritaire,
   };
 }
 

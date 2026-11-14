@@ -105,6 +105,135 @@ function remarquesFor(e: PresentEmployee): string {
  * Colonnes : A = marge, B = Ordre, C = Mle, D = Nom, E = Banque,
  * F = RIB (ou N° de compte pour BPM), G = Montant, H = marge.
  */
+// ─── Feuille « Caisse » : salaires payés en espèces ─────────────────────────
+// Même présentation que l'état papier GSS : logo, siège / RC / NIF, « Nouakchott — Le 29 juillet
+// 2026 », titre « Salaires personnel réseau par caisse », mois (« juil-26 ») au-dessus des
+// montants, tableau Ordre / Mle / Nom et prénom / Téléphone / Montant / Date / Émargement,
+// TOTAL, « Arrêtez le présent état à la somme de … MRU » et le nom du signataire.
+const MOIS_COURTS = ['janv', 'févr', 'mars', 'avr', 'mai', 'juin', 'juil', 'août', 'sept', 'oct', 'nov', 'déc'];
+
+/** « 22 45 67 89 » pour un numéro mauritanien à 8 chiffres (sinon tel quel) */
+export function formatTelephone(tel?: string): string {
+  const d = (tel || '').replace(/[^\d+]/g, '');
+  const local = d.replace(/^(\+?222)(?=\d{8}$)/, '');
+  return /^\d{8}$/.test(local) ? local.replace(/(\d{2})(?=\d)/g, '$1 ') : (tel || '').trim();
+}
+/** « 29/07/2026 » → « 29 juillet 2026 » */
+function dateLongue(dateStr: string): string {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(dateStr.trim());
+  return m ? `${Number(m[1])} ${MOIS_FR[Number(m[2]) - 1]} ${m[3]}` : dateStr;
+}
+/** « juillet 2026 » → « juil-26 » */
+function moisCourt(motifMois: string): string {
+  const [mois, annee] = motifMois.split(' ');
+  const i = MOIS_FR.indexOf(mois);
+  return i >= 0 && annee ? `${MOIS_COURTS[i]}-${annee.slice(-2)}` : motifMois;
+}
+export const TITRE_CAISSE = 'Salaires personnel réseau par caisse';
+
+function buildCaisseSheet(
+  workbook: ExcelJS.Workbook,
+  logoImageId: number,
+  opts: { sheetName: string; employees: (Employee & { montantSheet: number })[]; dateStr: string; motifMois: string },
+) {
+  const { sheetName, employees, dateStr, motifMois } = opts;
+  const total = employees.reduce((s, e) => s + (e.montantSheet || 0), 0);
+  const ws = workbook.addWorksheet(sheetName.slice(0, 31), { views: [{ showGridLines: false }] });
+  const T = (size: number, extra: Partial<ExcelJS.Font> = {}): Partial<ExcelJS.Font> => ({ name: 'Times New Roman', size, ...extra });
+  const NOIR: Partial<ExcelJS.Border> = { style: 'thin', color: { argb: 'FF000000' } };
+  const CADRE: Partial<ExcelJS.Borders> = { top: NOIR, left: NOIR, bottom: NOIR, right: NOIR };
+  const GRIS = 'FFBFBFBF';
+
+  // A marge · B Ordre · C Mle · D Nom · E Téléphone · F Montant · G Date · H Émargement · I marge
+  ws.columns = [{ width: 2 }, { width: 7 }, { width: 8 }, { width: 30 }, { width: 14 }, { width: 16.5 }, { width: 12 }, { width: 18 }, { width: 2 }];
+
+  // Logo
+  ws.addImage(logoImageId, { tl: { col: 1, row: 0 }, ext: { width: 220, height: 87 } });
+  for (let i = 0; i < 6; i++) ws.addRow([]);
+
+  // Siège / RC / NIF
+  [SOCIETE.siege, SOCIETE.rc, SOCIETE.nif].forEach((txt) => {
+    const r = ws.addRow(['', txt.trim()]);
+    r.getCell(2).font = T(12);
+  });
+  ws.addRow([]);
+
+  // « Nouakchott          Le 29 juillet 2026 »
+  const rLieu = ws.addRow(['', '', '', '', SOCIETE.ville, '', `Le ${dateLongue(dateStr)}`]);
+  rLieu.getCell(5).font = T(12);
+  rLieu.getCell(7).font = T(12);
+  // Titre
+  const rTitre = ws.addRow(['', '', TITRE_CAISSE]);
+  rTitre.height = 20;
+  rTitre.getCell(3).font = T(13, { bold: true });
+  rTitre.getCell(3).alignment = { horizontal: 'center' };
+  ws.mergeCells(rTitre.number, 3, rTitre.number, 6);
+  // Mois au-dessus de la colonne Montant
+  const rMois = ws.addRow(['', '', '', '', '', moisCourt(motifMois)]);
+  rMois.getCell(6).font = T(12, { bold: true });
+  rMois.getCell(6).alignment = { horizontal: 'center' };
+
+  // En-tête du tableau
+  const rHead = ws.addRow(['', 'Ordre', 'Mle', 'NOM et PRENOM', 'Téléphone', 'Montant (MRU)', 'Date', 'Emargement']);
+  rHead.height = 20;
+  for (let c = 2; c <= 8; c++) {
+    const cell = rHead.getCell(c);
+    cell.font = T(12, { bold: true });
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+    cell.border = CADRE;
+  }
+
+  // Lignes : hautes, pour la signature à l'émargement
+  const first = rHead.number + 1;
+  employees.forEach((e, i) => {
+    const r = ws.addRow(['', i + 1, e.mle, e.name, formatTelephone(e.telephone), e.montantSheet, '', '']);
+    r.height = 24;
+    for (let c = 2; c <= 8; c++) {
+      const cell = r.getCell(c);
+      cell.border = CADRE;
+      cell.font = T(12);
+      cell.alignment = { horizontal: c === 4 ? 'left' : c === 6 ? 'right' : 'center', vertical: 'middle' };
+    }
+    r.getCell(6).numFmt = MONTANT_FMT;
+  });
+  const last = rHead.number + employees.length;
+
+  // TOTAL (fond gris, comme l'état papier)
+  const totalFormula = employees.length > 0 ? { formula: `SUM(F${first}:F${last})`, result: total } : 0;
+  const rTotal = ws.addRow(['', '', '', 'TOTAL', '', totalFormula, '', '']);
+  rTotal.height = 22;
+  for (let c = 2; c <= 8; c++) {
+    const cell = rTotal.getCell(c);
+    cell.border = CADRE;
+    cell.font = T(13, { bold: true });
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GRIS } };
+    cell.alignment = { horizontal: c === 6 ? 'right' : 'center', vertical: 'middle' };
+  }
+  rTotal.getCell(6).numFmt = MONTANT_FMT;
+
+  ws.addRow([]);
+  const rArrete = ws.addRow(['', 'Arrêtez le présent état à la somme de']);
+  rArrete.getCell(2).font = T(12, { bold: true });
+  const lettres = numberToFrenchWords(total);
+  const rLettres = ws.addRow(['', `${lettres.charAt(0).toUpperCase()}${lettres.slice(1)} MRU`]);
+  rLettres.getCell(2).font = T(12, { bold: true });
+  ws.addRow([]);
+  const rSign = ws.addRow(['', '', '', '', '', '', SOCIETE.signataire]);
+  rSign.getCell(7).font = T(12, { bold: true, underline: true });
+  rSign.getCell(7).alignment = { horizontal: 'center' };
+  ws.mergeCells(rSign.number, 7, rSign.number, 8);
+
+  ws.pageSetup = {
+    paperSize: 9,
+    orientation: 'portrait',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    margins: { left: 0.4, right: 0.4, top: 0.4, bottom: 0.4, header: 0.3, footer: 0.3 },
+  };
+}
+
 function buildVirementSheet(
   workbook: ExcelJS.Workbook,
   logoImageId: number,
@@ -119,6 +248,8 @@ function buildVirementSheet(
   },
 ) {
   const { sheetName, banque, employees, ordreNum, dateStr, motifMois, signatureBase64 } = opts;
+  // Paiement en espèces : état « Salaires personnel réseau par caisse » (pas d'ordre de virement)
+  if (banque === 'Caisse') return buildCaisseSheet(workbook, logoImageId, { sheetName, employees, dateStr, motifMois });
   const isBpm = banque === 'BPM';
   const total = employees.reduce((s, e) => s + (e.montantSheet || 0), 0);
   const lastCol = isBpm ? 9 : 7;
@@ -572,17 +703,33 @@ export interface PreviewVirementSheet {
 export interface PreviewRecapSheet {
   kind: 'recap';
   name: string;
+  /** « juillet 2026 » */
+  mois?: string;
   rows: { ordre: number; mle: string; name: string; poste: string; ville: string; equipe: string; banque: string; rib: string; montant?: number; remarque: string }[];
 }
-export type PreviewSheet = PreviewVirementSheet | PreviewRecapSheet;
+export interface PreviewCaisseSheet {
+  kind: 'caisse';
+  name: string; titre: string; dateStr: string; mois: string;
+  total: number; totalLettres: string;
+  rows: { ordre: number; mle: string; name: string; telephone: string; montant: number }[];
+}
+export type PreviewSheet = PreviewVirementSheet | PreviewRecapSheet | PreviewCaisseSheet;
 export interface ExportPreview { sheets: PreviewSheet[]; logo: string; signature: string }
 
 export function buildExportPreview(opts: ExportPresentsOpts): ExportPreview {
   const { present, motifMois, dateStr, ordreBase, banquesAExporter, inclureRecap } = resolveSheets(opts);
 
-  const sheets: PreviewSheet[] = banquesAExporter.map((banque, idx): PreviewVirementSheet => {
+  const sheets: PreviewSheet[] = banquesAExporter.map((banque, idx): PreviewVirementSheet | PreviewCaisseSheet => {
     const emps = present.filter((e) => (e.banque || 'Caisse') === banque);
     const total = emps.reduce((s, e) => s + (e.montant ?? 0), 0);
+    if (banque === 'Caisse') {
+      const lettres = numberToFrenchWords(total);
+      return {
+        kind: 'caisse', name: banque, titre: TITRE_CAISSE, dateStr: dateLongue(dateStr), mois: moisCourt(motifMois), total,
+        totalLettres: `${lettres.charAt(0).toUpperCase()}${lettres.slice(1)} MRU`,
+        rows: emps.map((e, i) => ({ ordre: i + 1, mle: e.mle ?? '', name: e.name, telephone: formatTelephone(e.telephone), montant: e.montant ?? 0 })),
+      };
+    }
     return {
       kind: 'virement', name: banque, banque,
       ordreNum: nextOrdre(ordreBase, idx), dateStr, motifMois, total,
@@ -597,6 +744,7 @@ export function buildExportPreview(opts: ExportPresentsOpts): ExportPreview {
     sheets.push({
       kind: 'recap',
       name: 'Récap',
+      mois: motifMois,
       rows: present.map((e, i) => ({
         ordre: i + 1, mle: e.mle ?? '', name: e.name, poste: e.poste || '', ville: e.ville || '',
         equipe: e.equipeNom || '', banque: e.banque || 'Caisse', rib: formatRib(e.rib),
