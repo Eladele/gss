@@ -44,7 +44,7 @@ export interface MotifDef {
 }
 
 export const MOTIFS_NON_FAIT: MotifDef[] = [
-  { label: 'son telephone sonne ,le client sonne, ne répond pas' },
+  { label: 'son telephone sonne,ne répond pas' },
   { label: 'Contact fermé / injoignable' },
   { label: 'Fausse contact' },
   { label: 'Local fermé' },
