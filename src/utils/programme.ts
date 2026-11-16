@@ -44,7 +44,7 @@ export interface MotifDef {
 }
 
 export const MOTIFS_NON_FAIT: MotifDef[] = [
-  { label: 'Le client sonne, ne répond pas' },
+  { label: 'son telephone sonne ,le client sonne, ne répond pas' },
   { label: 'Contact fermé / injoignable' },
   { label: 'Fausse contact' },
   { label: 'Local fermé' },
@@ -73,6 +73,8 @@ export const MOTIFS_FAIT: MotifDef[] = [
   { label: 'Câble transport coupé', reseau: true },
   { label: 'HUB-BOX défectueux', reseau: true },
   { label: 'SUB-BOX défectueux', reseau: true },
+  { label: 'port isolé' },
+  { label: 'port desactive testé avec CI ou superviseur' },
   { label: 'FMC' },
   { label: 'Câble drop coupé' },
   { label: 'jarrtiere' },
@@ -103,12 +105,25 @@ const MOTIFS_SANS_POINT = new Set([
   normal("Installé par quelqu'un"),
 ]);
 
+// ─── CST (changement de constitution) écrit dans le motif ─────────────────────
+// « Modem défectueux + CST CA1Z042611/1-4 », ou « CST CA1Z042611/1-4 » seul
+const SEP_CST = ' + ';
+/** Motif enregistré : le motif choisi, suivi de « CST » et du nouveau DIS si la constitution a changé */
+export const motifAvecCst = (motif: string, cst: boolean, nouveauDis?: string) => {
+  if (!cst) return motif;
+  const c = `CST${nouveauDis?.trim() ? ` ${nouveauDis.trim().toUpperCase()}` : ''}`;
+  return motif ? `${motif}${SEP_CST}${c}` : c;
+};
+/** Motif sans la partie CST (pour le calcul des points) */
+export const motifSansCst = (motif: string) => motif.replace(/^\s*CST\b.*$/i, '').replace(/\s*\+\s*CST\b.*$/i, '').trim();
+
 /** Motif « fait » de panne réseau (câble coupé, HUB-BOX / SUB-BOX défectueux) → demi-point */
-export const estMotifReseau = (motif?: string | null) => !!motif && MOTIFS_FAIT.some((m) => m.reseau && normal(m.label) === normal(motif));
+export const estMotifReseau = (motif?: string | null) =>
+  !!motif && MOTIFS_FAIT.some((m) => m.reseau && normal(m.label) === normal(motifSansCst(motif)));
 /** Motif « fait » sans intervention (modem défectueux, problème électricité) : 0,5 + bonus décharge / scan */
-export const estMotifLeger = (motif?: string | null) => !!motif && MOTIFS_LEGERS.has(normal(motif));
+export const estMotifLeger = (motif?: string | null) => !!motif && MOTIFS_LEGERS.has(normal(motifSansCst(motif)));
 /** Motif « fait » qui ne rapporte aucun point (installé par quelqu'un, confirmé par client, erreur de signalisation) */
-export const estMotifSansPoint = (motif?: string | null) => !!motif && MOTIFS_SANS_POINT.has(normal(motif));
+export const estMotifSansPoint = (motif?: string | null) => !!motif && MOTIFS_SANS_POINT.has(normal(motifSansCst(motif)));
 
 /** Libellés des pénalités */
 export const MOTIF_PENALITE = {
@@ -183,6 +198,20 @@ export function estOtAns(ot: { typeOt?: string; sousType?: string }, avecIp = fa
   const s = (ot.sousType ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   return /numero\s+suppl|ajout\s+num|supplementaire/.test(s) || avecIp;
 }
+
+/**
+ * HUB-BOX d'une fiche : le chiffre juste après la zone dans le DIS.
+ *   CA1Z041211/1 → hub 1 · SP1Z022511/1 → hub 2 · CI1Z013912/1 → hub 3 · SP1Z0241422/2 → hub 4
+ * À défaut de DIS lisible : le premier chiffre du PCO (1211/1 → hub 1). null si inconnu.
+ */
+export function hubDe(ot: { dis?: string | null; pco?: string | null }): number | null {
+  const dis = (ot.dis ?? '').replace(/\s+/g, '').toUpperCase();
+  const m = /^[A-Z]{2}\d[A-Z]\d{2}([1-4])\d{3,4}\/[12]/.exec(dis) ?? /^(?:PCO-?)?([1-4])\d{3,4}\/[12]/.exec(dis);
+  if (m) return Number(m[1]);
+  const p = /^([1-4])\d{3,4}\/[12]/.exec((ot.pco ?? '').replace(/\s+/g, ''));
+  return p ? Number(p[1]) : null;
+}
+export const hubLabel = (h: number | null) => (h ? `HUB ${h}` : 'Hub ?');
 
 /** Application ID d'une fiche : depuis son DIS, sinon depuis son PCO et son port */
 export function applicationIdFiche(ot: { dis?: string; pco?: string; port?: string | number | null }): ApplicationId | null {

@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { ArrowRightLeft, CalendarClock, CheckCircle2, ChevronDown, CircleDashed, MapPin, RotateCcw, Search, X, XCircle } from 'lucide-react';
 import { TypeBadge } from '@/components/ui';
 import { delaiOT, estPourPlusTard, fmtPtsSigne, jourCourt, jourOuvreSuivant, jourRemise } from '@/utils/points';
-import { ligneLabel, type MotifFauxOk } from '@/utils/programme';
+import { hubDe, hubLabel, ligneLabel, type MotifFauxOk } from '@/utils/programme';
 import { isoJour } from '@/utils/surveillance';
 import { FauxOkButton } from '@/components/programme/FauxOk';
 import { ProgrammeOT, SituationType } from '@/types';
@@ -160,6 +160,7 @@ export function ProgrammeJourEquipes({
           .sort(
             (a, b) =>
               zoneDe(a.o).localeCompare(zoneDe(b.o)) ||
+              (hubDe(a.o) ?? 9) - (hubDe(b.o) ?? 9) ||
               Number(a.demain) - Number(b.demain) ||
               ORDRE[a.o.statut] - ORDRE[b.o.statut] ||
               Number(b.reportee || b.d.etat === 'retard') - Number(a.reportee || a.d.etat === 'retard') ||
@@ -341,12 +342,17 @@ export function ProgrammeJourEquipes({
                 {g.lignes.map((l, i) => {
                   const { o } = l;
                   const nouvelleZone = i === 0 || zoneDe(g.lignes[i - 1].o) !== zoneDe(o);
+                  const hub = hubDe(o);
+                  const nouveauHub = nouvelleZone || hubDe(g.lignes[i - 1].o) !== hub;
                   return (
                     <Fragment key={o.id}>
                       {nouvelleZone && (
                         <li className="px-3 sm:px-4 py-1.5 bg-slate-100/80 text-xs">
                           <ZoneTitre zone={zoneDe(o)} z={g.zones.get(zoneDe(o))} />
                         </li>
+                      )}
+                      {nouveauHub && hub && (
+                        <li className="px-3 sm:px-4 py-1 pl-8 sm:pl-10 bg-sky-50/60 text-[11px] font-black tracking-wide text-sky-800">{hubLabel(hub)}</li>
                       )}
                       <li
                         className={`px-3 sm:px-4 py-2 grid grid-cols-[auto_minmax(9.5rem,auto)_auto_1fr] sm:grid-cols-[auto_12.5rem_11rem_1fr_auto] items-center gap-x-3 gap-y-1 ${

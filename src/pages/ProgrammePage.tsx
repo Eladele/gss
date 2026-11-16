@@ -22,7 +22,7 @@ import {
 } from '@/lib/programmeService';
 import { CheckCircle2, ExternalLink, Eye, EyeOff, Flame, ListTodo, MapPin, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
-import { DECHARGE_URL, ligneLabel } from '@/utils/programme';
+import { DECHARGE_URL, hubDe, hubLabel, ligneLabel } from '@/utils/programme';
 import { POINTS, classement, delaiOT, fmtPts, fmtPtsSigne } from '@/utils/points';
 import { errMsg } from '@/utils';
 
@@ -164,7 +164,8 @@ function FichesOT() {
     );
   }, [view, aFaire, termines, q]);
 
-  // Programme regroupé par zone : la zone de la fiche la plus urgente d'abord, puis l'ordre ci-dessus
+  // Programme regroupé par zone (la zone de la fiche la plus urgente d'abord), puis par HUB-BOX
+  // (hub 1 à 4, d'après le DIS) ; dans un hub, l'ordre ci-dessus
   const parZone = useMemo(() => {
     const m = new Map<string, ProgrammeOT[]>();
     for (const o of list) {
@@ -173,7 +174,17 @@ function FichesOT() {
       if (l) l.push(o);
       else m.set(z, [o]);
     }
-    return [...m.entries()];
+    return [...m.entries()].map(([zone, fiches]) => {
+      const hubs = new Map<number | null, ProgrammeOT[]>();
+      for (const o of fiches) {
+        const h = hubDe(o);
+        const l = hubs.get(h);
+        if (l) l.push(o);
+        else hubs.set(h, [o]);
+      }
+      const parHub = [...hubs.entries()].sort(([a], [b]) => (a ?? 9) - (b ?? 9));
+      return [zone, fiches, parHub] as const;
+    });
   }, [list]);
   const nbZone = (z: string, statut: 'a_faire' | 'fini') =>
     (statut === 'a_faire' ? aFaire : termines).filter((o) => (o.zone?.trim() || 'Sans zone') === z).length;
@@ -307,7 +318,7 @@ function FichesOT() {
         />
       ) : (
         <div className="space-y-5">
-          {parZone.map(([zone, fiches]) => {
+          {parZone.map(([zone, fiches, parHub]) => {
             const reste = nbZone(zone, 'a_faire');
             const faites = nbZone(zone, 'fini');
             const total = reste + faites;
@@ -328,7 +339,19 @@ function FichesOT() {
                     </span>
                   )}
                 </div>
-                {fiches.map((o) => (
+                {parHub.map(([hub, fichesHub]) => (
+                  <div key={hub ?? 'x'} className="space-y-3">
+                    {/* sous-titre HUB-BOX (seulement s'il y a plusieurs hubs ou un hub connu) */}
+                    {(parHub.length > 1 || hub) && (
+                      <div className="flex items-center gap-2 px-1">
+                        <span className="px-2 py-0.5 rounded-md bg-sky-100 text-sky-800 text-xs font-black tracking-wide">{hubLabel(hub)}</span>
+                        <span className="text-[11px] text-slate-500">
+                          {fichesHub.length} fiche{fichesHub.length > 1 ? 's' : ''}
+                        </span>
+                        <span className="flex-1 h-px bg-slate-200" />
+                      </div>
+                    )}
+                {fichesHub.map((o) => (
                   <OtCard
                     key={o.id}
                     ot={o}
@@ -352,6 +375,8 @@ function FichesOT() {
                       }
                     }}
                   />
+                ))}
+                  </div>
                 ))}
               </section>
             );

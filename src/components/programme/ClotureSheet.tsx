@@ -2,7 +2,17 @@ import { useState } from 'react';
 import { Check, ExternalLink, Minus, Plus } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
 import type { Cloture } from '@/lib/programmeService';
-import { DECHARGE_URL, estMotifLeger, estMotifReseau, estMotifSansPoint, ligneLabel, MOTIFS_FAIT, motifsNonFaitPour, poteauxDuMotif } from '@/utils/programme';
+import {
+  DECHARGE_URL,
+  estMotifLeger,
+  estMotifReseau,
+  estMotifSansPoint,
+  ligneLabel,
+  motifAvecCst,
+  MOTIFS_FAIT,
+  motifsNonFaitPour,
+  poteauxDuMotif,
+} from '@/utils/programme';
 import { POINTS, fmtPts } from '@/utils/points';
 
 const AUTRE = 'Autre';
@@ -43,11 +53,12 @@ export function ClotureSheet({
   // Dérangement (fait) : tous les MOTIFS_FAIT sauf "Installé par quelqu'un" (obligatoire)
   // NB: on utilise includes("quelqu") pour éviter les problèmes d'apostrophe Unicode vs ASCII
   const estInstalleParQuelqun = (label: string) => label.includes('quelqu');
-  const liste = fait && estInstallation
-    ? MOTIFS_FAIT.filter((m) => estInstalleParQuelqun(m.label))
-    : fait
-      ? MOTIFS_FAIT.filter((m) => !estInstalleParQuelqun(m.label))
-      : motifsNonFaitPour(ot.nature); // hors zone, poteaux, modem… : seulement pour une installation
+  const liste =
+    fait && estInstallation
+      ? MOTIFS_FAIT.filter((m) => estInstalleParQuelqun(m.label))
+      : fait
+        ? MOTIFS_FAIT.filter((m) => !estInstalleParQuelqun(m.label))
+        : motifsNonFaitPour(ot.nature); // hors zone, poteaux, modem… : seulement pour une installation
   const [motif, setMotif] = useState('');
   const [autre, setAutre] = useState('');
   const [commentaire, setCommentaire] = useState('');
@@ -59,14 +70,25 @@ export function ClotureSheet({
   const [poteaux, setPoteaux] = useState(0);
 
   const choisir = (m: string) => {
+    // un 2e clic sur le motif choisi le décoche (ex. « Installé par quelqu’un » sur une installation)
+    if (motif === m) {
+      setMotif('');
+      if (!fait || poteauxDuMotif(m, liste)) setPoteaux(0);
+      return;
+    }
     setMotif(m);
     // « Besoin poteau » / « Besoin 2 poteaux » : le nombre de poteaux se remplit tout seul
     const p = poteauxDuMotif(m, liste);
     if (p || !fait) setPoteaux(p);
   };
 
-  const motifFinal = motif === AUTRE ? autre.trim() : motif;
-  // Motif obligatoire pour un « non fait » et pour un dérangement réglé
+  // Non fait + CST : le motif devient facultatif (la CST suffit), mais on peut en ajouter un
+  // (ex. « Besoin poteau + CST CA1Z042611/1-4 »)
+  const cstSeul = !fait && cstChange;
+  const motifChoisi = motif === AUTRE ? autre.trim() : motif;
+  // CST coché : « CST » et le nouveau DIS sont ajoutés au motif (fait comme non fait)
+  const motifFinal = motifAvecCst(motifChoisi, cstChange, nouveauDis);
+  // Motif obligatoire pour un « non fait » et pour un dérangement réglé (la CST seule compte comme motif)
   const motifRequis = !fait || ot.nature === 'derangement';
   const erreur =
     motifRequis && !motifFinal
@@ -88,9 +110,10 @@ export function ClotureSheet({
       decharge: fait ? decharge : null,
       scanne: fait ? scanne : null,
       cstChange: fait && cstChange,
-      nouveauDis: cstChange ? nouveauDis.trim().toUpperCase() : '',
-      nouvelOnt: cstChange ? nouvelOnt.trim().toUpperCase() : '',
-      poteaux,
+      nouveauDis: fait && cstChange ? nouveauDis.trim().toUpperCase() : '',
+      nouvelOnt: fait && cstChange ? nouvelOnt.trim().toUpperCase() : '',
+      // « fait » : plus de poteaux posés à saisir
+      poteaux: fait ? 0 : poteaux,
     });
   };
 
@@ -120,7 +143,7 @@ export function ClotureSheet({
 
           <div>
             <p className="text-xs font-semibold text-slate-500 mb-2">
-              {fait ? (ot.nature === 'derangement' ? 'Cause du dérangement *' : 'Motif (facultatif)') : 'Motif'}
+              {fait ? (ot.nature === 'derangement' ? 'Cause du dérangement *' : 'Motif (facultatif)') : cstSeul ? 'Motif (facultatif avec la CST)' : 'Motif'}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {/* Installation fait : pas de bouton "Autre" ; dérangement fait : tous + "Autre" */}
@@ -143,18 +166,18 @@ export function ClotureSheet({
             </div>
             {fait && estMotifSansPoint(motif) && (
               <p className="mt-2 text-[11px] font-semibold text-slate-700 bg-slate-100 rounded-md px-2 py-1">
-                Ce motif ne rapporte pas de point{POINTS.faitSansPoint ? ` (${fmtPts(POINTS.faitSansPoint)} seulement)` : ''} : la fiche est clôturée « Fait ».
+                Ce motif ne rapporte pas de point
+                {POINTS.faitSansPoint ? ` (${fmtPts(POINTS.faitSansPoint)} seulement)` : ''} : la fiche est clôturée « Fait ».
               </p>
             )}
             {fait && estMotifLeger(motif) && (
               <p className="mt-2 text-[11px] font-semibold text-sky-800 bg-sky-50 rounded-md px-2 py-1">
-                Sans intervention : {fmtPts(POINTS.sansIntervention)} point, +{fmtPts(POINTS.bonusDecharge)} avec la décharge, +{fmtPts(POINTS.bonusScan)} si scanné.
+                Sans intervention : {fmtPts(POINTS.sansIntervention)} point, +{fmtPts(POINTS.bonusDecharge)} avec la décharge, +{fmtPts(POINTS.bonusScan)} si
+                scanné.
               </p>
             )}
             {fait && estMotifReseau(motif) && (
-              <p className="mt-2 text-[11px] font-semibold text-amber-800 bg-amber-50 rounded-md px-2 py-1">
-                Panne réseau : cette fiche compte un demi-point.
-              </p>
+              <p className="mt-2 text-[11px] font-semibold text-amber-800 bg-amber-50 rounded-md px-2 py-1">Panne réseau : cette fiche compte un demi-point.</p>
             )}
             {motif === AUTRE && (
               <input
@@ -182,69 +205,83 @@ export function ClotureSheet({
               >
                 <ExternalLink className="w-3.5 h-3.5" /> Ouvrir l’application décharge
               </a>
-
-              <div className={`rounded-xl border p-3 space-y-2 ${cstChange ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200'}`}>
-                <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                  <input type="checkbox" checked={cstChange} onChange={(e) => setCstChange(e.target.checked)} />
-                  Changement de constitution (CST)
-                </label>
-                {cstChange && (
-                  <div className="grid grid-cols-1 gap-2">
-                    <div>
-                      <label htmlFor="cst-dis" className="text-[11px] font-semibold text-slate-500">
-                        Nouveau DIS <span className="font-normal">(ancien : {ot.dis || '—'})</span>
-                      </label>
-                      <input
-                        id="cst-dis"
-                        value={nouveauDis}
-                        onChange={(e) => setNouveauDis(e.target.value)}
-                        placeholder="ex. CA1Z042611/1-4"
-                        className="w-full font-mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div>
-                    {/* <div>
-                      <label htmlFor="cst-ont" className="text-[11px] font-semibold text-slate-500">
-                        Nouvel ONT <span className="font-normal">(ancien : {ot.ontSerials[0] || '—'})</span>
-                      </label>
-                      <input
-                        id="cst-ont"
-                        value={nouvelOnt}
-                        onChange={(e) => setNouvelOnt(e.target.value)}
-                        placeholder="ex. 48575443B2FCC9AE"
-                        className="w-full font-mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
-                      />
-                    </div> */}
-                  </div>
-                )}
-              </div>
             </>
           )}
 
-          <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3">
-            <div>
-              <p className="text-sm font-semibold text-slate-700">{fait ? 'Poteaux posés' : 'Poteaux nécessaires'}</p>
-              <p className="text-[11px] text-slate-400">Ajoutés aux poteaux des statistiques</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                aria-label="Moins"
-                onClick={() => setPoteaux((p) => Math.max(0, p - 1))}
-                className="w-9 h-9 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600"
-              >
-                <Minus className="w-4 h-4" />
-              </button>
-              <span className="w-6 text-center text-lg font-black tabular-nums">{poteaux}</span>
-              <button
-                type="button"
-                aria-label="Plus"
-                onClick={() => setPoteaux((p) => Math.min(9, p + 1))}
-                className="w-9 h-9 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
+          {/* CST : fait comme non fait, ajouté au motif */}
+          <div className={`rounded-xl border p-3 space-y-2 ${cstChange ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200'}`}>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={cstChange}
+                onChange={(e) => setCstChange(e.target.checked)}
+              />
+              Changement de constitution (CST)
+            </label>
+            {cstChange && (
+              <div className="grid grid-cols-1 gap-2">
+                <div>
+                  <label htmlFor="cst-dis" className="text-[11px] font-semibold text-slate-500">
+                    Nouveau DIS <span className="font-normal">(ancien : {ot.dis || '—'})</span>
+                  </label>
+                  <input
+                    id="cst-dis"
+                    value={nouveauDis}
+                    onChange={(e) => setNouveauDis(e.target.value)}
+                    placeholder="ex. CA1Z042611/1-4"
+                    className="w-full font-mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                {/* <div>
+                  <label htmlFor="cst-ont" className="text-[11px] font-semibold text-slate-500">
+                    Nouvel ONT <span className="font-normal">(ancien : {ot.ontSerials[0] || '—'})</span>
+                  </label>
+                  <input
+                    id="cst-ont"
+                    value={nouvelOnt}
+                    onChange={(e) => setNouvelOnt(e.target.value)}
+                    placeholder="ex. 48575443B2FCC9AE"
+                    className="w-full font-mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-blue-500"
+                  />
+                </div> */}
+              </div>
+            )}
           </div>
+
+          {cstChange && (
+            <p className="-mt-2 text-[11px] text-slate-500">
+              Motif enregistré : <b className="text-slate-700">{motifFinal}</b>
+            </p>
+          )}
+
+          {/* Poteaux : seulement pour un « non fait » (poteaux nécessaires) */}
+          {!fait && (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-700">Poteaux nécessaires</p>
+                <p className="text-[11px] text-slate-400">Ajoutés aux poteaux des statistiques</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Moins"
+                  onClick={() => setPoteaux((p) => Math.max(0, p - 1))}
+                  className="w-9 h-9 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600"
+                >
+                  <Minus className="w-4 h-4" />
+                </button>
+                <span className="w-6 text-center text-lg font-black tabular-nums">{poteaux}</span>
+                <button
+                  type="button"
+                  aria-label="Plus"
+                  onClick={() => setPoteaux((p) => Math.min(9, p + 1))}
+                  className="w-9 h-9 rounded-lg border border-slate-200 flex items-center justify-center text-slate-600"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
 
           <textarea
             id="cloture-commentaire"
