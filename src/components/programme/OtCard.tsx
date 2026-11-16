@@ -116,6 +116,11 @@ export function OtCard({
           ) : (
             <p className="mt-1 font-semibold text-slate-400">Client sans nom</p>
           )}
+          {ot.clientCode && (
+            <div className="mt-1">
+              <CopyChip value={ot.clientCode} label="Compte client" />
+            </div>
+          )}
           {ot.clientInfo && <p className="text-xs text-slate-400 truncate">{ot.clientInfo}</p>}
         </div>
         <span className={`flex-shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${st.cls}`}>{st.label}</span>
@@ -295,6 +300,7 @@ function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
   const text = [
     ligneLabel(ot),
     ot.clientNom,
+    ot.clientCode ? `Compte client : ${ot.clientCode}` : '',
     ot.telephones.length ? `Tél : ${ot.telephones.join(' / ')}` : '',
     ot.dis ? `DIS ${ot.dis}${hubDe(ot) ? ` (${hubLabel(hubDe(ot))})` : ''}` : '',
     ot.ontSerials.length ? `ONT ${ot.ontSerials.join(' / ')}` : '',

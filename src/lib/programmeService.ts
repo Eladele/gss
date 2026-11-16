@@ -636,6 +636,40 @@ export async function rechercherFichesProgramme(recherche: string): Promise<Prog
   return (data ?? []).map(mapOt);
 }
 
+/**
+ * Recherche dans tout le programme distribué (page Distribuer) : FGP, compte client, nom du client
+ * ou n° d'OT — pour voir tout de suite le statut et le motif d'une fiche.
+ */
+export async function rechercherProgramme(recherche: string): Promise<ProgrammeOT[]> {
+  // virgules / parenthèses : réservées par la syntaxe « or » de PostgREST
+  const term = recherche.replace(/[,()*%\\]/g, ' ').trim();
+  if (term.length < 2) return [];
+  const { data, error } = await supabase
+    .from(VUE)
+    .select('*')
+    .not('numero_ot', 'is', null)
+    .or(`fgp.ilike.%${term}%,client_code.ilike.%${term}%,client_nom.ilike.%${term}%,numero_ot.ilike.%${term}%`)
+    .order('date_programme', { ascending: false })
+    .limit(30);
+  if (error) throw dbError(error, 'Recherche impossible');
+  return (data ?? []).map(mapOt);
+}
+
+/** Fiches « non faites » des jours précédant `avant` (depuis `depuis`) : à renvoyer le jour suivant */
+export async function fetchNonFaitesARenvoyer(avant: string, depuis: string): Promise<ProgrammeOT[]> {
+  const { data, error } = await supabase
+    .from(VUE)
+    .select('*')
+    .not('numero_ot', 'is', null)
+    .eq('status', versStatus.non_fait)
+    .gte('date_programme', depuis)
+    .lt('date_programme', avant)
+    .order('date_programme', { ascending: false })
+    .limit(1000);
+  if (error) throw dbError(error, 'Chargement des fiches non faites impossible');
+  return (data ?? []).map(mapOt);
+}
+
 // ─── Pénalités et contrôle de 22 h ────────────────────────────────────────────
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

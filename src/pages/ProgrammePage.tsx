@@ -151,7 +151,7 @@ function FichesOT() {
     const base = view === 'a_faire' ? aFaire : termines;
     const s = q.trim().toLowerCase();
     const filtered = s
-      ? base.filter((o) => [o.fgp, o.clientNom, o.zone, o.pco, o.dis, ...o.telephones, ...o.ontSerials].join(' ').toLowerCase().includes(s))
+      ? base.filter((o) => [o.fgp, o.clientNom, o.clientCode, o.zone, o.pco, o.dis, ...o.telephones, ...o.ontSerials].join(' ').toLowerCase().includes(s))
       : base;
     // Cas urgents en priorité absolue, puis prioritaires d'abord, puis par échéance, dérangements avant installations, puis par zone / PCO
     return [...filtered].sort(

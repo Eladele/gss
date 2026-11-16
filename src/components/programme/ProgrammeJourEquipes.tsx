@@ -156,7 +156,7 @@ export function ProgrammeJourEquipes({
               filtre === 'tout' ||
               (filtre === 'demain' ? l.demain : filtre === 'reportee' ? l.reportee : !l.demain && l.o.statut === filtre),
           )
-          .filter((l) => !recherche || [typeDe(l.o), l.o.fgp, l.o.motif, l.o.clientNom, l.o.numeroOt].join(' ').toLowerCase().includes(recherche))
+          .filter((l) => !recherche || [typeDe(l.o), l.o.fgp, l.o.motif, l.o.clientNom, l.o.clientCode, l.o.numeroOt].join(' ').toLowerCase().includes(recherche))
           .sort(
             (a, b) =>
               zoneDe(a.o).localeCompare(zoneDe(b.o)) ||
@@ -233,7 +233,7 @@ export function ProgrammeJourEquipes({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="FGP, motif…"
+            placeholder="FGP, compte client, motif…"
             aria-label="Rechercher une fiche"
             className="w-full pl-8 pr-2 py-1.5 text-sm rounded-lg border border-slate-200"
           />
@@ -369,7 +369,13 @@ export function ProgrammeJourEquipes({
                           <span className="inline-flex w-11 justify-center font-sans">
                             <TypeBadge type={typeDe(o) as SituationType} />
                           </span>
-                          {ligneLabel(o)}
+                          <span className="flex flex-col leading-tight">
+                            {ligneLabel(o)}
+                            {/* compte client sous le FGP */}
+                            <span className="text-[11px] font-semibold text-slate-500" title="Compte client">
+                              {o.clientCode || '—'}
+                            </span>
+                          </span>
                           {o.isUrgent && <span className="ml-1.5 text-[10px] font-sans font-bold text-orange-700">URGENT</span>}
                         </span>
                         <span>

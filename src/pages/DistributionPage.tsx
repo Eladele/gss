@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarClock, CalendarDays, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, RotateCcw, Send, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CalendarDays, ChevronDown, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, RotateCcw, Search, Send, Trash2, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
@@ -18,6 +18,8 @@ import {
   redistribuer,
   retarder,
   fetchHistoriqueClotures,
+  fetchNonFaitesARenvoyer,
+  rechercherProgramme,
   type ClotureArchivee,
   signalerFauxOk,
   situationsOuvertes,
@@ -25,7 +27,7 @@ import {
 } from '@/lib/programmeService';
 import { HistoriqueMotifs } from '@/components/programme/Historique';
 import { AffecterUrgentModal } from '@/components/programme/AffecterUrgentModal';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, hubDe, hubLabel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
 import { HEURE_PROGRAMME_SOIR, POINTS, estPrioritaire, fmtPts, jourCourt, jourOuvreSuivant, jourRemise, motPoint, ptsTexte } from '@/utils/points';
 import { ClotureResume } from '@/components/programme/OtCard';
 import { FauxOkButton } from '@/components/programme/FauxOk';
@@ -42,7 +44,7 @@ type Item = ParsedOT & {
   renvoi?: { id: string; equipe: string; motif: string; traiteLe: string | null };
   include: boolean;
 };
-type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
+type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientCode' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
 
 const todayISO = () => {
   const d = new Date();
@@ -158,37 +160,62 @@ async function shareWhatsApp(text: string, showToast: (m: string, t?: 'success' 
   }
 }
 
-function RowCells({ o, prioritaire, isUrgent }: { o: Row; prioritaire?: boolean; isUrgent?: boolean }) {
+/** Une info de la fiche avec son libellé (« Compte client », « Contact », « DIS »…) */
+function Info({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 flex-wrap">
-          {isUrgent && (
-            <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-orange-600 text-white flex items-center gap-1 shadow-sm" title="Cas urgent à traiter en priorité absolue">
-              <Flame className="w-3 h-3 text-yellow-300" /> URGENT
-            </span>
-          )}
-          {prioritaire && !isUrgent && (
-            <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-red-600 text-white" title="Délai officiel (depuis « OT reçu le ») déjà dépassé : à faire le jour même avant 22 h">
-              PRIORITAIRE
-            </span>
-          )}
-          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${NATURE_CLASS[o.nature]}`}>{NATURE_LABEL[o.nature]}</span>
-          {o.typeOt && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{o.typeOt}</span>}
-          <span className="text-sm font-bold text-slate-800">{ligneLabel(o)}</span>
-          <span className="text-sm text-slate-700 truncate">{o.clientNom}</span>
-        </div>
-        <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-          <span className="tabular-nums">{o.telephones.length ? o.telephones.map(fmtTel).join(' / ') : 'pas de téléphone'}</span>
+    <div className="min-w-0">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
+      <dd className="text-xs text-slate-800 truncate">{children}</dd>
+    </div>
+  );
+}
+
+/** Fiche OT : FGP, nom, compte client, contact, DIS (avec son hub), zone / PCO */
+function RowCells({ o, prioritaire, isUrgent }: { o: Row; prioritaire?: boolean; isUrgent?: boolean }) {
+  const hub = hubDe(o);
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        {isUrgent && (
+          <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-orange-600 text-white flex items-center gap-1 shadow-sm" title="Cas urgent à traiter en priorité absolue">
+            <Flame className="w-3 h-3 text-yellow-300" /> URGENT
+          </span>
+        )}
+        {prioritaire && !isUrgent && (
+          <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-red-600 text-white" title="Délai officiel (depuis « OT reçu le ») déjà dépassé : à faire le jour même avant 22 h">
+            PRIORITAIRE
+          </span>
+        )}
+        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${NATURE_CLASS[o.nature]}`}>{NATURE_LABEL[o.nature]}</span>
+        {o.typeOt && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{o.typeOt}</span>}
+        <span className="font-mono text-sm font-black text-slate-900">{ligneLabel(o)}</span>
+        <span className="text-sm font-semibold text-slate-700 truncate">{o.clientNom || '—'}</span>
+      </div>
+      <dl className="mt-1.5 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1">
+        <Info label="Compte client">
+          <span className="font-mono font-semibold">{o.clientCode || '—'}</span>
+        </Info>
+        <Info label="Contact">
+          <span className="tabular-nums">{o.telephones.length ? o.telephones.map(fmtTel).join(' / ') : '—'}</span>
+        </Info>
+        <Info label="DIS">
+          <span className="font-mono">{o.dis || '—'}</span>
+          {hub && <span className="ml-1.5 text-[10px] font-black px-1 rounded bg-sky-600 text-white">{hubLabel(hub)}</span>}
+        </Info>
+        <Info label="Zone · PCO">
           <span className="font-mono">
             {o.zone || '?'}
-            {o.pco ? ` · ${o.pco}-${o.port}` : ''}
+            {o.pco ? ` · ${o.pco}${o.port ? `-${o.port}` : ''}` : ''}
           </span>
-          {o.ontSerials[0] && <span className="font-mono text-slate-400">ONT {o.ontSerials.join(' / ')}</span>}
+        </Info>
+      </dl>
+      {(o.ontSerials[0] || (o.nature === 'installation' && o.cableFibreM)) && (
+        <p className="mt-1 text-[11px] text-slate-400 flex flex-wrap gap-x-3">
+          {o.ontSerials[0] && <span className="font-mono">ONT {o.ontSerials.join(' / ')}</span>}
           {o.nature === 'installation' && o.cableFibreM ? <span className="text-violet-700 font-semibold">Câble {o.cableFibreM} m</span> : null}
-        </div>
-      </div>
-    </>
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -320,7 +347,47 @@ export default function DistributionPage() {
   // motifs passés des fiches renvoyées, et renvoi en cours (une fiche ou toutes les non faites d'une équipe)
   const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
   const [renvoi, setRenvoi] = useState<{ cle: string; ids: string[]; equipe: string; date: string } | null>(null);
-  const peutRenvoyer = user.role === 'admin' || user.role === 'superviseur';
+  const peutRenvoyer = user.role === 'admin' || user.role === 'superviseur' || user.role === 'directeur';
+  // non faites des 7 jours précédents : proposées au renvoi le jour suivant
+  const [nonFaites, setNonFaites] = useState<ProgrammeOT[]>([]);
+  // filtre du suivi et équipes repliées (mémorisées sur cet appareil)
+  const [filtreSuivi, setFiltreSuivi] = useState<'tout' | 'a_faire' | 'fait' | 'non_fait'>('tout');
+  const [fermees, setFermees] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('gss.distribution.fermees') ?? '[]') as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const changerFermees = (n: Set<string>) => {
+    setFermees(n);
+    try {
+      localStorage.setItem('gss.distribution.fermees', JSON.stringify([...n]));
+    } catch {
+      /* stockage indisponible */
+    }
+  };
+  const basculerEquipe = (cle: string) => {
+    const n = new Set(fermees);
+    if (n.has(cle)) n.delete(cle);
+    else n.add(cle);
+    changerFermees(n);
+  };
+  // recherche FGP / compte client / nom dans tout le programme
+  const [rq, setRq] = useState('');
+  const [resultatsBruts, setResultats] = useState<ProgrammeOT[] | null>(null);
+  const resultats = rq.trim().length >= 2 ? resultatsBruts : null;
+  const [version, setVersion] = useState(0);
+  const refreshRef = useRef<() => void>(() => undefined);
+  /** Recharge tout de suite (en plus du temps réel) après une action */
+  const rafraichir = () => refreshRef.current();
+  /** Mise à jour immédiate à l'écran (avant la réponse de la base) ; null retire la fiche */
+  const modifierLocal = (ids: string[], f: (o: ProgrammeOT) => ProgrammeOT | null) => {
+    const maj = (l: ProgrammeOT[]) => l.flatMap((o) => (ids.includes(o.id) ? (f(o) ?? []) : [o]));
+    setHist(maj);
+    setEnRetard(maj);
+    setNonFaites(maj);
+  };
 
   // Contrôle de 22 h : rattrape un contrôle manqué (tâche automatique arrêtée), puis l'affiche
   useEffect(() => {
@@ -333,32 +400,70 @@ export default function DistributionPage() {
     };
   }, []);
 
+  // Temps réel : tout changement (cas urgent, suppression, réaffectation, clôture d'un chef…)
+  // recharge le suivi ; on recharge aussi en revenant sur l'onglet et après chaque action ici
   useEffect(() => {
     let alive = true;
     const refresh = () =>
-      Promise.all([fetchProgramme({ from: histDate, to: histDate }), histDate >= todayISO() ? fetchEnRetard(histDate) : Promise.resolve([])]).then(
-        ([rows, retard]) => {
+      Promise.all([
+        fetchProgramme({ from: histDate, to: histDate }),
+        histDate >= todayISO() ? fetchEnRetard(histDate) : Promise.resolve([]),
+        fetchNonFaitesARenvoyer(histDate, addDays(histDate, -7)),
+      ]).then(
+        ([rows, retard, nf]) => {
           if (!alive) return;
           setHist(rows);
           setEnRetard(retard);
+          setNonFaites(nf);
           setHistError('');
-          fetchHistoriqueClotures([...rows, ...retard].map((o) => o.id)).then((h) => alive && setHistorique(h));
+          setVersion((v) => v + 1);
+          fetchHistoriqueClotures([...rows, ...retard, ...nf].map((o) => o.id)).then((h) => alive && setHistorique(h));
         },
         (e) => alive && setHistError(errMsg(e)),
       );
+    refreshRef.current = refresh;
     refresh();
     const unsub = subscribeProgramme('distribution', refresh);
+    const onVisible = () => document.visibilityState === 'visible' && refresh();
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
       unsub();
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [histDate]);
+
+  // recherche (300 ms après la frappe), relancée à chaque rechargement pour garder statut / motif à jour
+  useEffect(() => {
+    const t = rq.trim();
+    if (t.length < 2) return;
+    let alive = true;
+    const id = setTimeout(
+      () =>
+        rechercherProgramme(t).then(
+          (r) => alive && setResultats(r),
+          (e) => alive && showToast(errMsg(e), 'error'),
+        ),
+      300,
+    );
+    return () => {
+      alive = false;
+      clearTimeout(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rq, version]);
 
   const histGroups = useMemo(() => {
     const m = new Map<string, ProgrammeOT[]>();
     hist.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [hist]);
+  const nonFaitesGroups = useMemo(() => {
+    const m = new Map<string, ProgrammeOT[]>();
+    nonFaites.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [nonFaites]);
+  const nbStatut = (st: ProgrammeOT['statut']) => hist.filter((o) => o.statut === st).length;
   // fiches dont l'échéance est passée (avant aujourd'hui) et toujours ouvertes
   const retardGroups = useMemo(() => {
     const m = new Map<string, ProgrammeOT[]>();
@@ -370,16 +475,24 @@ export default function DistributionPage() {
     n ? ` · ${n} pénalité${n > 1 ? 's' : ''} (${fmtPts(n * POINTS.penalites[motif])} pt)` : '';
   const doReassign = async (o: ProgrammeOT, equipe: string) => {
     try {
+      modifierLocal([o.id], (x) => ({ ...x, equipe }));
       const n = await reassign([o.id], equipe, { par: user });
       showToast(`${ligneLabel(o)} envoyé à ${equipe}${pen(n, 'reaffectee')}`, 'success');
+      rafraichir();
     } catch (err) {
+      rafraichir();
       showToast(errMsg(err), 'error');
     }
   };
   // toutes les fiches en retard d'une équipe d'un coup
   const toutReaffecter = async (list: ProgrammeOT[], equipe: string) => {
     try {
+      modifierLocal(
+        list.map((o) => o.id),
+        (x) => ({ ...x, equipe }),
+      );
       const n = await reassign(list.map((o) => o.id), equipe, { par: user });
+      rafraichir();
       showToast(`${list.length} fiche${list.length > 1 ? 's' : ''} envoyée${list.length > 1 ? 's' : ''} à ${equipe}${pen(n, 'reaffectee')}`, 'success');
     } catch (err) {
       showToast(errMsg(err), 'error');
@@ -389,6 +502,7 @@ export default function DistributionPage() {
     try {
       const n = await retarder(list.map((o) => o.id), retardDate, { par: user, penaliser });
       setRetardId(null);
+      rafraichir();
       showToast(`${list.length} fiche${list.length > 1 ? 's' : ''} reportée${list.length > 1 ? 's' : ''} au ${frDate(retardDate)}${pen(n)}`, 'success');
     } catch (err) {
       showToast(errMsg(err), 'error');
@@ -398,6 +512,7 @@ export default function DistributionPage() {
   const doFauxOk = async (o: ProgrammeOT, motif: MotifFauxOk, note: string) => {
     try {
       await signalerFauxOk(o.id, user, motif, note);
+      rafraichir();
       showToast(`${ligneLabel(o)} : faux OK (${libelleFauxOk(motif, note)}) — ${fmtPts(POINTS.penalites.faux_ok)} pt pour ${o.equipe}, fiche rouverte`, 'warning');
     } catch (err) {
       showToast(errMsg(err), 'error');
@@ -407,6 +522,7 @@ export default function DistributionPage() {
     try {
       const n = await retarder([o.id], retardDate, { par: user, penaliser });
       setRetardId(null);
+      rafraichir();
       showToast(`${ligneLabel(o)} reporté au ${frDate(retardDate)}${pen(n)}`, 'success');
     } catch (err) {
       showToast(errMsg(err), 'error');
@@ -429,6 +545,7 @@ export default function DistributionPage() {
         'success',
       );
       setRenvoi(null);
+      rafraichir();
     } catch (err) {
       showToast(errMsg(err), 'error');
     }
@@ -487,7 +604,7 @@ export default function DistributionPage() {
             Urgence : {o.motif}
           </p>
         )}
-        {(o.statut === 'a_faire' || o.nbPenalites > 0) && (
+        {(o.statut === 'a_faire' || o.nbPenalites > 0 || showDate) && (
           <p className="text-[11px] text-slate-500">
             {showDate && <>Prévue le {jourCourt(o.dateProgramme)} · </>}
             {o.statut === 'a_faire' && o.echeanceEquipe && <>échéance {jourCourt(o.echeanceEquipe)} 22 h</>}
@@ -542,12 +659,15 @@ export default function DistributionPage() {
               title={o.isUrgent ? 'Cas urgent activé : cliquer pour désactiver' : 'Marquer comme cas urgent'}
               onClick={async () => {
                 try {
+                  modifierLocal([o.id], (x) => ({ ...x, isUrgent: !o.isUrgent }));
                   await marquerUrgent(o.id, !o.isUrgent);
+                  rafraichir();
                   showToast(
                     `${ligneLabel(o)} : ${!o.isUrgent ? 'marqué en cas urgent 🔥' : 'statut urgent retiré'}`,
                     !o.isUrgent ? 'warning' : 'info',
                   );
                 } catch (err) {
+                  rafraichir();
                   showToast(errMsg(err), 'error');
                 }
               }}
@@ -584,10 +704,13 @@ export default function DistributionPage() {
               onClick={async () => {
                 if (armed !== o.id) return setArmed(o.id);
                 try {
+                  modifierLocal([o.id], () => null);
                   await deleteOts([o.id]);
                   setArmed(null);
+                  rafraichir();
                   showToast('Fiche retirée du programme', 'info');
                 } catch (err) {
+                  rafraichir();
                   showToast(errMsg(err), 'error');
                 }
               }}
@@ -854,6 +977,88 @@ export default function DistributionPage() {
             />
           </label>
         </div>
+        {/* Recherche : FGP, compte client ou nom → statut et motif */}
+        <Card className="p-3 space-y-2">
+          <label className="relative block">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={rq}
+              onChange={(e) => setRq(e.target.value)}
+              placeholder="Rechercher par FGP, compte client ou nom du client…"
+              aria-label="Rechercher une fiche"
+              className="w-full pl-9 pr-9 py-2.5 text-sm rounded-lg border border-slate-200 bg-white focus:outline-none focus:border-blue-500"
+            />
+            {rq && (
+              <button
+                type="button"
+                onClick={() => setRq('')}
+                aria-label="Effacer la recherche"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </label>
+          {resultats && resultats.length === 0 && <p className="text-xs text-slate-400 px-1">Aucune fiche trouvée.</p>}
+          {resultats && resultats.length > 0 && (
+            <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-96 overflow-y-auto">
+              {resultats.map((o) => (
+                <div key={o.id} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span className="font-mono font-black text-slate-900">{ligneLabel(o)}</span>
+                  <span className="font-mono text-xs text-slate-500">{o.clientCode || '—'}</span>
+                  <span className="text-slate-700 truncate max-w-[14rem]">{o.clientNom || '—'}</span>
+                  <span className="text-xs text-slate-500">
+                    {o.equipe || 'Sans équipe'} · {jourCourt(o.dateProgramme)}
+                  </span>
+                  <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${STATUT_OT[o.statut].cls}`}>{STATUT_OT[o.statut].label}</span>
+                  <span className="basis-full sm:basis-auto sm:flex-1 text-xs text-slate-700 min-w-0">
+                    <span className="text-slate-400">Motif : </span>
+                    {o.motif || <span className="text-slate-300">—</span>}
+                  </span>
+                  {o.dateProgramme !== histDate && (
+                    <button type="button" onClick={() => setHistDate(o.dateProgramme)} className="text-[11px] font-semibold text-blue-700 hover:underline">
+                      Voir le jour
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {/* Filtre par statut + replier / déplier les équipes */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-full bg-slate-100 p-0.5 overflow-x-auto max-w-full">
+            {(
+              [
+                ['tout', 'Toutes', hist.length],
+                ['a_faire', 'À faire', nbStatut('a_faire')],
+                ['fait', 'Faites', nbStatut('fait')],
+                ['non_fait', 'Non faites', nbStatut('non_fait')],
+              ] as const
+            ).map(([id, label, n]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFiltreSuivi(id)}
+                className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${filtreSuivi === id ? 'bg-white shadow text-slate-900' : 'text-slate-500'}`}
+              >
+                {label} <span className="tabular-nums text-slate-400">{n}</span>
+              </button>
+            ))}
+          </div>
+          {histGroups.length > 0 && (
+            <span className="ml-auto flex gap-1">
+              <Button variant="ghost" size="sm" onClick={() => changerFermees(new Set(histGroups.map(([e]) => e || 'none')))}>
+                Tout cacher
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => changerFermees(new Set())}>
+                Tout afficher
+              </Button>
+            </span>
+          )}
+        </div>
+
         <Card className="p-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600">
           <span className="flex items-start gap-1.5">
             <Clock className="w-4 h-4 text-slate-400 flex-shrink-0" />
@@ -941,52 +1146,116 @@ export default function DistributionPage() {
             ))}
           </Card>
         )}
+        {/* Non faites des jours précédents : à renvoyer le jour suivant */}
+        {(filtreSuivi === 'tout' || filtreSuivi === 'non_fait') && nonFaites.length > 0 && (
+          <Card className="border-amber-300">
+            <div className="px-4 py-3 border-b border-amber-100 bg-amber-50/70">
+              <p className="font-bold text-amber-900">
+                {nonFaites.length} fiche{nonFaites.length > 1 ? 's' : ''} non faite{nonFaites.length > 1 ? 's' : ''} des jours précédents — à renvoyer
+              </p>
+              <p className="text-xs text-amber-800/80">
+                Non faites avant le {jourCourt(histDate)} (7 derniers jours). Renvoyez-les à une équipe : elles redeviennent « à faire », le motif passé reste dans
+                l’historique.
+              </p>
+            </div>
+            {nonFaitesGroups.map(([equipe, list]) => {
+              const cle = `nf:${equipe}`;
+              const ouvert = !fermees.has(cle);
+              return (
+                <div key={cle}>
+                  <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center gap-2 text-sm">
+                    <button type="button" onClick={() => basculerEquipe(cle)} className="flex items-center gap-2 text-left">
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ background: colorOf(equipe) }} />
+                      <b className="text-slate-800">{equipe || 'Sans équipe'}</b>
+                      <span className="text-xs text-slate-500">{list.length} non faite{list.length > 1 ? 's' : ''}</span>
+                      <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
+                    </button>
+                    {peutRenvoyer && renvoi?.cle !== cle && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="ml-auto"
+                        icon={<RotateCcw className="w-3.5 h-3.5" />}
+                        onClick={() =>
+                          ouvrirRenvoi(
+                            cle,
+                            list.map((o) => o.id),
+                            equipe,
+                          )
+                        }
+                      >
+                        Renvoyer les {list.length}
+                      </Button>
+                    )}
+                  </div>
+                  {renvoi?.cle === cle && <div className="px-4 py-2 border-b border-slate-100">{panneauRenvoi(cle)}</div>}
+                  {ouvert && list.map((o) => ficheSuivi(o, true))}
+                </div>
+              );
+            })}
+          </Card>
+        )}
+
         {!histError && hist.length === 0 && (
           <Card className="py-10 text-center text-sm text-slate-400">Aucune fiche distribuée pour le {frDate(histDate)}.</Card>
         )}
         {histGroups.map(([equipe, list]) => {
-          const n = (s: ProgrammeOT['statut']) => list.filter((o) => o.statut === s).length;
+          const n = (st: ProgrammeOT['statut']) => list.filter((o) => o.statut === st).length;
           const pct = Math.round((n('fait') / list.length) * 100);
+          const visibles = filtreSuivi === 'tout' ? list : list.filter((o) => o.statut === filtreSuivi);
+          if (filtreSuivi !== 'tout' && visibles.length === 0) return null;
+          const cle = equipe || 'none';
+          const ouvert = !fermees.has(cle);
           return (
-            <Card key={equipe || 'none'}>
+            <Card key={cle}>
               <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => basculerEquipe(cle)}
+                  aria-expanded={ouvert}
+                  className="flex items-center gap-2 flex-wrap text-left min-w-0"
+                  title={ouvert ? 'Cacher le programme de l’équipe' : 'Afficher le programme de l’équipe'}
+                >
                   <span className="w-3 h-3 rounded-full" style={{ background: colorOf(equipe) }} />
                   <span className="font-bold text-slate-800">{equipe || 'Sans équipe'}</span>
                   <span className="text-xs text-slate-500">
-                    {n('fait')}/{list.length} faits ({pct}%) · {n('non_fait')} non faits · {n('a_faire')} à faire
+                    <b className="text-emerald-700">{n('fait')}</b>/{list.length} faites ({pct}%) · <b className="text-red-700">{n('non_fait')}</b> non faites ·{' '}
+                    <b className="text-sky-700">{n('a_faire')}</b> à faire
                   </span>
-                </div>
-                {peutRenvoyer && n('non_fait') > 0 && renvoi?.cle !== `grp:${equipe}` && (
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
+                </button>
+                <span className="flex flex-wrap items-center gap-1">
+                  {peutRenvoyer && n('non_fait') > 0 && renvoi?.cle !== `grp:${equipe}` && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      icon={<RotateCcw className="w-3.5 h-3.5" />}
+                      onClick={() =>
+                        ouvrirRenvoi(
+                          `grp:${equipe}`,
+                          list.filter((o) => o.statut === 'non_fait').map((o) => o.id),
+                          equipe,
+                        )
+                      }
+                    >
+                      Renvoyer les {n('non_fait')} non faite{n('non_fait') > 1 ? 's' : ''}
+                    </Button>
+                  )}
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    icon={<RotateCcw className="w-3.5 h-3.5" />}
-                    onClick={() =>
-                      ouvrirRenvoi(
-                        `grp:${equipe}`,
-                        list.filter((o) => o.statut === 'non_fait').map((o) => o.id),
-                        equipe,
-                      )
-                    }
+                    icon={<Copy className="w-4 h-4" />}
+                    onClick={() => shareWhatsApp(programmeWhatsApp(equipe, histDate, list.filter((o) => o.statut === 'a_faire')), showToast)}
                   >
-                    Renvoyer les {n('non_fait')} non faite{n('non_fait') > 1 ? 's' : ''}
+                    WhatsApp (à faire)
                   </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={<Copy className="w-4 h-4" />}
-                  onClick={() => shareWhatsApp(programmeWhatsApp(equipe, histDate, list.filter((o) => o.statut === 'a_faire')), showToast)}
-                >
-                  WhatsApp (à faire)
-                </Button>
+                </span>
               </div>
               {renvoi?.cle === `grp:${equipe}` && <div className="px-4 py-2 border-b border-slate-100">{panneauRenvoi(`grp:${equipe}`)}</div>}
               <div className="h-1 bg-slate-100">
                 <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
               </div>
-              {list.map((o) => ficheSuivi(o))}
+              {ouvert && visibles.map((o) => ficheSuivi(o))}
             </Card>
           );
         })}
@@ -1002,13 +1271,7 @@ export default function DistributionPage() {
           fichesActuelles={[...hist, ...enRetard]}
           onSuccess={(msg) => {
             showToast(msg, 'success');
-            Promise.all([
-              fetchProgramme({ from: histDate, to: histDate }),
-              histDate >= todayISO() ? fetchEnRetard(histDate) : Promise.resolve([]),
-            ]).then(([rows, retard]) => {
-              setHist(rows);
-              setEnRetard(retard);
-            });
+            rafraichir();
           }}
         />
       )}
