@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Cable, Check, ClipboardCopy, Copy, Flame, MapPin, Phone, RotateCcw, X } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, applicationIdFiche, estOtAns, fmtTel, ligneLabel } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, applicationIdFiche, estOtAns, fmtTel, hubDe, hubLabel, ligneLabel } from '@/utils/programme';
 import { TypeBadge } from '@/components/ui';
 import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
@@ -134,6 +134,10 @@ export function OtCard({
       <div className="px-4 pb-3 space-y-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {ot.zone && <span className="font-mono text-xs font-bold px-2 py-1 rounded-md bg-blue-50 text-blue-800 border border-blue-200">{ot.zone}</span>}
+          {/* HUB-BOX (1 à 4), d'après le DIS */}
+          {hubDe(ot) && (
+            <span className="text-xs font-black tracking-wide px-2 py-1 rounded-md bg-sky-600 text-white">{hubLabel(hubDe(ot))}</span>
+          )}
           {ot.pco && (
             <span className="text-xs px-2 py-1 rounded-md bg-slate-50 border border-slate-200 text-slate-700">
               PCO <b className="font-mono">{ot.pco}</b>
@@ -292,7 +296,7 @@ function CopyAll({ ot, ip }: { ot: ProgrammeOT; ip?: IpsOT }) {
     ligneLabel(ot),
     ot.clientNom,
     ot.telephones.length ? `Tél : ${ot.telephones.join(' / ')}` : '',
-    ot.dis ? `DIS ${ot.dis}` : '',
+    ot.dis ? `DIS ${ot.dis}${hubDe(ot) ? ` (${hubLabel(hubDe(ot))})` : ''}` : '',
     ot.ontSerials.length ? `ONT ${ot.ontSerials.join(' / ')}` : '',
     ip?.ips ? `IPS ${ip.ips}` : '',
     ip?.ipm ? `IPM ${ip.ipm}` : '',
