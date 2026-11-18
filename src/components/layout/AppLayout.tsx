@@ -66,6 +66,7 @@ const ParametresPage = lazy(() => import('@/pages/ParametresPage'));
 const SurveillancePage = lazy(() => import('@/pages/SurveillancePage'));
 import { DECHARGE_URL } from '@/utils/programme';
 import { useParametresStore } from '@/store/useParametresStore';
+import { villeDeSupervision } from '@/hooks/usePerimetre';
 
 type Page =
   | 'dashboard'
@@ -127,6 +128,7 @@ const RACCORDEMENT_GROUP_SUPERVISEUR: NavGroup = {
   children: [
     { id: 'situations', label: 'Situations' },
     { id: 'distribution', label: 'Distribuer programme' },
+    { id: 'scans', label: 'Scan Réseau' },
     { id: 'import-excel', label: 'Import Excel' },
   ],
 };
@@ -146,6 +148,9 @@ const RH_GROUP: NavGroup = {
 };
 
 const NAV: Record<Role, NavItem[]> = {
+  // Superviseur : partie technique seulement (pas de RH, caisses ni paramètres).
+  // Superviseur régional (ville attribuée dans Paramètres, ex. Nouadhibou) : mêmes pages,
+  // limitées aux équipes et zones de sa ville (tableau de bord général consultable).
   superviseur: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'surveillance', label: 'Surveillance équipes' },
@@ -154,6 +159,7 @@ const NAV: Record<Role, NavItem[]> = {
     { id: 'equipes', label: 'Équipes' },
     DEPLOIEMENT_GROUP,
     { id: 'notifications', label: 'Notifications' },
+    { id: 'profil', label: 'Profil' },
   ],
   // Chef d'équipe : uniquement son programme (fiches OT) + lien vers l'application décharge
   chef: [
@@ -332,9 +338,18 @@ export default function AppLayout() {
   // Barème des points et en-tête du virement (page Paramètres) : chargés avant les pages
   const parametresPrets = useParametresStore((s) => s.pret);
   const chargerParametres = useParametresStore((s) => s.charger);
+  const villesSuperviseurs = useParametresStore((s) => s.reglages.villesSuperviseurs);
+  const toutesEquipes = useAppStore((s) => s.equipes);
   useEffect(() => {
     chargerParametres();
   }, [user.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Superviseur régional : l'équipe de son compte (« SUPERVISION NDB » → Nouadhibou) limite les
+  // équipes et zones qu'il gère ; une ville choisie dans Paramètres l'emporte
+  useEffect(() => {
+    if (!parametresPrets || user.role !== 'superviseur' || toutesEquipes.length === 0) return;
+    const ville = villesSuperviseurs[user.id] ?? villeDeSupervision(user, toutesEquipes);
+    if (ville !== user.villeScope) useAppStore.setState((s) => (s.user ? { user: { ...s.user, villeScope: ville } } : {}));
+  }, [parametresPrets, villesSuperviseurs, toutesEquipes, user]);
   useEffect(() => {
     if (incoming) showToast(`${incoming.titre} — ${incoming.message}`, incoming.type === 'rejetee' ? 'warning' : 'info');
   }, [incoming]); // eslint-disable-line react-hooks/exhaustive-deps

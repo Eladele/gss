@@ -148,10 +148,26 @@ function parseBlock(block: string[]): ParsedOT {
     }
   } else warnings.push('Client introuvable');
 
-  // Téléphones : « Contact dérangement » d'abord (le plus utile), puis GSM/TEL, puis notes du client
+  // Téléphones, du plus utile au moins utile :
+  //   1. « Contact dérangement » : les numéros devant, et ceux des lignes suivantes (sans libellé) ;
+  //   2. SERVICES SUPPLEMENTAIRES (« joinable 44380534 ») ;
+  //   3. TEL / GSM du client et ses notes ; 4. numéros écrits dans l'adresse.
   const iUser = find(/^\s*Utilisateur\s*:/i);
   const zoneContacts = block.slice(Math.max(iClient, 0), iUser > 0 ? iUser : undefined).join('\n');
-  const derLine = block.find((l) => /Contact\s+d[ée]rangement/i.test(l)) ?? '';
+  const iDer = find(/Contact\s+d[ée]rangement/i);
+  const derLines: string[] = [];
+  if (iDer >= 0) {
+    derLines.push(block[iDer].replace(/.*Contact\s+d[ée]rangement\s*:?/i, ''));
+    // suite sur les lignes suivantes, tant qu'aucun nouveau libellé (« Ligne : », « Défaut… ») ne commence
+    for (let i = iDer + 1; i < block.length && i <= iDer + 3; i++) {
+      if (/^\s*[A-Za-zÀ-ÿ'’. ]{3,}\s*[.:]{1,}/.test(block[i]) || /CONSTITUTION|SERVICES/i.test(block[i])) break;
+      derLines.push(block[i]);
+    }
+  }
+  const derLine = derLines.join(' ');
+  const iServ = find(/SERVICES\s+SUPPL/i);
+  const iServFin = iServ >= 0 ? block.findIndex((l, i) => i > iServ && /Articles\s+pr[ée]vus|CONSTITUTION|Mise\s+en\s+service/i.test(l)) : -1;
+  const services = iServ >= 0 ? block.slice(iServ, iServFin > iServ ? iServFin : undefined).join('\n') : '';
 
   // Adresse : de « Adresse d'installation » jusqu'à la constitution / la ligne
   const iAdr = find(/Adresse\s+d.installation/i);
@@ -165,9 +181,15 @@ function parseBlock(block: string[]): ParsedOT {
   }
   const adresse = adr.join(' · ');
   // numéros écrits dans l'adresse (« CONTACT 44469999 ») : ajoutés en dernier (normalisés à 8 chiffres)
-  const normTel = (t: string) => t.replace(/^(?:\+|00)?222[\s.-]?/, '').replace(/\D/g, '');
+  // indicatif 222 / 00222 retiré seulement s'il précède 8 chiffres (22252750 reste 22252750)
+  const normTel = (t: string) => t.replace(/\D/g, '').slice(-8);
   const telephones = uniq(
-    [...(derLine.match(RE_PHONE) ?? []), ...(zoneContacts.match(RE_PHONE) ?? []), ...(adresse.match(RE_PHONE) ?? [])].map(normTel),
+    [
+      ...(derLine.match(RE_PHONE) ?? []),
+      ...(services.match(RE_PHONE) ?? []),
+      ...(zoneContacts.match(RE_PHONE) ?? []),
+      ...(adresse.match(RE_PHONE) ?? []),
+    ].map(normTel),
   ).filter((t) => t !== clientCode && t !== fgp);
   if (!telephones.length) warnings.push('Aucun numéro de téléphone');
 
@@ -204,10 +226,7 @@ function parseBlock(block: string[]): ParsedOT {
   let cableFibreM: number | null = null;
   if (!isDer) {
     const art = text.match(/C[aâ]ble\s+(?:de\s+)?fibre\s+o\w*\s+(\d{1,4})\b/i);
-    const iServ = find(/SERVICES\s+SUPPL/i);
-    const iFin = find(/CONSTITUTION|Mise\s+en\s+service/i);
-    const serv = iServ >= 0 ? block.slice(iServ, iFin > iServ ? iFin : undefined).join('\n') : '';
-    const met = serv.match(/(?<![\d/])(\d{1,4})\s*(?:m[eè]tres?|ml|m)\b/i);
+    const met = services.match(/(?<![\d/])(\d{1,4})\s*(?:m[eè]tres?|ml|m)\b/i);
     const v = Number(art?.[1] ?? met?.[1]);
     cableFibreM = v > 0 ? v : null;
   }

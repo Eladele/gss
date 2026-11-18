@@ -387,6 +387,19 @@ export async function retarder(ids: string[], date: string, opts: { par?: Par; p
   return Number(data) || 0;
 }
 
+/** Toutes les fiches encore ouvertes (en cours), quel que soit le jour de leur programme */
+export async function fetchFichesOuvertes(): Promise<ProgrammeOT[]> {
+  const { data, error } = await supabase
+    .from(VUE)
+    .select('*')
+    .not('numero_ot', 'is', null)
+    .in('status', OUVERT)
+    .order('echeance_equipe', { ascending: true, nullsFirst: false })
+    .limit(2000);
+  if (error) throw dbError(error, 'Chargement des fiches en cours impossible');
+  return (data ?? []).map(mapOt);
+}
+
 /** Fiches encore ouvertes dont l'échéance d'équipe est AVANT ce jour (non traitées à 22 h) */
 export async function fetchEnRetard(avant: string): Promise<ProgrammeOT[]> {
   const { data, error } = await supabase
@@ -493,8 +506,29 @@ export async function affecterUrgent(
   }
 }
 
+/**
+ * Ajoute un contact à une ligne après la distribution : le numéro passe en premier, il apparaît
+ * sur toutes les fiches de ce FGP (chef d'équipe compris). Renvoie la nouvelle liste.
+ */
+export async function ajouterContact(fgp: string, tel: string): Promise<string[]> {
+  const d = tel.replace(/\D/g, '');
+  const t = /^(?:00)?222\d{8}$/.test(d) ? d.slice(-8) : d; // 22252750 reste tel quel
+  if (!/^[234]\d{7}$/.test(t)) throw new Error('Numéro invalide : 8 chiffres commençant par 2, 3 ou 4');
+  const { data, error } = await supabase.from('lignes').select('id, telephones').eq('fgp', fgp.trim()).maybeSingle();
+  if (error) throw dbError(error, 'Lecture de la ligne impossible');
+  if (!data) throw new Error(`Ligne ${fgp} introuvable`);
+  const telephones = [t, ...((data.telephones as string[] | null) ?? []).filter((x) => x !== t)];
+  const { error: e2 } = await supabase.from('lignes').update({ telephones }).eq('id', data.id);
+  if (e2) throw dbError(e2, 'Ajout du contact impossible');
+  return telephones;
+}
+
 export interface OtUrgentInput {
   nature: 'derangement' | 'installation';
+  typeLigne?: 'FGP' | 'TPH';
+  sousType?: string;
+  defaut?: string;
+  abonnement?: string;
   numeroOt?: string;
   fgp: string;
   clientNom?: string;
@@ -526,12 +560,13 @@ export async function creerEtAffecterOtUrgent(input: OtUrgentInput, par: Par): P
       {
         fgp,
         zone: input.zone.trim(),
-        typeLigne: 'FGP',
+        typeLigne: input.typeLigne ?? 'FGP',
         dis: disVal,
         clientNom: input.clientNom?.trim(),
         clientCode: input.clientCode?.trim(),
         telephones: input.telephones?.filter(Boolean),
         adresse: input.adresse?.trim(),
+        abonnement: input.abonnement?.trim() || undefined,
       },
     ]),
     teamIdFor(input.equipe),
@@ -568,6 +603,8 @@ export async function creerEtAffecterOtUrgent(input: OtUrgentInput, par: Par): P
         date_recu: dateProg,
         ont_id: ontId,
         cable_fibre_m: input.cableFibreM ?? null,
+        ...(input.sousType ? { sous_type: input.sousType } : {}),
+        ...(input.defaut ? { defaut: input.defaut } : {}),
         distribue_par: par.id,
         assigne_le: now,
         updated_at: now,
@@ -598,6 +635,8 @@ export async function creerEtAffecterOtUrgent(input: OtUrgentInput, par: Par): P
         poteau: 0,
         ont_id: ontId,
         cable_fibre_m: input.cableFibreM ?? null,
+        sous_type: input.sousType ?? '',
+        defaut: input.defaut ?? '',
         distribue_par: par.id,
         assigne_le: now,
         cree_par_ot: true,
@@ -622,16 +661,60 @@ export async function creerEtAffecterOtUrgent(input: OtUrgentInput, par: Par): P
   return mapOt(row);
 }
 
-/** Recherche rapide de fiches pour affectation urgente */
+/**
+ * Cas urgent à partir d'une fiche de l'historique (déjà faite, non faite, ou d'une autre nature) :
+ * nouvel OT urgent avec toute la fiche (client, contacts, adresse, DIS, ONT, câble…). La fiche
+ * d'origine garde sa clôture. `nature` permet par ex. un dérangement sur une ancienne installation.
+ */
+export async function urgentDepuisFiche(
+  o: ProgrammeOT,
+  opts: { nature: ProgrammeOT['nature']; equipe: string; dateProgramme: string; motif?: string },
+  par: Par,
+): Promise<ProgrammeOT> {
+  const heure = new Date().toISOString().slice(11, 16).replace(':', '');
+  return creerEtAffecterOtUrgent(
+    {
+      nature: opts.nature,
+      numeroOt: `URG-${opts.dateProgramme.replace(/-/g, '')}${heure}-${o.fgp}`,
+      typeLigne: o.typeLigne,
+      // même nature : même type d'OT (CPL, ANS…) ; sinon DRG / CPL par défaut
+      typeOt: opts.nature === o.nature ? o.typeOt || undefined : undefined,
+      sousType: opts.nature === o.nature ? o.sousType : undefined,
+      defaut: opts.nature === 'derangement' ? o.defaut || undefined : undefined,
+      abonnement: o.abonnement,
+      fgp: o.fgp,
+      clientNom: o.clientNom,
+      clientCode: o.clientCode,
+      telephones: o.telephones,
+      adresse: o.adresse,
+      zone: o.zone,
+      dis: o.dis || undefined,
+      pco: o.pco,
+      port: o.port,
+      ontSerial: o.ontSerials[0],
+      cableFibreM: opts.nature === 'installation' ? o.cableFibreM : null,
+      motif: opts.motif,
+      equipe: opts.equipe,
+      dateProgramme: opts.dateProgramme,
+    },
+    par,
+  );
+}
+
+/**
+ * Recherche pour un cas urgent dans tout l'historique (fiches OT et situations) : FGP, compte
+ * client, nom du client, n° d'OT ou zone — fiches ouvertes comme clôturées.
+ */
 export async function rechercherFichesProgramme(recherche: string): Promise<ProgrammeOT[]> {
-  const term = recherche.trim();
+  // virgules / parenthèses : réservées par la syntaxe « or » de PostgREST
+  const term = recherche.replace(/[,()*%\\]/g, ' ').trim();
   if (!term) return [];
   const { data, error } = await supabase
     .from(VUE)
     .select('*')
-    .or(`fgp.ilike.%${term}%,numero_ot.ilike.%${term}%,client_nom.ilike.%${term}%,zone.ilike.%${term}%`)
-    .order('date_programme', { ascending: false })
-    .limit(20);
+    .or(`fgp.ilike.%${term}%,client_code.ilike.%${term}%,numero_ot.ilike.%${term}%,client_nom.ilike.%${term}%,zone.ilike.%${term}%`)
+    .order('date_programme', { ascending: false, nullsFirst: false })
+    .limit(30);
   if (error) throw dbError(error, 'Recherche impossible');
   return (data ?? []).map(mapOt);
 }
@@ -655,17 +738,16 @@ export async function rechercherProgramme(recherche: string): Promise<ProgrammeO
   return (data ?? []).map(mapOt);
 }
 
-/** Fiches « non faites » des jours précédant `avant` (depuis `depuis`) : à renvoyer le jour suivant */
-export async function fetchNonFaitesARenvoyer(avant: string, depuis: string): Promise<ProgrammeOT[]> {
-  const { data, error } = await supabase
+/** Fiches « non faites » encore à renvoyer, programmées depuis `depuis` (et avant `avant` si donné) */
+export async function fetchNonFaitesARenvoyer(depuis: string, avant?: string): Promise<ProgrammeOT[]> {
+  let q = supabase
     .from(VUE)
     .select('*')
     .not('numero_ot', 'is', null)
     .eq('status', versStatus.non_fait)
-    .gte('date_programme', depuis)
-    .lt('date_programme', avant)
-    .order('date_programme', { ascending: false })
-    .limit(1000);
+    .gte('date_programme', depuis);
+  if (avant) q = q.lt('date_programme', avant);
+  const { data, error } = await q.order('date_programme', { ascending: false }).limit(1000);
   if (error) throw dbError(error, 'Chargement des fiches non faites impossible');
   return (data ?? []).map(mapOt);
 }

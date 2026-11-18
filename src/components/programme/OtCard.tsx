@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Cable, Check, ClipboardCopy, Copy, Flame, MapPin, Phone, RotateCcw, X } from 'lucide-react';
 import type { ProgrammeOT } from '@/types';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, TYPE_OT_LABEL, applicationIdFiche, estOtAns, fmtTel, hubDe, hubLabel, ligneLabel } from '@/utils/programme';
+import { AjoutContact } from '@/components/programme/AjoutContact';
 import { TypeBadge } from '@/components/ui';
 import { ETAT_DELAI, POINTS, delaiOT, fmtPts, jourCourt, motPoint, ptsTexte } from '@/utils/points';
 import type { SituationType } from '@/types';
@@ -54,7 +55,10 @@ export function OtCard({
   onReclamer,
   historique,
   ip,
+  onAjouterContact,
 }: {
+  /** ajouter un contact à la ligne (après la distribution) */
+  onAjouterContact?: (tel: string) => Promise<void>;
   /** OT Réseau (ANS…) : adresses IPS / IPM de la constitution */
   ip?: IpsOT;
   /** motifs passés (fiche déjà « non faite » puis renvoyée) */
@@ -127,11 +131,12 @@ export function OtCard({
       </div>
 
       {/* Appeler le client */}
-      {ot.telephones.length > 0 && (
-        <div className="px-4 pb-2 flex flex-wrap gap-2">
+      {(ot.telephones.length > 0 || onAjouterContact) && (
+        <div className="px-4 pb-2 flex flex-wrap items-center gap-2">
           {ot.telephones.map((t) => (
             <PhoneChip key={t} tel={t} />
           ))}
+          {onAjouterContact && <AjoutContact onAjouter={onAjouterContact} />}
         </div>
       )}
 

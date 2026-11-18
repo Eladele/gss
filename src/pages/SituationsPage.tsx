@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { getEquipeColor } from '@/utils';
 import { calcDelai, isHorsDelai, countPoteaux, MERGED_TYPES, addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
 import ExcelJS from 'exceljs';
@@ -27,6 +28,8 @@ import { errMsg } from '@/utils';
 export default function SituationsPage() {
   const situations = useAppStore((s) => s.situations);
   const equipes = useAppStore((s) => s.equipes);
+  // superviseur régional : seulement les équipes de sa ville dans les listes (filtre et réaffectation)
+  const { equipes: equipesPerimetre } = usePerimetre();
   const scans = useAppStore((s) => s.scans);
   const loadScans = useAppStore((s) => s.loadScans);
   const user = useAppStore((s) => s.user)!;
@@ -561,7 +564,7 @@ export default function SituationsPage() {
           <span className="col-span-2 text-sm font-semibold text-blue-800">{selectedIds.size} sélectionnée(s)</span>
           <Select value={bulkEquipe} onChange={(e) => setBulkEquipe(e.target.value)} className="w-full sm:w-auto min-w-0">
             <option value="">Réaffecter à...</option>
-            {equipes.map((e) => (
+            {equipesPerimetre.map((e) => (
               <option key={e.id} value={e.name}>
                 {e.name}
               </option>
@@ -617,7 +620,7 @@ export default function SituationsPage() {
             </Select>
             <Select value={fEquipe} onChange={(e) => setFEquipe(e.target.value)} className="w-full md:w-auto min-w-0">
               <option value="">Toutes équipes</option>
-              {equipes.map((e) => (
+              {equipesPerimetre.map((e) => (
                 <option key={e.id} value={e.name}>
                   {e.name}
                 </option>
@@ -998,7 +1001,7 @@ export default function SituationsPage() {
             </label>
             <Select className="w-full" value={fgpEquipe} onChange={(e) => setFgpEquipe(e.target.value)}>
               <option value="">Auto (par zone)</option>
-              {equipes.map((e) => (
+              {equipesPerimetre.map((e) => (
                 <option key={e.id} value={e.name}>
                   {e.name} — {e.leader}
                 </option>

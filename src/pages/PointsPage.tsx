@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, Download, SearchCheck, Trophy, Undo2 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { Button, Card, useToast } from '@/components/ui';
 import {
   annulerPenalite,
@@ -35,7 +36,8 @@ function range(p: Preset, from: string, to: string): { from: string; to: string 
 const MEDAL = ['bg-amber-400 text-amber-950', 'bg-slate-300 text-slate-800', 'bg-orange-300 text-orange-950'];
 
 export default function PointsPage() {
-  const equipes = useAppStore((s) => s.equipes);
+  // superviseur régional : seulement les équipes et fiches de sa ville
+  const { equipes, ficheOk, equipeOk } = usePerimetre();
   const user = useAppStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
   const peutSignaler = peutSignalerFauxOk(user?.role);
@@ -57,7 +59,8 @@ export default function PointsPage() {
     const load = () =>
       Promise.all([fetchPourPoints(from, to), fetchPenalites(from, to), fetchCloturesAVerifier()])
         .then(
-          ([rows, pens, av]) => alive && (setOts(rows), setPenalites(pens), setAVerifier(av), setError('')),
+          ([rows, pens, av]) =>
+            alive && (setOts(rows.filter(ficheOk)), setPenalites(pens.filter((p) => equipeOk(p.equipe))), setAVerifier(av.filter(ficheOk)), setError('')),
           (e) => alive && setError(errMsg(e)),
         )
         .finally(() => alive && setLoaded(true));
@@ -68,7 +71,7 @@ export default function PointsPage() {
       alive = false;
       unsub();
     };
-  }, [from, to]);
+  }, [from, to, ficheOk, equipeOk]);
 
   const scoped = useMemo(() => ots.filter((o) => nature === 'all' || o.nature === nature), [ots, nature]);
   const pensScoped = useMemo(() => penalites.filter((p) => nature === 'all' || p.nature === nature), [penalites, nature]);
@@ -81,8 +84,8 @@ export default function PointsPage() {
       await signalerFauxOk(c.id, user, motif, note);
       // la fiche est rouverte (nouvelle échéance) et la pénalité est créée : on recharge
       const [rows2, pens2] = await Promise.all([fetchPourPoints(from, to), fetchPenalites(from, to)]);
-      setOts(rows2);
-      setPenalites(pens2);
+      setOts(rows2.filter(ficheOk));
+      setPenalites(pens2.filter((p) => equipeOk(p.equipe)));
       setAVerifier((cur) => cur.filter((x) => x.id !== c.id));
       showToast(`${ligneLabel(c)} : faux OK (${libelleFauxOk(motif, note)}) — ${fmtPts(POINTS.penalites.faux_ok)} pt pour ${c.equipe}, fiche rouverte`, 'warning');
     } catch (e) {

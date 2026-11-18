@@ -14,10 +14,10 @@
 // Pénalités (enregistrées par la base, table penalites) : −1 par fiche ni faite ni « non faite »
 // au contrôle de 22 h une fois son échéance arrivée (et à chaque contrôle suivant), −1 quand une
 // fiche ouverte est retardée. Réaffecter avant l'échéance ne pénalise pas.
-import { DELAI_THRESHOLD_DRG, DELAI_THRESHOLD_INSTALLATION, PUBLIC_HOLIDAYS } from '@/utils/stats';
+import { DELAI_THRESHOLD_DRG, DELAI_THRESHOLD_INSTALLATION, HOLIDAY_SET as HOLIDAYS } from '@/utils/stats';
 import { estMotifLeger, estMotifReseau, estMotifSansPoint } from '@/utils/programme';
 import type { Penalite, ProgrammeOT } from '@/types';
-import { BAREME_DEFAUT, type Bareme } from '@/lib/parametresService';
+import { BAREME_DEFAUT, REGLAGES_DEFAUT, type Bareme } from '@/lib/parametresService';
 
 /**
  * Barème en vigueur — modifiable par l'administrateur (page Paramètres, enregistré dans la base).
@@ -72,7 +72,6 @@ export const motPoint = (n: number) => (Math.abs(n) > 1 ? 'points' : 'point');
 export const ptsTexte = (n: number) => `${fmtPts(Math.abs(n))} point${Math.abs(n) > 1 ? 's' : ''}`;
 
 const DAY = 86400000;
-const HOLIDAYS = new Set(PUBLIC_HOLIDAYS);
 const isNonOuvre = (ms: number) => {
   const d = new Date(ms);
   return d.getUTCDay() === 0 || HOLIDAYS.has(d.toISOString().slice(0, 10));
@@ -134,8 +133,17 @@ export function jourRemise(assigneLe: string | null | undefined, dateProgramme: 
 /** Prochain jour ouvré après « iso » (dimanche et jours fériés sautés) : le jour d'un programme « de demain » */
 export const jourOuvreSuivant = (iso: string) => ajouterJoursOuvres(iso, 1);
 
-/** Heure à partir de laquelle la distribution propose le programme du lendemain (distribution du soir) */
-export const HEURE_PROGRAMME_SOIR = 16;
+/**
+ * Réglages du programme (page Paramètres) :
+ *   • heureSoir : à partir de cette heure, la distribution propose le programme du lendemain ;
+ *   • joursNonFaites : fiches « non faites » des N derniers jours proposées au renvoi.
+ */
+export const REGLAGES_PROGRAMME = {
+  heureSoir: REGLAGES_DEFAUT.heureProgrammeSoir,
+  joursNonFaites: REGLAGES_DEFAUT.joursNonFaites,
+};
+/** Distribution du soir : on prépare le programme du lendemain */
+export const estSoir = (d = new Date()) => d.getHours() >= REGLAGES_PROGRAMME.heureSoir;
 
 /**
  * Fiche distribuée d'avance (le soir pour le lendemain) : son jour de remise est après « jour ».

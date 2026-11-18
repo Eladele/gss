@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { AlertCircle, AlertTriangle, Cable, Check, Flame, Plus, Search, Wrench } from 'lucide-react';
 import { Button, Modal, Select } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, ligneLabel } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel } from '@/utils/programme';
 import {
   affecterUrgent,
   creerEtAffecterOtUrgent,
   rechercherFichesProgramme,
+  urgentDepuisFiche,
   type OtUrgentInput,
 } from '@/lib/programmeService';
 import { errMsg } from '@/utils';
@@ -43,6 +44,10 @@ export function AffecterUrgentModal({
   const [targetEquipe, setTargetEquipe] = useState('');
   const [targetDate, setTargetDate] = useState(today);
   const [urgentMotif, setUrgentMotif] = useState('');
+  // nature du cas urgent : celle de la fiche par défaut (ex. dérangement sur une ancienne installation)
+  const [urgentNature, setUrgentNature] = useState<ProgrammeOT['nature']>('derangement');
+  /** fiche close (faite / non faite) ou nature changée : nouvel OT urgent, l'ancienne fiche garde sa clôture */
+  const nouvelOt = !!selectedFiche && (selectedFiche.statut !== 'a_faire' || urgentNature !== selectedFiche.nature);
 
   // Recherche dans les fiches actuelles ou via la base
   useEffect(() => {
@@ -67,6 +72,7 @@ export function AffecterUrgentModal({
     const locaux = fichesActuelles.filter(
       (f) =>
         f.fgp.toLowerCase().includes(q) ||
+        f.clientCode.toLowerCase().includes(q) ||
         f.numeroOt.toLowerCase().includes(q) ||
         f.clientNom.toLowerCase().includes(q) ||
         f.zone.toLowerCase().includes(q) ||
@@ -95,8 +101,9 @@ export function AffecterUrgentModal({
   const handleSelectFiche = (f: ProgrammeOT) => {
     setSelectedFiche(f);
     setTargetEquipe(f.equipe || '');
-    setTargetDate(f.dateProgramme || today);
-    setUrgentMotif(f.motif || '');
+    setTargetDate(f.statut === 'a_faire' ? f.dateProgramme || today : today);
+    setUrgentMotif(f.statut === 'a_faire' ? f.motif || '' : '');
+    setUrgentNature(f.nature);
   };
 
   const handleConfirmExistant = async () => {
@@ -105,13 +112,23 @@ export function AffecterUrgentModal({
     setLoading(true);
     setError('');
     try {
-      await affecterUrgent(selectedFiche.id, targetEquipe, {
-        dateProgramme: targetDate,
-        isUrgent: true,
-        par: user,
-        motif: urgentMotif.trim() || undefined,
-      });
-      onSuccess(`Fiche ${ligneLabel(selectedFiche)} affectée en cas urgent à l’équipe ${targetEquipe}`);
+      if (nouvelOt) {
+        // toute la fiche reprise (client, contacts, adresse, DIS, ONT…) dans un nouvel OT urgent
+        await urgentDepuisFiche(
+          selectedFiche,
+          { nature: urgentNature, equipe: targetEquipe, dateProgramme: targetDate, motif: urgentMotif.trim() || undefined },
+          user,
+        );
+        onSuccess(`Cas urgent (${NATURE_LABEL[urgentNature]}) créé depuis ${ligneLabel(selectedFiche)} avec l’OT complet, affecté à ${targetEquipe}`);
+      } else {
+        await affecterUrgent(selectedFiche.id, targetEquipe, {
+          dateProgramme: targetDate,
+          isUrgent: true,
+          par: user,
+          motif: urgentMotif.trim() || undefined,
+        });
+        onSuccess(`Fiche ${ligneLabel(selectedFiche)} affectée en cas urgent à l’équipe ${targetEquipe}`);
+      }
       onClose();
     } catch (e) {
       setError(errMsg(e));
@@ -241,7 +258,7 @@ export function AffecterUrgentModal({
           <div className="space-y-3">
             <div>
               <label htmlFor="search-fiche" className="block text-xs font-semibold text-slate-600 mb-1">
-                Rechercher la fiche dans le programme
+                Rechercher dans l’historique du programme (FGP, compte client…)
               </label>
               <div className="relative">
                 <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
@@ -250,7 +267,7 @@ export function AffecterUrgentModal({
                   type="text"
                   value={search}
                   onChange={(e) => handleSearch(e.target.value)}
-                  placeholder="Rechercher par FGP, n° OT, client, zone..."
+                  placeholder="FGP, compte client, nom, n° OT, zone…"
                   className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:border-orange-500"
                 />
               </div>
@@ -284,8 +301,12 @@ export function AffecterUrgentModal({
                             {f.clientNom && <span className="text-xs text-slate-600 truncate">{f.clientNom}</span>}
                           </div>
                           <p className="text-[11px] text-slate-500 mt-0.5">
+                            {f.clientCode && `Compte ${f.clientCode} · `}
                             {f.zone && `Zone ${f.zone} · `}
-                            Équipe : <span className="font-semibold text-slate-700">{f.equipe || 'Sans équipe'}</span> · Statut : {f.statut}
+                            {f.dateProgramme && `${f.dateProgramme.split('-').reverse().join('/')} · `}
+                            Équipe : <span className="font-semibold text-slate-700">{f.equipe || 'Sans équipe'}</span> ·{' '}
+                            <span className={`px-1 rounded border ${STATUT_OT[f.statut].cls}`}>{STATUT_OT[f.statut].label}</span>
+                            {f.motif && f.statut !== 'a_faire' && <> · {f.motif}</>}
                           </p>
                         </div>
                         {isSelected && <Check className="w-4 h-4 text-orange-600 flex-shrink-0" />}
@@ -306,6 +327,48 @@ export function AffecterUrgentModal({
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${NATURE_CLASS[selectedFiche.nature]}`}>
                     {NATURE_LABEL[selectedFiche.nature]}
                   </span>
+                </div>
+
+                {/* OT complet repris */}
+                <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] bg-white/70 rounded-md p-2 border border-orange-100">
+                  {(
+                    [
+                      ['Client', `${selectedFiche.clientNom || '—'}${selectedFiche.clientCode ? ` (${selectedFiche.clientCode})` : ''}`],
+                      ['Contacts', selectedFiche.telephones.map(fmtTel).join(' / ') || '—'],
+                      ['Zone · DIS', `${selectedFiche.zone || '?'} · ${selectedFiche.dis || '—'}`],
+                      ['ONT', selectedFiche.ontSerials.join(' / ') || '—'],
+                      ['Adresse', selectedFiche.adresse || '—'],
+                      ['OT', `${selectedFiche.numeroOt || '—'} · ${selectedFiche.sousType || selectedFiche.typeOt || ''}`],
+                    ] as const
+                  ).map(([k, v]) => (
+                    <div key={k} className="min-w-0">
+                      <dt className="text-slate-400 font-semibold">{k}</dt>
+                      <dd className="text-slate-800 truncate" title={v}>
+                        {v}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+
+                <div>
+                  <span className="block font-semibold text-slate-700 mb-1 text-xs">Nature du cas urgent</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['derangement', 'installation'] as const).map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setUrgentNature(n)}
+                        className={`py-1.5 rounded-lg border text-xs font-bold ${urgentNature === n ? 'border-orange-500 bg-orange-100 text-orange-900' : 'border-slate-200 bg-white text-slate-600'}`}
+                      >
+                        {NATURE_LABEL[n]}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-orange-800 mt-1">
+                    {nouvelOt
+                      ? 'Un nouvel OT urgent est créé avec toute la fiche (client, contacts, adresse, DIS, ONT) ; la fiche d’origine garde sa clôture.'
+                      : 'La fiche en cours passe en cas urgent chez l’équipe choisie.'}
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">

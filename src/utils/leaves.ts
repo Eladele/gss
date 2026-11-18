@@ -152,7 +152,8 @@ function buildCaisseSheet(
   for (let i = 0; i < 6; i++) ws.addRow([]);
 
   // Siège / RC / NIF
-  [SOCIETE.siege, SOCIETE.rc, SOCIETE.nif].forEach((txt) => {
+  // lignes supprimées dans Paramètres (vides) : non reprises
+  [SOCIETE.siege, SOCIETE.rc, SOCIETE.nif].filter((txt) => txt.trim()).forEach((txt) => {
     const r = ws.addRow(['', txt.trim()]);
     r.getCell(2).font = T(12);
   });
@@ -275,16 +276,21 @@ function buildVirementSheet(
   ws.getRow(6).height = 6;
 
   // ── Bloc en-tête société — fond teinté, filet gauche coloré ──────────
-  const rSiege = ws.addRow([SOCIETE.siege]);
-  const rRc = ws.addRow([SOCIETE.rc]);
-  const rNif = ws.addRow([SOCIETE.nif]);
-  [rSiege, rRc, rNif].forEach((r, idx) => {
-    for (let c = 1; c <= lastCol; c++) {
-      r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.infoFill } };
-    }
-    r.getCell(1).border = { left: MEDIUM };
-    r.getCell(1).font = idx === 2 ? { name: 'Calibri', size: 12, bold: true } : { name: 'Calibri', size: 12 };
-  });
+  // lignes supprimées dans Paramètres (vides) : non reprises ; le NIF reste en gras
+  [
+    { txt: SOCIETE.siege, gras: false },
+    { txt: SOCIETE.rc, gras: false },
+    { txt: SOCIETE.nif, gras: true },
+  ]
+    .filter((l) => l.txt.trim())
+    .forEach((l) => {
+      const r = ws.addRow([l.txt]);
+      for (let c = 1; c <= lastCol; c++) {
+        r.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLOR.infoFill } };
+      }
+      r.getCell(1).border = { left: MEDIUM };
+      r.getCell(1).font = { name: 'Calibri', size: 12, bold: l.gras };
+    });
 
   const rBlank1 = ws.addRow([]);
   rBlank1.height = 6;

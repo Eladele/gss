@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, EmptyState, useToast } from '@/components/ui';
 import { errMsg } from '@/utils';
 import type { NoeudReseau, TypeNoeudReseau } from '@/types';
@@ -208,7 +209,10 @@ const emptyForm = {
 };
 
 export default function ReseauPage() {
-  const chantiers = useAppStore((s) => s.chantiers);
+  const tousChantiers = useAppStore((s) => s.chantiers);
+  // superviseur régional : seulement les chantiers (zones) de sa ville
+  const { chantierOk } = usePerimetre();
+  const chantiers = useMemo(() => tousChantiers.filter(chantierOk), [tousChantiers, chantierOk]);
   const reseauNoeuds = useAppStore((s) => s.reseauNoeuds);
   const loadChantiers = useAppStore((s) => s.loadChantiers);
   const loadReseauNoeuds = useAppStore((s) => s.loadReseauNoeuds);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ExcelJS from 'exceljs';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { Card, CardHeader, CardTitle, Button, Select, StatCard, EmptyState, useToast, BtnDelete } from '@/components/ui';
 import { TrendArea } from '@/components/charts';
 import { addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
@@ -131,8 +132,10 @@ async function parseScanExcelFile(file: File): Promise<Partial<ScanRecord>[]> {
 }
 
 export default function ScansPage() {
-  const scans = useAppStore((s) => s.scans);
-  const equipes = useAppStore((s) => s.equipes);
+  const tousScans = useAppStore((s) => s.scans);
+  // superviseur régional : seulement les zones des équipes de sa ville
+  const { equipes, zoneOk } = usePerimetre();
+  const scans = useMemo(() => tousScans.filter((s) => zoneOk(s.zone)), [tousScans, zoneOk]);
   const loadScans = useAppStore((s) => s.loadScans);
   const importScans = useAppStore((s) => s.importScans);
   const scanHistory = useAppStore((s) => s.scanHistory);

@@ -92,7 +92,14 @@ export const PUBLIC_HOLIDAYS: string[] = [
   '2030-05-03', // Nouvel An musulman (approx.)
   '2030-07-12', // Mawlid (approx.)
 ];
-const HOLIDAY_SET = new Set(PUBLIC_HOLIDAYS);
+/** Jours fériés en vigueur : la liste ci-dessus + ceux ajoutés dans Paramètres (appliquerJoursFeries) */
+export const HOLIDAY_SET = new Set(PUBLIC_HOLIDAYS);
+let feriesAjoutes: string[] = [];
+export function appliquerJoursFeries(jours: string[]) {
+  feriesAjoutes.forEach((j) => !PUBLIC_HOLIDAYS.includes(j) && HOLIDAY_SET.delete(j));
+  feriesAjoutes = [...jours];
+  feriesAjoutes.forEach((j) => HOLIDAY_SET.add(j));
+}
 
 function isNonOuvre(dateMs: number): boolean {
   const d = new Date(dateMs);

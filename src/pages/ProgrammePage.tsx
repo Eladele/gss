@@ -11,6 +11,7 @@ import {
   fetchReclamations,
   fetchHistoriqueClotures,
   fetchIpsOts,
+  ajouterContact,
   type ClotureArchivee,
   type IpsOT,
   fetchScanOts,
@@ -360,6 +361,20 @@ function FichesOT() {
                     onFait={() => setSheet({ ot: o, mode: 'fait' })}
                     onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}
                     onReset={() => change(o, { statut: 'a_faire' })}
+                    onAjouterContact={
+                      o.fgp && o.statut === 'a_faire'
+                        ? async (tel) => {
+                            try {
+                              const telephones = await ajouterContact(o.fgp, tel);
+                              setOts((cur) => cur.map((x) => (x.fgp === o.fgp ? { ...x, telephones } : x)));
+                              showToast(`Contact ${tel} ajouté à ${ligneLabel(o)}`, 'success');
+                            } catch (e) {
+                              showToast(errMsg(e), 'error');
+                              throw e;
+                            }
+                          }
+                        : undefined
+                    }
                     reclamation={reclamations.get(o.id)}
                     historique={historique.get(o.id)}
                     ip={o.numeroOt ? ips.get(o.numeroOt) : undefined}

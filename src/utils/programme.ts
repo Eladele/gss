@@ -60,6 +60,8 @@ export const MOTIFS_NON_FAIT: MotifDef[] = [
   { label: 'Besoin poteau', poteaux: 1, installation: true },
   { label: 'Besoin 2 poteaux', poteaux: 2, installation: true },
   { label: 'Le modem n’est pas en place', installation: true },
+    { label: 'ligne tiré, Le modem n’est pas en place', installation: true },
+
   { label: 'Ligne tirée, pas d’électricité', installation: true },
   { label: 'Ligne tirée, ne synchronise pas', installation: true },
   { label: 'Le modem n’est pas la copie conforme', installation: true },

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { Card, CardHeader, Button, Modal, Select, Input, EmptyState, StatCard, ProgressBar, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import { errMsg } from '@/utils';
 import { parseAvancementExcel, parseKmlOrKmz, type AvancementParsed, type KmlParsed } from '@/utils/deploiementImport';
@@ -101,8 +102,10 @@ function MetricRow({ label, fait, prevu, unite = '' }: { label: string; fait: nu
 }
 
 export default function DeploiementPage() {
-  const chantiers = useAppStore((s) => s.chantiers);
-  const equipes = useAppStore((s) => s.equipes);
+  const tousChantiers = useAppStore((s) => s.chantiers);
+  // superviseur régional : seulement les chantiers et équipes de sa ville
+  const { equipes, chantierOk } = usePerimetre();
+  const chantiers = useMemo(() => tousChantiers.filter(chantierOk), [tousChantiers, chantierOk]);
   const loadChantiers = useAppStore((s) => s.loadChantiers);
   const addChantier = useAppStore((s) => s.addChantier);
   const editChantier = useAppStore((s) => s.editChantier);

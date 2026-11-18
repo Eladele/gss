@@ -29,6 +29,7 @@ import { exporterStatsDelais, fr } from '@/utils/rapportPdf';
 import {
   ANNEES_SELECT,
   MOIS_FR,
+  dansPeriodeClassement,
   dateRef,
   firstOfMonthStr,
   matchesNature,
@@ -79,7 +80,14 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
   const [customTo, setCustomTo] = useState(todayStr());
   const [fEquipe, setFEquipe] = useState('');
   // ville verrouillée pour un superviseur régional (villeScope)
+  // superviseur régional : sa ville d'abord, le tableau de bord général reste consultable
   const [fVille, setFVille] = useState(user.villeScope ?? '');
+  const [villeVue, setVilleVue] = useState(user.villeScope);
+  if (villeVue !== user.villeScope) {
+    // ville attribuée après l'ouverture (paramètres chargés) : on la présélectionne
+    setVilleVue(user.villeScope);
+    setFVille(user.villeScope ?? '');
+  }
   const [pdfEnCours, setPdfEnCours] = useState<'villes' | 'equipes' | null>(null);
 
   const period: PeriodFilter = useMemo(
@@ -152,7 +160,11 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
     setPdfEnCours(mode);
     try {
       await exporterStatsDelais(
-        { situations: scopedAll, periode: periodePdf, du: period.from, au: period.to, equipes: equipesFiltrees, villeDe, filtres: mode === 'villes' ? (fVille ? `ville ${fVille}` : '') : filtresTexte, auteur: user.name },
+        {
+          // classement des équipes : une fiche ouverte compte tant que la période contient aujourd'hui,
+          // une fiche close compte au jour de sa clôture (voir dansPeriodeClassement)
+          situations: mode === 'equipes' ? scopedSansPeriode.filter((s) => dansPeriodeClassement(s, period)) : scopedAll,
+          periode: periodePdf, du: period.from, au: period.to, equipes: equipesFiltrees, villeDe, filtres: mode === 'villes' ? (fVille ? `ville ${fVille}` : '') : filtresTexte, auteur: user.name },
         mode,
       );
     } catch (e) {
@@ -251,10 +263,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
             value={fVille}
             onChange={(e) => setFVille(e.target.value)}
             className="w-full md:w-auto min-w-0"
-            disabled={!!user.villeScope}
-            title={user.villeScope ? `Restreint à ${user.villeScope}` : undefined}
+            title={user.villeScope ? `Votre ville : ${user.villeScope} — « Toutes villes » pour le tableau de bord général` : undefined}
           >
-            <option value="">Toutes villes</option>
+            <option value="">{user.villeScope ? 'Toutes villes (général)' : 'Toutes villes'}</option>
             {villes.map((v) => (
               <option key={v} value={v}>
                 {v}

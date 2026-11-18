@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { ProgressBar, ZoneChip, EmptyState, Modal, Button, Input, BtnEdit, BtnDelete } from '@/components/ui';
 import { ETAT_MATERIEL_LABELS, ETAT_MATERIEL_STYLES } from '@/data';
 import type { Equipe } from '@/types';
 
 const VILLES = ['Nouakchott', 'Kaédi', 'Rosso', 'Nouadhibou'];
 
-function EquipeFormModal({ open, onClose, editing }: { open: boolean; onClose: () => void; editing: Equipe | null }) {
+function EquipeFormModal({ open, onClose, editing, villeImposee }: { open: boolean; onClose: () => void; editing: Equipe | null; villeImposee?: string }) {
   const addEquipe = useAppStore((s) => s.addEquipe);
   const editEquipe = useAppStore((s) => s.editEquipe);
   const [name, setName] = useState('');
@@ -20,14 +21,14 @@ function EquipeFormModal({ open, onClose, editing }: { open: boolean; onClose: (
       setName(editing.name);
       setLeader(editing.leader);
       setColor(editing.color);
-      setVille(editing.ville ?? 'Nouakchott');
+      setVille(villeImposee ?? editing.ville ?? 'Nouakchott');
     } else {
       setName('');
       setLeader('');
       setColor('#1565C0');
-      setVille('Nouakchott');
+      setVille(villeImposee ?? 'Nouakchott');
     }
-  }, [editing, open]);
+  }, [editing, open, villeImposee]);
 
   if (!open) return null;
 
@@ -64,6 +65,8 @@ function EquipeFormModal({ open, onClose, editing }: { open: boolean; onClose: (
             <select
               value={ville}
               onChange={(e) => setVille(e.target.value)}
+              disabled={!!villeImposee}
+              title={villeImposee ? `Superviseur régional : équipes de ${villeImposee} seulement` : undefined}
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
             >
               {VILLES.map((v) => (
@@ -102,7 +105,8 @@ function EquipeFormModal({ open, onClose, editing }: { open: boolean; onClose: (
 
 export default function EquipesPage() {
   const situations = useAppStore((s) => s.situations);
-  const equipes = useAppStore((s) => s.equipes);
+  // superviseur régional : seulement les équipes de sa ville
+  const { equipes, ville: villePerimetre } = usePerimetre();
   const vehicles = useAppStore((s) => s.vehicles);
   const employees = useAppStore((s) => s.employees);
   const materiels = useAppStore((s) => s.materiels);
@@ -124,6 +128,8 @@ export default function EquipesPage() {
 
   const canManage = user?.role === 'superviseur' || user?.role === 'admin';
   const canDelete = user?.role === 'admin';
+  // superviseur : partie technique seulement, pas les informations RH (matricule)
+  const voitRh = user?.role === 'admin';
 
   const openNew = () => {
     setEditing(null);
@@ -255,7 +261,7 @@ export default function EquipesPage() {
                           <div className="flex items-center gap-1.5 text-xs bg-blue-50 border border-blue-100 rounded px-2 py-1">
                             <span></span>
                             <span className="font-semibold text-blue-800">{chef.name}</span>
-                            <span className="text-blue-400">Mle {chef.mle || '—'} · Chef d'équipe</span>
+                            <span className="text-blue-400">{voitRh ? `Mle ${chef.mle || '—'} · ` : ''}Chef d'équipe</span>
                           </div>
                         )}
                         {techniciens.map((t) => {
@@ -268,7 +274,8 @@ export default function EquipesPage() {
                               <span></span>
                               <span className="font-medium text-slate-700">{t.name}</span>
                               <span className="text-slate-400">
-                                Mle {t.mle || '—'} · {t.poste || 'technicien'} · {t.ville || '—'}
+                                {voitRh ? `Mle ${t.mle || '—'} · ` : ''}
+                                {t.poste || 'technicien'} · {t.ville || '—'}
                               </span>
                               {villeMismatch && (
                                 <span
@@ -339,7 +346,7 @@ export default function EquipesPage() {
         </div>
       )}
 
-      <EquipeFormModal open={modalOpen} onClose={() => setModalOpen(false)} editing={editing} />
+      <EquipeFormModal open={modalOpen} onClose={() => setModalOpen(false)} editing={editing} villeImposee={villePerimetre} />
     </div>
   );
 }

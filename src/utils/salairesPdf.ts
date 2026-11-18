@@ -61,10 +61,16 @@ function blocSociete(doc: Doc, y: number, encadre: boolean) {
     doc.rect(14, y - 4.5, 1, 17, 'F');
   }
   const x = encadre ? 18 : 14;
-  doc.text(t(SOCIETE.siege.trim()), x, y);
-  doc.text(t(SOCIETE.rc.trim()), x, y + 5.2);
-  doc.setFont('times', encadre ? 'bold' : 'normal');
-  doc.text(t(SOCIETE.nif.trim()), x, y + 10.4);
+  // lignes supprimées dans Paramètres (vides) : non imprimées, les suivantes remontent
+  const lignes = [
+    { txt: SOCIETE.siege.trim(), gras: false },
+    { txt: SOCIETE.rc.trim(), gras: false },
+    { txt: SOCIETE.nif.trim(), gras: encadre },
+  ].filter((l) => l.txt);
+  lignes.forEach((l, i) => {
+    doc.setFont('times', l.gras ? 'bold' : 'normal');
+    doc.text(t(l.txt), x, y + i * 5.2);
+  });
   doc.setFont('times', 'normal');
   return y + 18;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CalendarDays, ChevronLeft, ChevronRight, Download, Eye, FileText, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { Button, Card, useToast } from '@/components/ui';
 import {
   fetchPenalites,
@@ -71,7 +72,8 @@ function Kpi({ label, value, cls = 'text-slate-900', sub }: { label: string; val
  * évolution sur les dernières périodes.
  */
 export default function SurveillancePage() {
-  const equipes = useAppStore((s) => s.equipes);
+  // superviseur régional : seulement les équipes et fiches de sa ville
+  const { equipes, ficheOk, equipeOk } = usePerimetre();
   const user = useAppStore((s) => s.user)!;
   const peutSignaler = peutSignalerFauxOk(user.role);
   const { showToast } = useToast();
@@ -118,7 +120,9 @@ export default function SurveillancePage() {
           return [o, p, h, autres] as const;
         })
         .then(
-          ([o, p, h, autres]) => vivant && (setOts(o), setPenalites(p), setArchives(h), setBasesArchives(autres), setError('')),
+          ([o, p, h, autres]) =>
+            vivant &&
+            (setOts(o.filter(ficheOk)), setPenalites(p.filter((x) => equipeOk(x.equipe))), setArchives(h), setBasesArchives(autres.filter(ficheOk)), setError('')),
           (e) => vivant && setError(errMsg(e)),
         )
         .finally(() => vivant && setLoaded(true));
@@ -129,7 +133,7 @@ export default function SurveillancePage() {
       vivant = false;
       unsub();
     };
-  }, [depuis, fin, peutSignaler, version]);
+  }, [depuis, fin, peutSignaler, version, ficheOk, equipeOk]);
 
   const fauxOk = async (o: ProgrammeOT, motif: MotifFauxOk, note: string) => {
     try {

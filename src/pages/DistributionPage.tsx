@@ -10,7 +10,7 @@ import {
   distribuer,
   existingNumeros,
   fetchDernierControle,
-  fetchEnRetard,
+  fetchFichesOuvertes,
   fetchProgramme,
   marquerUrgent,
   rattraperControles,
@@ -20,6 +20,7 @@ import {
   fetchHistoriqueClotures,
   fetchNonFaitesARenvoyer,
   rechercherProgramme,
+  ajouterContact,
   type ClotureArchivee,
   signalerFauxOk,
   situationsOuvertes,
@@ -28,9 +29,11 @@ import {
 import { HistoriqueMotifs } from '@/components/programme/Historique';
 import { AffecterUrgentModal } from '@/components/programme/AffecterUrgentModal';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, hubDe, hubLabel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
-import { HEURE_PROGRAMME_SOIR, POINTS, estPrioritaire, fmtPts, jourCourt, jourOuvreSuivant, jourRemise, motPoint, ptsTexte } from '@/utils/points';
+import { POINTS, REGLAGES_PROGRAMME, delaiOT, estPrioritaire, estSoir, fmtPts, jourCourt, jourOuvreSuivant, jourRemise, motPoint, ptsTexte } from '@/utils/points';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { ClotureResume } from '@/components/programme/OtCard';
 import { FauxOkButton } from '@/components/programme/FauxOk';
+import { AjoutContact } from '@/components/programme/AjoutContact';
 import type { ProgrammeOT } from '@/types';
 import { errMsg } from '@/utils';
 
@@ -221,24 +224,25 @@ function RowCells({ o, prioritaire, isUrgent }: { o: Row; prioritaire?: boolean;
 
 export default function DistributionPage() {
   const user = useAppStore((s) => s.user)!;
-  const equipes = useAppStore((s) => s.equipes);
+  // superviseur régional : seulement les équipes (et fiches) de sa ville
+  const { equipes, toutes: toutesEquipes, ville, equipeOk, ficheOk } = usePerimetre();
   const loadAll = useAppStore((s) => s.loadAll);
   const { showToast } = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const zoneEquipe = useMemo(() => {
     const map: Record<string, string> = { ...ZONE_EQUIPE_MAP };
-    equipes.forEach((eq) => (eq.zones ?? []).forEach((z) => z && (map[z.trim().toUpperCase()] = eq.name)));
+    toutesEquipes.forEach((eq) => (eq.zones ?? []).forEach((z) => z && (map[z.trim().toUpperCase()] = eq.name)));
     return map;
-  }, [equipes]);
+  }, [toutesEquipes]);
   const equipeNames = useMemo(() => equipes.map((e) => e.name).sort((a, b) => a.localeCompare(b)), [equipes]);
-  const colorOf = (name: string) => equipes.find((e) => e.name.toLowerCase() === name.toLowerCase())?.color ?? '#94A3B8';
+  const colorOf = (name: string) => toutesEquipes.find((e) => e.name.toLowerCase() === name.toLowerCase())?.color ?? '#94A3B8';
 
   // ─── Import ────────────────────────────────────────────────────────────
   // le soir (à partir de 16 h), on prépare le programme du lendemain (jour ouvré suivant)
-  const [dateProgramme, setDateProgramme] = useState(() => (new Date().getHours() >= HEURE_PROGRAMME_SOIR ? jourOuvreSuivant(todayISO()) : todayISO()));
+  const [dateProgramme, setDateProgramme] = useState(() => (estSoir() ? jourOuvreSuivant(todayISO()) : todayISO()));
   const demain = jourOuvreSuivant(todayISO());
-  const soir = new Date().getHours() >= HEURE_PROGRAMME_SOIR;
+  const soir = estSoir();
   const [items, setItems] = useState<Item[]>([]);
   const [reading, setReading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -258,7 +262,10 @@ export default function DistributionPage() {
       }
       // Même OT présent deux fois (deux PDF qui se recoupent) → une seule fiche
       const seen = new Set(items.map((i) => i.numeroOt));
-      const fresh = parsed.filter((p) => p.numeroOt && !seen.has(p.numeroOt) && (seen.add(p.numeroOt), true));
+      // superviseur régional : seulement les fiches des zones de sa ville (ou sans équipe connue)
+      const horsVille = parsed.filter((p) => p.equipe && !equipeOk(p.equipe)).length;
+      const fresh = parsed.filter((p) => p.numeroOt && (!p.equipe || equipeOk(p.equipe)) && !seen.has(p.numeroOt) && (seen.add(p.numeroOt), true));
+      if (horsVille) showToast(`${horsVille} fiche${horsVille > 1 ? 's' : ''} hors de ${ville} ignorée${horsVille > 1 ? 's' : ''}`, 'info');
       const [deja, ouvertes] = await Promise.all([existingNumeros(fresh.map((p) => p.numeroOt)), situationsOuvertes(fresh.map((p) => p.fgp))]);
       fresh.forEach((p) => {
         const d = deja.get(p.numeroOt);
@@ -338,7 +345,8 @@ export default function DistributionPage() {
   const [hist, setHist] = useState<ProgrammeOT[]>([]);
   const [histError, setHistError] = useState('');
   const [armed, setArmed] = useState<string | null>(null);
-  const [enRetard, setEnRetard] = useState<ProgrammeOT[]>([]);
+  // toutes les fiches en cours (ouvertes), épinglées en haut du suivi quel que soit le jour choisi
+  const [ouvertes, setOuvertes] = useState<ProgrammeOT[]>([]);
   const [penaliser, setPenaliser] = useState(true);
   const [retardId, setRetardId] = useState<string | null>(null);
   const [retardDate, setRetardDate] = useState(() => addDays(todayISO(), 1));
@@ -348,7 +356,7 @@ export default function DistributionPage() {
   const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
   const [renvoi, setRenvoi] = useState<{ cle: string; ids: string[]; equipe: string; date: string } | null>(null);
   const peutRenvoyer = user.role === 'admin' || user.role === 'superviseur' || user.role === 'directeur';
-  // non faites des 7 jours précédents : proposées au renvoi le jour suivant
+  // non faites encore à renvoyer (N derniers jours, Paramètres) : en bas du suivi, sans changer de jour
   const [nonFaites, setNonFaites] = useState<ProgrammeOT[]>([]);
   // filtre du suivi et équipes repliées (mémorisées sur cet appareil)
   const [filtreSuivi, setFiltreSuivi] = useState<'tout' | 'a_faire' | 'fait' | 'non_fait'>('tout');
@@ -385,7 +393,7 @@ export default function DistributionPage() {
   const modifierLocal = (ids: string[], f: (o: ProgrammeOT) => ProgrammeOT | null) => {
     const maj = (l: ProgrammeOT[]) => l.flatMap((o) => (ids.includes(o.id) ? (f(o) ?? []) : [o]));
     setHist(maj);
-    setEnRetard(maj);
+    setOuvertes(maj);
     setNonFaites(maj);
   };
 
@@ -407,17 +415,17 @@ export default function DistributionPage() {
     const refresh = () =>
       Promise.all([
         fetchProgramme({ from: histDate, to: histDate }),
-        histDate >= todayISO() ? fetchEnRetard(histDate) : Promise.resolve([]),
-        fetchNonFaitesARenvoyer(histDate, addDays(histDate, -7)),
+        fetchFichesOuvertes(),
+        fetchNonFaitesARenvoyer(addDays(todayISO(), -REGLAGES_PROGRAMME.joursNonFaites)),
       ]).then(
-        ([rows, retard, nf]) => {
+        ([rows, ouv, nf]) => {
           if (!alive) return;
-          setHist(rows);
-          setEnRetard(retard);
-          setNonFaites(nf);
+          setHist(rows.filter(ficheOk));
+          setOuvertes(ouv.filter(ficheOk));
+          setNonFaites(nf.filter(ficheOk));
           setHistError('');
           setVersion((v) => v + 1);
-          fetchHistoriqueClotures([...rows, ...retard, ...nf].map((o) => o.id)).then((h) => alive && setHistorique(h));
+          fetchHistoriqueClotures([...rows, ...ouv, ...nf].filter(ficheOk).map((o) => o.id)).then((h) => alive && setHistorique(h));
         },
         (e) => alive && setHistError(errMsg(e)),
       );
@@ -431,7 +439,7 @@ export default function DistributionPage() {
       unsub();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [histDate]);
+  }, [histDate, ficheOk]);
 
   // recherche (300 ms après la frappe), relancée à chaque rechargement pour garder statut / motif à jour
   useEffect(() => {
@@ -441,7 +449,7 @@ export default function DistributionPage() {
     const id = setTimeout(
       () =>
         rechercherProgramme(t).then(
-          (r) => alive && setResultats(r),
+          (r) => alive && setResultats(r.filter(ficheOk)),
           (e) => alive && showToast(errMsg(e), 'error'),
         ),
       300,
@@ -463,13 +471,20 @@ export default function DistributionPage() {
     nonFaites.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [nonFaites]);
-  const nbStatut = (st: ProgrammeOT['statut']) => hist.filter((o) => o.statut === st).length;
-  // fiches dont l'échéance est passée (avant aujourd'hui) et toujours ouvertes
-  const retardGroups = useMemo(() => {
+  // fiches en cours, épinglées : par équipe, les urgentes et en retard d'abord, puis par échéance
+  const ouvertesIds = useMemo(() => new Set(ouvertes.map((o) => o.id)), [ouvertes]);
+  const nonFaitesIds = useMemo(() => new Set(nonFaites.map((o) => o.id)), [nonFaites]);
+  const nbRetard = useMemo(() => ouvertes.filter((o) => delaiOT(o).etat === 'retard').length, [ouvertes]);
+  const ouvertesGroups = useMemo(() => {
+    const rang = (o: ProgrammeOT) => (o.isUrgent ? 0 : delaiOT(o).etat === 'retard' ? 1 : o.prioritaire ? 2 : 3);
     const m = new Map<string, ProgrammeOT[]>();
-    enRetard.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [enRetard]);
+    ouvertes.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
+    return [...m.entries()]
+      .map(([e, l]) => [e, [...l].sort((a, b) => rang(a) - rang(b) || (a.echeanceEquipe ?? '').localeCompare(b.echeanceEquipe ?? ''))] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+  }, [ouvertes]);
+  // le jour choisi : seulement ce qui n'est ni épinglé en haut (en cours) ni en bas (non faites à renvoyer)
+  const faitesDuJour = useMemo(() => hist.filter((o) => !ouvertesIds.has(o.id) && !nonFaitesIds.has(o.id)), [hist, ouvertesIds, nonFaitesIds]);
 
   const pen = (n: number, motif: 'retardee' | 'reaffectee' = 'retardee') =>
     n ? ` · ${n} pénalité${n > 1 ? 's' : ''} (${fmtPts(n * POINTS.penalites[motif])} pt)` : '';
@@ -529,12 +544,27 @@ export default function DistributionPage() {
     }
   };
 
+  /** Contact ajouté après la distribution : sur la ligne, donc sur toutes ses fiches */
+  const doAjouterContact = async (o: ProgrammeOT, tel: string) => {
+    try {
+      const telephones = await ajouterContact(o.fgp, tel);
+      const maj = (l: ProgrammeOT[]) => l.map((x) => (x.fgp === o.fgp ? { ...x, telephones } : x));
+      setHist(maj);
+      setOuvertes(maj);
+      setNonFaites(maj);
+      showToast(`${ligneLabel(o)} : contact ${tel} ajouté — le chef le voit sur sa fiche`, 'success');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+      throw err;
+    }
+  };
+
   /** Renvoyer des fiches « non faites » (motif passé gardé) */
   const ouvrirRenvoi = (cle: string, ids: string[], equipe: string) =>
     setRenvoi(
       renvoi?.cle === cle
         ? null
-        : { cle, ids, equipe, date: new Date().getHours() >= HEURE_PROGRAMME_SOIR ? jourOuvreSuivant(todayISO()) : todayISO() },
+        : { cle, ids, equipe, date: estSoir() ? jourOuvreSuivant(todayISO()) : todayISO() },
     );
   const doRenvoyer = async () => {
     if (!renvoi) return;
@@ -615,6 +645,11 @@ export default function DistributionPage() {
               </b>
             )}
           </p>
+        )}
+        {o.fgp && (
+          <div className="self-start">
+            <AjoutContact compact onAjouter={(tel) => doAjouterContact(o, tel)} />
+          </div>
         )}
         {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
         <HistoriqueMotifs liste={historique.get(o.id)} />
@@ -1026,15 +1061,15 @@ export default function DistributionPage() {
           )}
         </Card>
 
-        {/* Filtre par statut + replier / déplier les équipes */}
+        {/* Filtre par bloc + replier / déplier les équipes */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-full bg-slate-100 p-0.5 overflow-x-auto max-w-full">
             {(
               [
-                ['tout', 'Toutes', hist.length],
-                ['a_faire', 'À faire', nbStatut('a_faire')],
-                ['fait', 'Faites', nbStatut('fait')],
-                ['non_fait', 'Non faites', nbStatut('non_fait')],
+                ['tout', 'Tout', ouvertes.length + faitesDuJour.length + nonFaites.length],
+                ['a_faire', 'En cours', ouvertes.length],
+                ['fait', `Faites · ${jourCourt(histDate)}`, faitesDuJour.length],
+                ['non_fait', 'Non faites', nonFaites.length],
               ] as const
             ).map(([id, label, n]) => (
               <button
@@ -1047,9 +1082,21 @@ export default function DistributionPage() {
               </button>
             ))}
           </div>
-          {histGroups.length > 0 && (
+          {(histGroups.length > 0 || ouvertesGroups.length > 0 || nonFaitesGroups.length > 0) && (
             <span className="ml-auto flex gap-1">
-              <Button variant="ghost" size="sm" onClick={() => changerFermees(new Set(histGroups.map(([e]) => e || 'none')))}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  changerFermees(
+                    new Set([
+                      ...histGroups.map(([e]) => e || 'none'),
+                      ...ouvertesGroups.map(([e]) => `ec:${e}`),
+                      ...nonFaitesGroups.map(([e]) => `nf:${e}`),
+                    ]),
+                  )
+                }
+              >
                 Tout cacher
               </Button>
               <Button variant="ghost" size="sm" onClick={() => changerFermees(new Set())}>
@@ -1076,86 +1123,171 @@ export default function DistributionPage() {
 
         {histError && <Card className="p-4 text-sm text-red-700">{histError}</Card>}
 
-        {retardGroups.length > 0 && (
-          <Card className="border-red-200">
-            <div className="px-4 py-3 border-b border-red-100 bg-red-50/60">
-              <p className="font-bold text-red-800">
-                {histDate > todayISO()
-                  ? `${enRetard.length} fiche${enRetard.length > 1 ? 's' : ''} reportée${enRetard.length > 1 ? 's' : ''} au ${jourCourt(histDate)} (non traitée${enRetard.length > 1 ? 's' : ''} à l’échéance) : réaffectez-les ou laissez-les à l’équipe`
-                  : `${enRetard.length} fiche${enRetard.length > 1 ? 's' : ''} non traitée${enRetard.length > 1 ? 's' : ''} après l’échéance`}
+        {/* 1. En haut, épinglées : toutes les fiches en cours, quel que soit le jour choisi */}
+        {(filtreSuivi === 'tout' || filtreSuivi === 'a_faire') && ouvertesGroups.length > 0 && (
+          <Card className="border-sky-300">
+            <div className="px-4 py-3 border-b border-sky-100 bg-sky-50/70">
+              <p className="font-bold text-sky-900 flex items-center gap-1.5">
+                <Pin className="w-4 h-4 text-sky-700" />
+                {ouvertes.length} fiche{ouvertes.length > 1 ? 's' : ''} en cours
+                {nbRetard > 0 && (
+                  <span className="text-red-700">
+                    {' '}
+                    · {nbRetard} en retard
+                  </span>
+                )}
               </p>
-              <p className="text-xs text-red-700/80">
-                Laissez-les à l’équipe ({fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)} à chaque contrôle de 22 h tant qu’elles ne sont pas traitées), réaffectez-les (la nouvelle équipe repart avec sa propre échéance) ou retardez-les.
+              <p className="text-xs text-sky-800/80">
+                Épinglées ici quel que soit le jour affiché : urgentes et en retard d’abord. Réaffectez-les, retardez-les ou laissez-les à l’équipe (
+                {fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)} à chaque contrôle de 22 h après l’échéance).
               </p>
             </div>
-            {retardGroups.map(([equipe, list]) => (
-              <div key={equipe || 'none'}>
-                <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center gap-2 text-sm">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: colorOf(equipe) }} />
-                  <b className="text-slate-800">{equipe || 'Sans équipe'}</b>
-                  <span className="text-xs text-slate-500">{list.length} en retard</span>
-                  {list.length > 1 && (
-                    <span className="ml-auto flex items-center gap-1.5">
-                      <Select
-                        aria-label={`Tout réaffecter (${equipe})`}
-                        className="!py-1 !text-xs"
-                        value=""
-                        onChange={(e) => e.target.value && toutReaffecter(list, e.target.value)}
-                      >
-                        <option value="">Tout réaffecter à…</option>
-                        {equipeNames
-                          .filter((nm) => nm !== equipe)
-                          .map((nm) => (
-                            <option key={nm} value={nm}>
-                              {nm}
-                            </option>
-                          ))}
-                      </Select>
-                      {retardId === `grp:${equipe}` ? (
-                        <>
-                          <input
-                            type="date"
-                            aria-label="Nouvelle date pour toutes"
-                            min={todayISO()}
-                            value={retardDate}
-                            onChange={(e) => setRetardDate(e.target.value)}
-                            className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white"
-                          />
-                          <Button size="sm" onClick={() => toutRetarder(list)} disabled={!retardDate}>
-                            Tout reporter
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          icon={<CalendarClock className="w-3.5 h-3.5" />}
-                          onClick={() => {
-                            setRetardDate(addDays(todayISO(), 1));
-                            setRetardId(`grp:${equipe}`);
-                          }}
+            {ouvertesGroups.map(([equipe, list]) => {
+              const cle = `ec:${equipe}`;
+              const ouvert = !fermees.has(cle);
+              const retard = list.filter((o) => delaiOT(o).etat === 'retard').length;
+              return (
+                <div key={cle}>
+                  <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center gap-2 text-sm">
+                    <button type="button" onClick={() => basculerEquipe(cle)} aria-expanded={ouvert} className="flex items-center gap-2 text-left">
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ background: colorOf(equipe) }} />
+                      <b className="text-slate-800">{equipe || 'Sans équipe'}</b>
+                      <span className="text-xs text-slate-500">
+                        {list.length} en cours
+                        {retard > 0 && <b className="text-red-700"> · {retard} en retard</b>}
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
+                    </button>
+                    {list.length > 1 && (
+                      <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                        <Select
+                          aria-label={`Tout réaffecter (${equipe})`}
+                          className="!py-1 !text-xs"
+                          value=""
+                          onChange={(e) => e.target.value && toutReaffecter(list, e.target.value)}
                         >
-                          Tout retarder
+                          <option value="">Tout réaffecter à…</option>
+                          {equipeNames
+                            .filter((nm) => nm !== equipe)
+                            .map((nm) => (
+                              <option key={nm} value={nm}>
+                                {nm}
+                              </option>
+                            ))}
+                        </Select>
+                        {retardId === `grp:${equipe}` ? (
+                          <>
+                            <input
+                              type="date"
+                              aria-label="Nouvelle date pour toutes"
+                              min={todayISO()}
+                              value={retardDate}
+                              onChange={(e) => setRetardDate(e.target.value)}
+                              className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white"
+                            />
+                            <Button size="sm" onClick={() => toutRetarder(list)} disabled={!retardDate}>
+                              Tout reporter
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            icon={<CalendarClock className="w-3.5 h-3.5" />}
+                            onClick={() => {
+                              setRetardDate(addDays(todayISO(), 1));
+                              setRetardId(`grp:${equipe}`);
+                            }}
+                          >
+                            Tout retarder
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={<Copy className="w-4 h-4" />}
+                          onClick={() => shareWhatsApp(programmeWhatsApp(equipe, todayISO(), list), showToast)}
+                        >
+                          WhatsApp
                         </Button>
-                      )}
-                    </span>
-                  )}
+                      </span>
+                    )}
+                  </div>
+                  {ouvert && list.map((o) => ficheSuivi(o, true))}
                 </div>
-                {list.map((o) => ficheSuivi(o, true))}
-              </div>
-            ))}
+              );
+            })}
           </Card>
         )}
-        {/* Non faites des jours précédents : à renvoyer le jour suivant */}
+
+        {/* 2. Le jour choisi : fiches faites (et clôturées) de ce programme */}
+        {(filtreSuivi === 'tout' || filtreSuivi === 'fait') && (
+          <>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-400 pt-1">
+              Programme du {jourCourt(histDate)} — fiches traitées
+            </p>
+            {!histError && hist.length === 0 && (
+              <Card className="py-8 text-center text-sm text-slate-400">Aucune fiche distribuée pour le {frDate(histDate)}.</Card>
+            )}
+            {histGroups.map(([equipe, list]) => {
+              const n = (st: ProgrammeOT['statut']) => list.filter((o) => o.statut === st).length;
+              const pct = Math.round((n('fait') / list.length) * 100);
+              const visibles = list.filter((o) => !ouvertesIds.has(o.id) && !nonFaitesIds.has(o.id));
+              const cle = equipe || 'none';
+              const ouvert = !fermees.has(cle);
+              return (
+                <Card key={cle}>
+                  <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => basculerEquipe(cle)}
+                      aria-expanded={ouvert}
+                      className="flex items-center gap-2 flex-wrap text-left min-w-0"
+                      title={ouvert ? 'Cacher le programme de l’équipe' : 'Afficher le programme de l’équipe'}
+                    >
+                      <span className="w-3 h-3 rounded-full" style={{ background: colorOf(equipe) }} />
+                      <span className="font-bold text-slate-800">{equipe || 'Sans équipe'}</span>
+                      <span className="text-xs text-slate-500">
+                        <b className="text-emerald-700">{n('fait')}</b>/{list.length} faites ({pct}%) · <b className="text-red-700">{n('non_fait')}</b> non faites ·{' '}
+                        <b className="text-sky-700">{n('a_faire')}</b> en cours
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Copy className="w-4 h-4" />}
+                      onClick={() => shareWhatsApp(programmeWhatsApp(equipe, histDate, list.filter((o) => o.statut === 'a_faire')), showToast)}
+                    >
+                      WhatsApp (à faire)
+                    </Button>
+                  </div>
+                  <div className="h-1 bg-slate-100">
+                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  </div>
+                  {ouvert && visibles.map((o) => ficheSuivi(o))}
+                  {ouvert && visibles.length < list.length && (
+                    <p className="px-4 py-2 text-[11px] text-slate-400">
+                      {list.length - visibles.length} fiche{list.length - visibles.length > 1 ? 's' : ''} en cours ou non faite
+                      {list.length - visibles.length > 1 ? 's' : ''} : épinglée{list.length - visibles.length > 1 ? 's' : ''} en haut / à renvoyer en bas.
+                    </p>
+                  )}
+                </Card>
+              );
+            })}
+          </>
+        )}
+
+        {/* 3. En bas : les non faites à renvoyer, sans changer le jour du programme */}
         {(filtreSuivi === 'tout' || filtreSuivi === 'non_fait') && nonFaites.length > 0 && (
           <Card className="border-amber-300">
             <div className="px-4 py-3 border-b border-amber-100 bg-amber-50/70">
               <p className="font-bold text-amber-900">
-                {nonFaites.length} fiche{nonFaites.length > 1 ? 's' : ''} non faite{nonFaites.length > 1 ? 's' : ''} des jours précédents — à renvoyer
+                {nonFaites.length} fiche{nonFaites.length > 1 ? 's' : ''} non faite{nonFaites.length > 1 ? 's' : ''} — à renvoyer
               </p>
               <p className="text-xs text-amber-800/80">
-                Non faites avant le {jourCourt(histDate)} (7 derniers jours). Renvoyez-les à une équipe : elles redeviennent « à faire », le motif passé reste dans
-                l’historique.
+                Toutes les non faites des {REGLAGES_PROGRAMME.joursNonFaites} derniers jours, quel que soit le jour affiché. Renvoyez-les à une équipe (aujourd’hui
+                par défaut{soir ? ', demain le soir' : ''}) : elles redeviennent « en cours », le motif passé reste dans l’historique.
               </p>
             </div>
             {nonFaitesGroups.map(([equipe, list]) => {
@@ -1164,10 +1296,12 @@ export default function DistributionPage() {
               return (
                 <div key={cle}>
                   <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center gap-2 text-sm">
-                    <button type="button" onClick={() => basculerEquipe(cle)} className="flex items-center gap-2 text-left">
+                    <button type="button" onClick={() => basculerEquipe(cle)} aria-expanded={ouvert} className="flex items-center gap-2 text-left">
                       <span className="w-2.5 h-2.5 rounded-full" style={{ background: colorOf(equipe) }} />
                       <b className="text-slate-800">{equipe || 'Sans équipe'}</b>
-                      <span className="text-xs text-slate-500">{list.length} non faite{list.length > 1 ? 's' : ''}</span>
+                      <span className="text-xs text-slate-500">
+                        {list.length} non faite{list.length > 1 ? 's' : ''}
+                      </span>
                       <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
                     </button>
                     {peutRenvoyer && renvoi?.cle !== cle && (
@@ -1195,70 +1329,6 @@ export default function DistributionPage() {
             })}
           </Card>
         )}
-
-        {!histError && hist.length === 0 && (
-          <Card className="py-10 text-center text-sm text-slate-400">Aucune fiche distribuée pour le {frDate(histDate)}.</Card>
-        )}
-        {histGroups.map(([equipe, list]) => {
-          const n = (st: ProgrammeOT['statut']) => list.filter((o) => o.statut === st).length;
-          const pct = Math.round((n('fait') / list.length) * 100);
-          const visibles = filtreSuivi === 'tout' ? list : list.filter((o) => o.statut === filtreSuivi);
-          if (filtreSuivi !== 'tout' && visibles.length === 0) return null;
-          const cle = equipe || 'none';
-          const ouvert = !fermees.has(cle);
-          return (
-            <Card key={cle}>
-              <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => basculerEquipe(cle)}
-                  aria-expanded={ouvert}
-                  className="flex items-center gap-2 flex-wrap text-left min-w-0"
-                  title={ouvert ? 'Cacher le programme de l’équipe' : 'Afficher le programme de l’équipe'}
-                >
-                  <span className="w-3 h-3 rounded-full" style={{ background: colorOf(equipe) }} />
-                  <span className="font-bold text-slate-800">{equipe || 'Sans équipe'}</span>
-                  <span className="text-xs text-slate-500">
-                    <b className="text-emerald-700">{n('fait')}</b>/{list.length} faites ({pct}%) · <b className="text-red-700">{n('non_fait')}</b> non faites ·{' '}
-                    <b className="text-sky-700">{n('a_faire')}</b> à faire
-                  </span>
-                  <ChevronDown className={`w-4 h-4 text-slate-400 transition ${ouvert ? 'rotate-180' : ''}`} />
-                </button>
-                <span className="flex flex-wrap items-center gap-1">
-                  {peutRenvoyer && n('non_fait') > 0 && renvoi?.cle !== `grp:${equipe}` && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      icon={<RotateCcw className="w-3.5 h-3.5" />}
-                      onClick={() =>
-                        ouvrirRenvoi(
-                          `grp:${equipe}`,
-                          list.filter((o) => o.statut === 'non_fait').map((o) => o.id),
-                          equipe,
-                        )
-                      }
-                    >
-                      Renvoyer les {n('non_fait')} non faite{n('non_fait') > 1 ? 's' : ''}
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    icon={<Copy className="w-4 h-4" />}
-                    onClick={() => shareWhatsApp(programmeWhatsApp(equipe, histDate, list.filter((o) => o.statut === 'a_faire')), showToast)}
-                  >
-                    WhatsApp (à faire)
-                  </Button>
-                </span>
-              </div>
-              {renvoi?.cle === `grp:${equipe}` && <div className="px-4 py-2 border-b border-slate-100">{panneauRenvoi(`grp:${equipe}`)}</div>}
-              <div className="h-1 bg-slate-100">
-                <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-              </div>
-              {ouvert && visibles.map((o) => ficheSuivi(o))}
-            </Card>
-          );
-        })}
       </div>
 
       {urgentModalOpen && (
@@ -1268,7 +1338,7 @@ export default function DistributionPage() {
           equipeNames={equipeNames}
           zoneEquipe={zoneEquipe}
           user={user}
-          fichesActuelles={[...hist, ...enRetard]}
+          fichesActuelles={[...hist, ...ouvertes]}
           onSuccess={(msg) => {
             showToast(msg, 'success');
             rafraichir();

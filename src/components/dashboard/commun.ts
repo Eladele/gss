@@ -1,6 +1,6 @@
 // Outils partagés du tableau de bord (filtres, dates, ville d'une équipe)
 import type { Equipe, Situation, SituationNature } from '@/types';
-import { countPoteaux, MERGED_TYPES, type PeriodFilter } from '@/utils/stats';
+import { countPoteaux, inPeriod, MERGED_TYPES, type PeriodFilter } from '@/utils/stats';
 
 export type NatureFilter = 'all' | SituationNature;
 export type PeriodPreset = 'tout' | 'jour' | 'semaine' | 'mois' | 'custom';
@@ -45,6 +45,22 @@ export function matchesNature(s: { type: string }, nature: NatureFilter): boolea
 
 /** Date de référence d'une situation : mise en service, sinon message, sinon dépôt */
 export const dateRef = (s: Situation) => s.dateClt || s.dateMessage || s.dateDepo || '';
+
+/**
+ * Classement des équipes (PDF) : à quelle période appartient une fiche ?
+ *   • faite : sa date de mise en service (= jour de la clôture), comme avant ;
+ *   • non faite : le jour où elle a été rendue « non faite » (traite_le), à défaut sa date de référence ;
+ *   • encore ouverte (en cours / en retard) : comptée si la période contient aujourd'hui
+ *     (c'est l'état actuel), sinon d'après sa date de référence.
+ * Avant, les fiches non faites et ouvertes étaient datées par leur « OT reçu le » (date du message) :
+ * reçues avant le début de la période (ou un autre jour que « aujourd'hui »), elles sortaient du
+ * classement, d'où des colonnes « Non faites » et « En cours » toujours à 0.
+ */
+export function dansPeriodeClassement(s: Situation, period: PeriodFilter): boolean {
+  if (s.status === 'ok') return inPeriod(dateRef(s), period);
+  if (s.status === 'non_ok') return inPeriod((s.traiteLe ?? '').slice(0, 10) || dateRef(s), period);
+  return inPeriod(todayStr(), period) || inPeriod(dateRef(s), period);
+}
 
 /** Poteaux d'une situation : colonne dédiée, sinon extraits du motif de l'OT */
 export const poteauxDe = (s: Situation) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif));

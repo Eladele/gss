@@ -1,7 +1,9 @@
 // Paramètres modifiables par l'administrateur (table app_settings, supabase_parametres.sql) :
 //   • barème des points des équipes (la base applique les mêmes valeurs aux pénalités) ;
-//   • en-tête de l'ordre de virement des salaires.
-// Écriture par la fonction modifier_parametre (réservée à l'admin, valeurs contrôlées, historique).
+//   • en-tête de l'ordre de virement des salaires ;
+//   • réglages généraux (heure du programme du soir, jours fériés, superviseurs régionaux…).
+// Barème et en-tête : écriture par la fonction modifier_parametre (réservée à l'admin, valeurs
+// contrôlées, historique). Réglages généraux : écrits directement dans app_settings.
 import { supabase } from '@/lib/supabase';
 
 export interface Bareme {
@@ -81,9 +83,66 @@ export const ENTETE_DEFAUT: EnteteVirement = {
   banques: {},
 };
 
+// ─── Réglages généraux (app_settings « parametres_generaux ») ─────────────────
+export const VILLES = ['Nouakchott', 'Nouadhibou', 'Kaédi', 'Rosso'] as const;
+export type VilleReglage = (typeof VILLES)[number];
+
+export interface Reglages {
+  /** à partir de cette heure, la distribution prépare le programme du lendemain */
+  heureProgrammeSoir: number;
+  /** fiches « non faites » proposées au renvoi : celles des N derniers jours */
+  joursNonFaites: number;
+  /** jours fériés (YYYY-MM-DD) : ni délai ni échéance ces jours-là (calculs de l'application) */
+  joursFeries: string[];
+  /** superviseur régional : id du profil → ville (il ne gère que les équipes et zones de cette ville) */
+  villesSuperviseurs: Record<string, VilleReglage>;
+}
+
+export const REGLAGES_DEFAUT: Reglages = {
+  heureProgrammeSoir: 16,
+  joursNonFaites: 30,
+  joursFeries: [],
+  villesSuperviseurs: {},
+};
+
+const JOUR_ISO = /^\d{4}-\d{2}-\d{2}$/;
+const borne = (v: unknown, min: number, max: number, defaut: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : defaut;
+
+export function reglagesDepuisBase(v: unknown): Reglages {
+  const o = objet(v);
+  const villes: Record<string, VilleReglage> = {};
+  for (const [id, ville] of Object.entries(objet(o.villes_superviseurs)))
+    if ((VILLES as readonly string[]).includes(ville as string)) villes[id] = ville as VilleReglage;
+  return {
+    heureProgrammeSoir: borne(o.heure_programme_soir, 0, 23, REGLAGES_DEFAUT.heureProgrammeSoir),
+    joursNonFaites: borne(o.jours_non_faites, 1, 365, REGLAGES_DEFAUT.joursNonFaites),
+    joursFeries: Array.isArray(o.jours_feries)
+      ? [...new Set((o.jours_feries as unknown[]).filter((j): j is string => typeof j === 'string' && JOUR_ISO.test(j)))].sort()
+      : [],
+    villesSuperviseurs: villes,
+  };
+}
+
+export function reglagesVersBase(r: Reglages): Record<string, unknown> {
+  const n = reglagesDepuisBase({
+    heure_programme_soir: r.heureProgrammeSoir,
+    jours_non_faites: r.joursNonFaites,
+    jours_feries: r.joursFeries,
+    villes_superviseurs: r.villesSuperviseurs,
+  });
+  return {
+    heure_programme_soir: n.heureProgrammeSoir,
+    jours_non_faites: n.joursNonFaites,
+    jours_feries: n.joursFeries,
+    villes_superviseurs: n.villesSuperviseurs,
+  };
+}
+
 export interface Parametres {
   bareme: Bareme;
   entete: EnteteVirement;
+  reglages: Reglages;
 }
 
 export interface ModifParametre {
@@ -97,8 +156,10 @@ export interface ModifParametre {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const objet = (v: unknown): Record<string, any> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, any>) : {});
-const lireJson = (txt: string | null | undefined): Record<string, any> => {
+const lireJson = (txt: unknown): Record<string, any> => {
   if (!txt) return {};
+  if (typeof txt === 'object') return objet(txt); // colonne jsonb
+  if (typeof txt !== 'string') return {};
   try {
     return objet(JSON.parse(txt));
   } catch {
@@ -141,13 +202,17 @@ export function enteteDepuisBase(v: unknown): EnteteVirement {
 
 /** Paramètres enregistrés (valeurs par défaut pour ce qui manque, ou si le module n'est pas installé) */
 export async function fetchParametres(): Promise<Parametres> {
-  const { data, error } = await supabase.from('app_settings').select('key, value').in('key', ['bareme_points', 'entete_virement']);
+  const { data, error } = await supabase.from('app_settings').select('key, value').in('key', ['bareme_points', 'entete_virement', 'parametres_generaux']);
   if (error) {
     console.error('fetchParametres:', error);
-    return { bareme: { ...BAREME_DEFAUT }, entete: { ...ENTETE_DEFAUT, banques: {} } };
+    return { bareme: { ...BAREME_DEFAUT }, entete: { ...ENTETE_DEFAUT, banques: {} }, reglages: reglagesDepuisBase({}) };
   }
   const val = (k: string) => lireJson((data ?? []).find((r) => r.key === k)?.value);
-  return { bareme: baremeDepuisBase(val('bareme_points')), entete: enteteDepuisBase(val('entete_virement')) };
+  return {
+    bareme: baremeDepuisBase(val('bareme_points')),
+    entete: enteteDepuisBase(val('entete_virement')),
+    reglages: reglagesDepuisBase(val('parametres_generaux')),
+  };
 }
 
 function erreurParametre(error: { code?: string; message?: string }): Error {
@@ -166,6 +231,14 @@ export async function enregistrerEntete(parId: string, e: EnteteVirement): Promi
   const { data, error } = await supabase.rpc('modifier_parametre', { p_par: parId, p_cle: 'entete_virement', p_valeur: e });
   if (error) throw erreurParametre(error);
   return enteteDepuisBase(data);
+}
+
+/** Réglages généraux : écrits dans app_settings (comme la signature du directeur) */
+export async function enregistrerReglages(r: Reglages): Promise<Reglages> {
+  const valeur = reglagesVersBase(r);
+  const { error } = await supabase.from('app_settings').upsert({ key: 'parametres_generaux', value: JSON.stringify(valeur) }, { onConflict: 'key' });
+  if (error) throw new Error(error.message || 'Enregistrement impossible');
+  return reglagesDepuisBase(valeur);
 }
 
 export async function fetchHistoriqueParametres(limit = 20): Promise<ModifParametre[]> {

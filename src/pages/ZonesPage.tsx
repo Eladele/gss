@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
+import { usePerimetre } from '@/hooks/usePerimetre';
 import { addZoneToTeam, removeZoneFromTeam } from '@/lib/supabaseService';
 import { getEquipeColor } from '@/utils';
 import { Card, CardHeader, CardTitle, Button, Modal, Input, Select, EmptyState, BtnEdit, BtnDelete } from '@/components/ui';
@@ -7,7 +8,8 @@ import { useToast } from '@/components/ui';
 
 export default function ZonesPage() {
   const situations = useAppStore((s) => s.situations);
-  const equipes = useAppStore((s) => s.equipes);
+  // superviseur régional : seulement les équipes (et zones) de sa ville
+  const { equipes, toutes, equipeOk } = usePerimetre();
   const user = useAppStore((s) => s.user)!;
   const loadAll = useAppStore((s) => s.loadAll);
   const { showToast } = useToast();
@@ -16,10 +18,12 @@ export default function ZonesPage() {
 
   // All zones from situations + from equipe zones arrays
   const allZones = useMemo(() => {
-    const fromSits = situations.map((s) => s.zone);
+    // zones d'équipes hors périmètre : ni visibles ni réaffectables
+    const ailleurs = new Set(toutes.filter((e) => !equipes.includes(e)).flatMap((e) => e.zones ?? []));
+    const fromSits = situations.filter((s) => equipeOk(s.equipe)).map((s) => s.zone);
     const fromTeams = equipes.flatMap((e) => e.zones ?? []);
-    return [...new Set([...fromSits, ...fromTeams])].filter(Boolean).sort();
-  }, [situations, equipes]);
+    return [...new Set([...fromSits, ...fromTeams])].filter((z) => z && !ailleurs.has(z)).sort();
+  }, [situations, equipes, toutes, equipeOk]);
 
   // Map zone → equipe name
   const zoneEquipeMap = useMemo(() => {
