@@ -344,12 +344,15 @@ export default function DistributionPage() {
       const { crees, completees } = nouvelles.length ? await distribuer(nouvelles, dateProgramme, user) : { crees: 0, completees: 0 };
       // fiches déjà « non faites » : renvoyées équipe par équipe, motif passé gardé
       let renvoyees = 0;
+      // la date « OT reçu le » du nouvel OT remplace l'ancienne (sinon le jour du renvoi)
+      const datesOt = Object.fromEntries(aRenvoyer.map((i) => [i.renvoi!.id, i.dateRecu]));
       for (const eq of new Set(aRenvoyer.map((i) => i.equipe)))
         renvoyees += await redistribuer(
           aRenvoyer.filter((i) => i.equipe === eq).map((i) => i.renvoi!.id),
           eq,
           dateProgramme,
           user,
+          datesOt,
         );
       const n = crees + completees + renvoyees;
       showToast(

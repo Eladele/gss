@@ -5,7 +5,7 @@ import { statsByEquipe, statsByVille, statsByType, repeatDerangementByClient, is
 import { Card, CardHeader, CardTitle, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
 import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
 import type { Equipe, Situation } from '@/types';
-import { dateRef, matchesNature, poteauxDe, presetToRange, todayStr, VILLE_COLORS, type NatureFilter } from './commun';
+import { dateRef, matchesNature, poteauxDe, poteauxNecessaires, presetToRange, todayStr, VILLE_COLORS, type NatureFilter } from './commun';
 
 const WEEKDAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
@@ -35,6 +35,7 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
 
   const total = scoped.length;
   const totalPoteaux = useMemo(() => scoped.reduce((sum, s) => sum + poteauxDe(s), 0), [scoped]);
+  const totalPoteauxNecessaires = useMemo(() => scoped.reduce((sum, s) => sum + poteauxNecessaires(s), 0), [scoped]);
   const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
   const dansDelai = total - horsDelai;
   const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
@@ -96,12 +97,13 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
         <StatCard value={totalAujourdhui} label="Aujourd'hui" icon="" accent="#00838F" />
         <StatCard value={total} label="Total période" icon="" accent="#E65100" />
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
         <StatCard value={`${pctConf}%`} label="Conformité" icon="" accent="#2E7D32" />
         <StatCard value={dansDelai} label="Dans délai" icon="" accent="#1565C0" active={delaiDetail === 'dans'} onClick={() => setDelaiDetail(delaiDetail === 'dans' ? null : 'dans')} />
         <StatCard value={horsDelai} label="Hors délai" icon="" accent="#C62828" active={delaiDetail === 'hors'} onClick={() => setDelaiDetail(delaiDetail === 'hors' ? null : 'hors')} />
         <StatCard value={repeats.length} label="DRG répétés" icon="" accent="#8E24AA" active={repeatsOpen} onClick={() => setRepeatsOpen(!repeatsOpen)} />
         <StatCard value={totalPoteaux} label="Poteaux posés" icon="" accent="#6D4C41" />
+        <StatCard value={totalPoteauxNecessaires} label="Poteaux nécessaires" icon="" accent="#F57C00" />
       </div>
 
       {delaiDetail && (

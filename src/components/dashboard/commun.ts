@@ -62,8 +62,13 @@ export function dansPeriodeClassement(s: Situation, period: PeriodFilter): boole
   return inPeriod(todayStr(), period) || inPeriod(dateRef(s), period);
 }
 
-/** Poteaux d'une situation : colonne dédiée, sinon extraits du motif de l'OT */
-export const poteauxDe = (s: Situation) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif));
+/** Poteaux d'une situation : colonne dédiée, sinon extraits du motif (« Poteau cassé » compte 1) */
+const poteauxBruts = (s: Situation) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif));
+/** Poteaux POSÉS : seulement les fiches faites (OK) */
+export const poteauxDe = (s: Situation) => (s.status === 'ok' ? poteauxBruts(s) : 0);
+/** Poteaux NÉCESSAIRES : fiches pas encore faites qui en demandent (besoin poteau, poteau cassé) */
+export const poteauxNecessaires = (s: Situation) =>
+  s.status === 'ok' ? 0 : s.poteau && s.poteau > 0 ? s.poteau : s.status === 'non_ok' ? countPoteaux(s.motif) : 0;
 
 /** Ville de chaque équipe (nom en minuscules → ville), calculée une fois */
 export function villesDesEquipes(equipes: Equipe[]) {

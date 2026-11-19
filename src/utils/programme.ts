@@ -52,7 +52,8 @@ export const MOTIFS_NON_FAIT: MotifDef[] = [
   { label: 'Câble transport coupé' },
   { label: 'RV demain' },
   { label: 'Local fermé RV demain' },
-  { label: 'Poteau cassé' },
+  // poteau à remplacer : compté comme « Besoin poteau » (nécessaire, puis posé quand c'est fait)
+  { label: 'Poteau cassé', poteaux: 1 },
   { label: 'Problème signal' },
   { label: 'Coupure courant' },
   // seulement pour les installations
@@ -163,6 +164,13 @@ export const libelleFauxOk = (code: string | null | undefined, note?: string | n
 
 /** Poteaux à compter pour un motif (« Besoin 2 poteaux 350 m » → 2) */
 export const poteauxDuMotif = (motif: string, liste: MotifDef[]) => liste.find((m) => m.label === motif)?.poteaux ?? 0;
+
+/** Poteaux demandés par un motif « non fait » enregistré, même suivi d'une CST
+ *  (« Besoin 2 poteaux + CST … » → 2, « Poteau cassé » → 1) */
+export const poteauxBesoin = (motif?: string | null) => {
+  const t = (motif ?? '').trim().toLowerCase();
+  return MOTIFS_NON_FAIT.find((m) => m.poteaux && t.startsWith(m.label.toLowerCase()))?.poteaux ?? 0;
+};
 
 /** « FGP 077490 » ou « TPH 45240200 » */
 export const ligneLabel = (o: { typeLigne?: string; fgp: string }) => `${o.typeLigne || 'FGP'} ${o.fgp || '—'}`;

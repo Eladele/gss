@@ -3,7 +3,7 @@ import { useMemo, type ReactNode } from 'react';
 import { statsByVille, statsDelaiDetailleParVilleEtType, statsBacklogParAnciennete, statsNonOk, MERGED_TYPES } from '@/utils/stats';
 import { Card, CardHeader, CardTitle, EmptyState } from '@/components/ui';
 import type { Equipe, Situation } from '@/types';
-import { poteauxDe } from './commun';
+import { poteauxDe, poteauxNecessaires } from './commun';
 
 interface Props {
   scoped: Situation[];
@@ -73,9 +73,17 @@ const bleu = (v: Cell) => <span className="text-blue-600">{v}</span>;
 export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode, equipes, villeDe }: Props) {
   const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
   const poteauxParVille = useMemo(() => {
-    const m = new Map<string, number>();
-    scoped.forEach((s) => m.set(villeDe(s.equipe), (m.get(villeDe(s.equipe)) ?? 0) + poteauxDe(s)));
-    return [...m.entries()].map(([ville, poteaux]) => ({ ville, poteaux })).sort((a, b) => b.poteaux - a.poteaux);
+    const m = new Map<string, { poteaux: number; necessaires: number }>();
+    scoped.forEach((s) => {
+      const v = m.get(villeDe(s.equipe)) ?? { poteaux: 0, necessaires: 0 };
+      v.poteaux += poteauxDe(s);
+      v.necessaires += poteauxNecessaires(s);
+      m.set(villeDe(s.equipe), v);
+    });
+    return [...m.entries()]
+      .map(([ville, v]) => ({ ville, ...v }))
+      .filter((v) => v.poteaux || v.necessaires)
+      .sort((a, b) => b.poteaux - a.poteaux || b.necessaires - a.necessaires);
   }, [scoped, villeDe]);
   const typesInstall = useMemo(() => MERGED_TYPES.filter((t) => !['CST', 'RLR', 'ANS'].includes(t)), []);
   const installDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, typesInstall), [scopedAll, equipes, typesInstall]);
@@ -99,10 +107,17 @@ export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode
           lignes={byVille.map((v) => ({ key: v.ville, cells: [v.ville, v.total, vert(v.dansDelai), rouge(v.horsDelai), `${v.pctConformite}%`] }))}
         />
         <Tableau
-          titre="Poteaux posés — par ville"
-          entetes={['Ville', 'Poteaux posés']}
-          lignes={poteauxParVille.map((v) => ({ key: v.ville, cells: [v.ville, <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{v.poteaux}</span>] }))}
-          total={['Total', poteauxParVille.reduce((a, v) => a + v.poteaux, 0)]}
+          titre="Poteaux — par ville"
+          entetes={['Ville', 'Posés', 'Nécessaires']}
+          lignes={poteauxParVille.map((v) => ({
+            key: v.ville,
+            cells: [
+              v.ville,
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{v.poteaux}</span>,
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-orange-50 text-orange-700">{v.necessaires}</span>,
+            ],
+          }))}
+          total={['Total', poteauxParVille.reduce((a, v) => a + v.poteaux, 0), poteauxParVille.reduce((a, v) => a + v.necessaires, 0)]}
         />
       </div>
 

@@ -1,8 +1,9 @@
 import { supabase } from './supabase';
 import type { ClotureAVerifier, OtStatut, Penalite, ProgrammeOT } from '@/types';
 import type { ParsedOT } from '@/utils/otPdf';
-import type { MotifFauxOk } from '@/utils/programme';
+import { poteauxBesoin, type MotifFauxOk } from '@/utils/programme';
 import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts } from './refs';
+import { echeance } from '@/utils/points';
 
 // Les fiches OT du programme sont des situations dont `numero_ot` est renseigné.
 // Une information n'est stockée qu'une fois (voir supabase_normalisation.sql) :
@@ -326,10 +327,26 @@ export interface Cloture {
 
 /** Clôture d'une fiche par le chef (fait / non fait), ou remise « à faire » (tout est effacé).
  *  « Fait » renseigne aussi la date de mise en service et la personne (traite_par), comme un OK de la page Situations. */
+/**
+ * Poteaux posés par une fiche faite : ceux demandés avant (« Besoin poteau », « Besoin 2 poteaux »,
+ * « Poteau cassé ») par la fiche elle-même ou par ses « non fait » passés (historique des renvois).
+ */
+async function poteauxAPoser(id: string): Promise<number> {
+  let n = 0;
+  const { data: row } = await supabase.from(TABLE).select('poteau').eq('id', id).maybeSingle();
+  n = Math.max(n, Number(row?.poteau) || 0);
+  const { data: hist, error } = await supabase.from('historique_clotures_detail').select('*').eq('situation_id', id);
+  if (!error)
+    for (const h of hist ?? []) if (h.statut === 'non_ok') n = Math.max(n, Number(h.poteau) || 0, poteauxBesoin(h.motif_cloture as string));
+  return n;
+}
+
 export async function cloturer(id: string, c: Cloture, par: Par): Promise<void> {
   const reset = c.statut === 'a_faire';
   const fait = c.statut === 'fait';
   const now = new Date().toISOString();
+  // fait : les poteaux demandés avant sont maintenant posés ; non fait : poteaux nécessaires
+  const poteau = reset ? 0 : fait ? await poteauxAPoser(id) : Math.max(0, Math.round(c.poteaux ?? 0));
   // nouvel ONT posé lors d'un changement de constitution : enregistré dans onts
   let nouvelOntId: string | null = null;
   if (fait && c.cstChange && normOnt(c.nouvelOnt)) {
@@ -348,7 +365,7 @@ export async function cloturer(id: string, c: Cloture, par: Par): Promise<void> 
       // la ligne prend le nouveau DIS / ONT (règle automatique de la base)
       nouveau_dis: fait && c.cstChange ? (c.nouveauDis ?? '') : '',
       nouvel_ont_id: nouvelOntId,
-      poteau: reset ? 0 : Math.max(0, Math.round(c.poteaux ?? 0)),
+      poteau,
       traite_par: reset ? null : par.id,
       traite_le: reset ? null : now,
       date_mise_en_service: fait ? now.slice(0, 10) : null,
@@ -492,6 +509,8 @@ export async function affecterUrgent(
   if (opts.par?.id) patch.distribue_par = opts.par.id;
   if (opts.motif) patch.motif = opts.motif;
 
+  // fiche « non faite » renvoyée en urgence : « OT reçu le » = jour du renvoi
+  await redaterRenvoi([id], dateProg, {});
   const { error } = await supabase.from(TABLE).update(patch).eq('id', id);
   if (error) throw dbError(error, 'Affectation urgente impossible');
 
@@ -1052,12 +1071,60 @@ export async function fetchHistoriquePeriode(from: string, to: string): Promise<
 }
 
 /**
+ * Une fiche « non faite » renvoyée repart d'une nouvelle date « OT reçu le » (date_recu et
+ * date_message) : la date lue sur l'OT réimporté si elle est plus récente, sinon le jour du renvoi
+ * (au plus tard le jour du programme). Sans cela, le délai partait toujours de la première
+ * réception et la fiche renvoyée était « hors délai » d'office. La date n'avance jamais en arrière.
+ *
+ * Seulement si la fiche a été dite « non faite » DANS son délai. Déjà hors délai ce jour-là
+ * (ex. installation reçue le 16, échéance le 18, « non faite » le 19) : elle garde sa date
+ * et reste hors délai.
+ */
+async function redaterRenvoi(ids: string[], date: string, datesOt: Record<string, string | null | undefined>) {
+  const n = new Date();
+  const aujourdhui = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+  const jourRenvoi = date && date < aujourdhui ? date : aujourdhui;
+  const parDate = new Map<string, string[]>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select('id, status, nature, date_recu, date_message, traite_le')
+      .in('id', ids.slice(i, i + 200));
+    if (error) throw dbError(error, 'Lecture des fiches à renvoyer impossible');
+    for (const r of data ?? []) {
+      if (r.status !== 'non_ok') continue;
+      const ancienne = ((r.date_recu ?? r.date_message ?? '') as string).slice(0, 10);
+      // « non faite » après l'échéance officielle : déjà hors délai, on garde la date
+      const jourNonFait = ((r.traite_le ?? '') as string).slice(0, 10);
+      const nature = r.nature === 'installation' ? 'installation' : 'derangement';
+      if (ancienne && jourNonFait && jourNonFait > echeance(ancienne, nature)) continue;
+      const lue = (datesOt[r.id as string] ?? '').slice(0, 10);
+      const nouvelle = lue && lue > ancienne ? lue : jourRenvoi;
+      if (nouvelle > ancienne) parDate.set(nouvelle, [...(parDate.get(nouvelle) ?? []), r.id as string]);
+    }
+  }
+  for (const [d, liste] of parDate) {
+    const { error } = await supabase.from(TABLE).update({ date_recu: d, date_message: d }).in('id', liste);
+    if (error) throw dbError(error, 'Mise à jour de la date « OT reçu le » impossible');
+  }
+}
+
+/**
  * Renvoie des fiches « non faites » à une équipe (null : la même) pour le jour donné : le motif
  * passé est gardé dans l'historique, la fiche redevient « à faire ». Renvoie le nombre renvoyé.
  */
-export async function redistribuer(ids: string[], equipe: string | null, date: string, par: Par): Promise<number> {
+export async function redistribuer(
+  ids: string[],
+  equipe: string | null,
+  date: string,
+  par: Par,
+  /** date « OT reçu le » lue sur l'OT réimporté, par id de fiche */
+  datesOt: Record<string, string | null | undefined> = {},
+): Promise<number> {
   const teamId = equipe ? await teamIdFor(equipe) : null;
   if (equipe && !teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
+  // avant le renvoi : l'échéance et la priorité calculées par la base partent de la nouvelle date
+  await redaterRenvoi(ids, date, datesOt);
   const { data, error } = await supabase.rpc('redistribuer_fiches', { p_ids: ids, p_team: teamId, p_date: date, p_par: par.id });
   if (error) {
     if (error.code === 'PGRST202' || error.code === '42883')
