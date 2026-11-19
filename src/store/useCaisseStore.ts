@@ -94,7 +94,7 @@ export const useCaisseStore = create<CaisseState>()((set, get) => ({
   start: (user) => {
     currentUser = user;
     const withCaisses = canUseCaisses(user.role);
-    fetchNotifications(user.id).then((notifications) => set({ notifications }));
+    fetchNotifications(user.id).then((notifications) => set({ notifications }), () => undefined);
     if (withCaisses) {
       get().reload().then(() => {
         // Vérifie si des charges fixes sont dues aujourd'hui (lundi matin, jeudi matin, 1er du mois)
@@ -118,22 +118,23 @@ export const useCaisseStore = create<CaisseState>()((set, get) => ({
       onOperationsChanged: scheduleReload,
     });
     // Filet de sécurité si le temps réel est coupé (réseau mobile) : resynchronise chaque minute
-    const poll = setInterval(() => {
-      fetchNotifications(user.id).then((notifications) => set({ notifications }));
+    // hors ligne (pas d'internet / DNS) ou onglet caché : on n'interroge pas la base pour rien
+    // (sinon des dizaines d'erreurs ERR_NAME_NOT_RESOLVED) ; on resynchronise au retour du réseau
+    const enLigne = () => typeof navigator === 'undefined' || navigator.onLine !== false;
+    const resync = () => {
+      if (!enLigne() || document.visibilityState !== 'visible') return;
+      fetchNotifications(user.id).then((notifications) => set({ notifications }), () => undefined);
       scheduleReload();
-    }, 60_000);
-    const onFocus = () => {
-      if (document.visibilityState === 'visible') {
-        fetchNotifications(user.id).then((notifications) => set({ notifications }));
-        scheduleReload();
-      }
     };
-    document.addEventListener('visibilitychange', onFocus);
+    const poll = setInterval(resync, 60_000);
+    document.addEventListener('visibilitychange', resync);
+    window.addEventListener('online', resync);
 
     return () => {
       unsubscribe();
       clearInterval(poll);
-      document.removeEventListener('visibilitychange', onFocus);
+      document.removeEventListener('visibilitychange', resync);
+      window.removeEventListener('online', resync);
       currentUser = null;
       set({ caisses: [], operations: [], chargesFixes: [], notifications: [], loaded: false, error: null, incoming: null });
     };

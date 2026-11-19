@@ -21,14 +21,31 @@ import {
   fetchNonFaitesARenvoyer,
   rechercherProgramme,
   ajouterContact,
+  fetchMotifsPrecedents,
+  modifierZoneDis,
   type ClotureArchivee,
+  type MotifPrecedent,
   signalerFauxOk,
   situationsOuvertes,
   subscribeProgramme,
 } from '@/lib/programmeService';
-import { HistoriqueMotifs } from '@/components/programme/Historique';
+import { HistoriqueMotifs, MotifsPrecedents } from '@/components/programme/Historique';
 import { AffecterUrgentModal } from '@/components/programme/AffecterUrgentModal';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, hubDe, hubLabel, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
+import {
+  NATURE_CLASS,
+  NATURE_LABEL,
+  STATUT_OT,
+  fmtTel,
+  hubDe,
+  hubLabel,
+  libelleFauxOk,
+  ligneLabel,
+  peutAjouterContact,
+  peutModifierZoneDis,
+  peutSignalerFauxOk,
+  zoneDuDis,
+  type MotifFauxOk,
+} from '@/utils/programme';
 import { POINTS, REGLAGES_PROGRAMME, delaiOT, estPrioritaire, estSoir, fmtPts, jourCourt, jourOuvreSuivant, jourRemise, motPoint, ptsTexte } from '@/utils/points';
 import { usePerimetre } from '@/hooks/usePerimetre';
 import { ClotureResume } from '@/components/programme/OtCard';
@@ -45,6 +62,8 @@ type Item = ParsedOT & {
   existante?: { equipe: string; type: string }; // situation Excel ouverte que l'OT va compléter
   /** OT déjà distribué et rendu « non fait » (RV demain…) : renvoyé, son motif passé est gardé */
   renvoi?: { id: string; equipe: string; motif: string; traiteLe: string | null };
+  /** fiches déjà clôturées de la même ligne (dérangements, installation…) : leurs motifs */
+  precedents?: MotifPrecedent[];
   include: boolean;
 };
 type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientCode' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
@@ -266,8 +285,15 @@ export default function DistributionPage() {
       const horsVille = parsed.filter((p) => p.equipe && !equipeOk(p.equipe)).length;
       const fresh = parsed.filter((p) => p.numeroOt && (!p.equipe || equipeOk(p.equipe)) && !seen.has(p.numeroOt) && (seen.add(p.numeroOt), true));
       if (horsVille) showToast(`${horsVille} fiche${horsVille > 1 ? 's' : ''} hors de ${ville} ignorée${horsVille > 1 ? 's' : ''}`, 'info');
-      const [deja, ouvertes] = await Promise.all([existingNumeros(fresh.map((p) => p.numeroOt)), situationsOuvertes(fresh.map((p) => p.fgp))]);
+      const [deja, ouvertes, precedents] = await Promise.all([
+        existingNumeros(fresh.map((p) => p.numeroOt)),
+        situationsOuvertes(fresh.map((p) => p.fgp)),
+        // motifs passés de la ligne : sans bloquer la lecture si la requête échoue
+        fetchMotifsPrecedents(fresh.map((p) => p.fgp)).catch(() => new Map<string, MotifPrecedent[]>()),
+      ]);
       fresh.forEach((p) => {
+        const prec = precedents.get(p.fgp.trim());
+        if (prec?.length) p.precedents = prec;
         const d = deja.get(p.numeroOt);
         // déjà « non faite » (RV demain, local fermé…) : on peut la renvoyer, son motif reste dans l'historique
         if (d && d.status === 'non_ok') Object.assign(p, { renvoi: { id: d.id, equipe: d.equipe, motif: d.motif, traiteLe: d.traiteLe }, equipe: p.equipe || d.equipe, include: true });
@@ -354,8 +380,19 @@ export default function DistributionPage() {
   const [urgentModalOpen, setUrgentModalOpen] = useState(false);
   // motifs passés des fiches renvoyées, et renvoi en cours (une fiche ou toutes les non faites d'une équipe)
   const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
-  const [renvoi, setRenvoi] = useState<{ cle: string; ids: string[]; equipe: string; date: string } | null>(null);
+  // fiche seule : le superviseur peut aussi corriger sa zone et son DIS
+  const [renvoi, setRenvoi] = useState<{
+    cle: string;
+    ids: string[];
+    equipe: string;
+    date: string;
+    fiche?: ProgrammeOT;
+    nouvelleZone?: string;
+    nouveauDis?: string;
+  } | null>(null);
   const peutRenvoyer = user.role === 'admin' || user.role === 'superviseur' || user.role === 'directeur';
+  const peutContact = peutAjouterContact(user.role);
+  const peutZoneDis = peutModifierZoneDis(user.role);
   // non faites encore à renvoyer (N derniers jours, Paramètres) : en bas du suivi, sans changer de jour
   const [nonFaites, setNonFaites] = useState<ProgrammeOT[]>([]);
   // filtre du suivi et équipes repliées (mémorisées sur cet appareil)
@@ -476,11 +513,14 @@ export default function DistributionPage() {
   const nonFaitesIds = useMemo(() => new Set(nonFaites.map((o) => o.id)), [nonFaites]);
   const nbRetard = useMemo(() => ouvertes.filter((o) => delaiOT(o).etat === 'retard').length, [ouvertes]);
   const ouvertesGroups = useMemo(() => {
-    const rang = (o: ProgrammeOT) => (o.isUrgent ? 0 : delaiOT(o).etat === 'retard' ? 1 : o.prioritaire ? 2 : 3);
+    const rang = (o: ProgrammeOT) => {
+      const d = delaiOT(o);
+      return o.isUrgent ? 0 : d.etat === 'retard' ? 1 : d.prioritaire ? 2 : 3;
+    };
     const m = new Map<string, ProgrammeOT[]>();
     ouvertes.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()]
-      .map(([e, l]) => [e, [...l].sort((a, b) => rang(a) - rang(b) || (a.echeanceEquipe ?? '').localeCompare(b.echeanceEquipe ?? ''))] as const)
+      .map(([e, l]) => [e, [...l].sort((a, b) => rang(a) - rang(b) || delaiOT(a).echeance.localeCompare(delaiOT(b).echeance))] as const)
       .sort(([a], [b]) => a.localeCompare(b));
   }, [ouvertes]);
   // le jour choisi : seulement ce qui n'est ni épinglé en haut (en cours) ni en bas (non faites à renvoyer)
@@ -560,18 +600,50 @@ export default function DistributionPage() {
   };
 
   /** Renvoyer des fiches « non faites » (motif passé gardé) */
-  const ouvrirRenvoi = (cle: string, ids: string[], equipe: string) =>
+  const ouvrirRenvoi = (cle: string, ids: string[], equipe: string, fiche?: ProgrammeOT) =>
     setRenvoi(
       renvoi?.cle === cle
         ? null
-        : { cle, ids, equipe, date: estSoir() ? jourOuvreSuivant(todayISO()) : todayISO() },
+        : {
+            cle,
+            ids,
+            equipe,
+            date: estSoir() ? jourOuvreSuivant(todayISO()) : todayISO(),
+            fiche,
+            nouvelleZone: fiche?.zone ?? '',
+            nouveauDis: fiche?.dis ?? '',
+          },
     );
+  /** Zone / DIS changés par le superviseur sur une fiche : enregistrés sur la ligne avant l'envoi */
+  const appliquerZoneDis = async (fiche: ProgrammeOT | undefined, zone?: string, dis?: string) => {
+    if (!fiche?.fgp || !peutZoneDis) return '';
+    const z = (zone ?? '').replace(/\s+/g, '').toUpperCase();
+    const d = (dis ?? '').replace(/\s+/g, '').toUpperCase();
+    const nz = z && z !== fiche.zone.toUpperCase() ? z : '';
+    const nd = d && d !== fiche.dis.toUpperCase() ? d : '';
+    if (!nz && !nd) return '';
+    await modifierZoneDis(fiche.fgp, { zone: nz, dis: nd });
+    return ` · ${[nz && `zone ${nz}`, nd && `DIS ${nd}`].filter(Boolean).join(', ')}`;
+  };
+  /** Nouveau DIS saisi : la zone suit (6 premiers caractères) et l'équipe de cette zone est proposée */
+  const changerDisRenvoi = (dis: string) => {
+    if (!renvoi) return;
+    const z = zoneDuDis(dis);
+    const eq = z ? zoneEquipe[z] : undefined;
+    setRenvoi({ ...renvoi, nouveauDis: dis, ...(z ? { nouvelleZone: z } : {}), ...(eq && equipeNames.includes(eq) ? { equipe: eq } : {}) });
+  };
+  const changerZoneRenvoi = (zone: string) => {
+    if (!renvoi) return;
+    const eq = zoneEquipe[zone.trim().toUpperCase()];
+    setRenvoi({ ...renvoi, nouvelleZone: zone, ...(eq && equipeNames.includes(eq) ? { equipe: eq } : {}) });
+  };
   const doRenvoyer = async () => {
     if (!renvoi) return;
     try {
+      const zd = await appliquerZoneDis(renvoi.fiche, renvoi.nouvelleZone, renvoi.nouveauDis);
       const n = await redistribuer(renvoi.ids, renvoi.equipe, renvoi.date, user);
       showToast(
-        `${n} fiche${n > 1 ? 's' : ''} renvoyée${n > 1 ? 's' : ''} à ${renvoi.equipe} pour le ${jourCourt(renvoi.date)} — motif${n > 1 ? 's' : ''} précédent${n > 1 ? 's' : ''} gardé${n > 1 ? 's' : ''}`,
+        `${n} fiche${n > 1 ? 's' : ''} renvoyée${n > 1 ? 's' : ''} à ${renvoi.equipe} pour le ${jourCourt(renvoi.date)}${zd} — motif${n > 1 ? 's' : ''} précédent${n > 1 ? 's' : ''} gardé${n > 1 ? 's' : ''}`,
         'success',
       );
       setRenvoi(null);
@@ -611,22 +683,47 @@ export default function DistributionPage() {
           onChange={(e) => e.target.value && setRenvoi({ ...renvoi, date: e.target.value })}
           className="border border-slate-200 rounded-md px-2 py-1 text-xs bg-white"
         />
+        {renvoi.fiche && peutZoneDis && (
+          <span className="basis-full flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-blue-900">Nouvelle zone</span>
+            <input
+              aria-label="Nouvelle zone"
+              value={renvoi.nouvelleZone ?? ''}
+              onChange={(e) => changerZoneRenvoi(e.target.value)}
+              placeholder="CA1Z04"
+              className="w-24 border border-slate-200 rounded-md px-2 py-1 text-xs bg-white font-mono uppercase"
+            />
+            <span className="text-xs font-semibold text-blue-900">nouveau DIS</span>
+            <input
+              aria-label="Nouveau DIS"
+              value={renvoi.nouveauDis ?? ''}
+              onChange={(e) => changerDisRenvoi(e.target.value)}
+              placeholder="CA1Z042611/1-4"
+              className="w-40 border border-slate-200 rounded-md px-2 py-1 text-xs bg-white font-mono uppercase"
+            />
+          </span>
+        )}
         <Button size="sm" icon={<RotateCcw className="w-3.5 h-3.5" />} onClick={doRenvoyer} disabled={!renvoi.equipe}>
           Renvoyer
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setRenvoi(null)}>
           Annuler
         </Button>
-        <p className="basis-full text-[11px] text-blue-800">La fiche redevient « à faire » avec une nouvelle échéance ; le motif « non fait » reste dans son historique.</p>
+        <p className="basis-full text-[11px] text-blue-800">
+          La fiche redevient « à faire » avec une nouvelle échéance ; le motif « non fait » reste dans son historique.
+          {renvoi.fiche && peutZoneDis && ' Zone et DIS changés : enregistrés sur la ligne (toutes ses fiches).'}
+        </p>
       </div>
     );
 
   /** Une fiche du suivi avec ses actions (réaffecter, retarder, retirer) */
-  const ficheSuivi = (o: ProgrammeOT, showDate = false) => (
+  const ficheSuivi = (o: ProgrammeOT, showDate = false) => {
+    const d = delaiOT(o);
+    return (
     <div key={o.id} className={`flex items-start gap-3 px-4 py-2.5 border-b border-slate-100 last:border-0 ${o.isUrgent ? 'bg-orange-50/25' : ''}`}>
       <div className="min-w-0 flex-1 flex flex-col gap-1">
         <div className="flex">
-          <RowCells o={o} prioritaire={o.statut === 'a_faire' && o.prioritaire} isUrgent={o.isUrgent} />
+          <RowCells o={o} prioritaire={o.statut === 'a_faire' && d.prioritaire} isUrgent={o.isUrgent} />
         </div>
         {o.statut === 'a_faire' && o.isUrgent && o.motif && (
           <p className="text-[11px] font-semibold text-orange-800 flex items-center gap-1">
@@ -637,8 +734,8 @@ export default function DistributionPage() {
         {(o.statut === 'a_faire' || o.nbPenalites > 0 || showDate) && (
           <p className="text-[11px] text-slate-500">
             {showDate && <>Prévue le {jourCourt(o.dateProgramme)} · </>}
-            {o.statut === 'a_faire' && o.echeanceEquipe && <>échéance {jourCourt(o.echeanceEquipe)} 22 h</>}
-            {o.statut === 'a_faire' && o.echeanceEquipe && o.nbPenalites > 0 && ' · '}
+            {o.statut === 'a_faire' && <>échéance {jourCourt(d.echeance)} 22 h</>}
+            {o.statut === 'a_faire' && o.nbPenalites > 0 && ' · '}
             {o.nbPenalites > 0 && (
               <b className="text-red-700">
                 non traitée · {o.nbPenalites} pénalité{o.nbPenalites > 1 ? 's' : ''} pour {o.equipe}
@@ -646,7 +743,7 @@ export default function DistributionPage() {
             )}
           </p>
         )}
-        {o.fgp && (
+        {o.fgp && peutContact && (
           <div className="self-start">
             <AjoutContact compact onAjouter={(tel) => doAjouterContact(o, tel)} />
           </div>
@@ -656,7 +753,7 @@ export default function DistributionPage() {
         {o.statut === 'non_fait' && peutRenvoyer && renvoi?.cle !== o.id && (
           <button
             type="button"
-            onClick={() => ouvrirRenvoi(o.id, [o.id], o.equipe)}
+            onClick={() => ouvrirRenvoi(o.id, [o.id], o.equipe, o)}
             className="self-start inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:bg-blue-50 rounded-md px-1.5 py-1"
           >
             <RotateCcw className="w-3.5 h-3.5" /> Renvoyer pour refaire
@@ -757,7 +854,8 @@ export default function DistributionPage() {
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-6 animate-fade-in pb-24 md:pb-6">
@@ -924,7 +1022,10 @@ export default function DistributionPage() {
                       disabled={!!i.deja}
                       onChange={(e) => update(i.key, { include: e.target.checked })}
                     />
-                    <RowCells o={i} prioritaire={!!i.dateRecu && estPrioritaire(i.dateRecu, i.nature, jourRemise(null, dateProgramme))} />
+                    <div className="min-w-0 flex-1">
+                      <RowCells o={i} prioritaire={!!i.dateRecu && estPrioritaire(i.dateRecu, i.nature, jourRemise(null, dateProgramme))} />
+                      <MotifsPrecedents liste={i.precedents} />
+                    </div>
                     <div className="flex flex-col items-end gap-1">
                       {i.deja ? (
                         <span className="text-[11px] text-slate-500">
@@ -1338,6 +1439,7 @@ export default function DistributionPage() {
           equipeNames={equipeNames}
           zoneEquipe={zoneEquipe}
           user={user}
+          peutModifierZoneDis={peutZoneDis}
           fichesActuelles={[...hist, ...ouvertes]}
           onSuccess={(msg) => {
             showToast(msg, 'success');

@@ -152,8 +152,14 @@ export const estSoir = (d = new Date()) => d.getHours() >= REGLAGES_PROGRAMME.he
 export const estPourPlusTard = (ot: Pick<ProgrammeOT, 'statut' | 'assigneLe' | 'dateProgramme'>, jour = isoJour(Date.now())) =>
   ot.statut === 'a_faire' && jourRemise(ot.assigneLe, ot.dateProgramme) > jour;
 
-/** Délai officiel dépassé le jour de la remise */
-export const estPrioritaire = (recuLe: string, nature: ProgrammeOT['nature'], remise: string) => echeance(recuLe, nature) < remise;
+/**
+ * Prioritaire : l'échéance normale de l'équipe dépasserait le délai officiel (depuis « OT reçu le »).
+ *   • dérangement (à faire le jour de la remise) : délai officiel déjà dépassé à la remise ;
+ *   • installation (normalement le lendemain) : la remise tombe le dernier jour du délai ou après.
+ *     Ex. installation reçue le 16 (délai 2 jours ouvrés → 18), remise le 18 : prioritaire, à faire le 18.
+ */
+export const estPrioritaire = (recuLe: string, nature: ProgrammeOT['nature'], remise: string) =>
+  nature === 'installation' ? echeance(recuLe, nature) <= remise : echeance(recuLe, nature) < remise;
 /** Échéance de l'équipe (avant 22 h ce jour-là) */
 export function echeanceEquipe(recuLe: string, nature: ProgrammeOT['nature'], remise: string): string {
   return estPrioritaire(recuLe, nature, remise) || nature === 'derangement' ? remise : ajouterJoursOuvres(remise, 1);
@@ -194,8 +200,12 @@ export function delaiOT(
   const confieLe = ot.assigneLe ? new Date(ot.assigneLe).toISOString().slice(0, 10) : null;
   const depart = jourRemise(ot.assigneLe, ot.dateProgramme);
   const echeanceOfficielle = echeance(recuLe, ot.nature);
-  const prioritaire = ot.echeanceEquipe ? !!ot.prioritaire : estPrioritaire(recuLe, ot.nature, depart);
-  const ech = ot.echeanceEquipe ?? echeanceEquipe(recuLe, ot.nature, depart);
+  // fiche encore à faire : la règle « prioritaire » est recalculée ici (aussi pour un programme déjà
+  // distribué, ex. ce soir pour demain) ; une fiche close garde l'échéance enregistrée (points inchangés)
+  const prioCalcule = ot.statut === 'a_faire' && estPrioritaire(recuLe, ot.nature, depart);
+  const prioritaire = (ot.echeanceEquipe ? !!ot.prioritaire : estPrioritaire(recuLe, ot.nature, depart)) || prioCalcule;
+  let ech = ot.echeanceEquipe ?? echeanceEquipe(recuLe, ot.nature, depart);
+  if (prioCalcule && depart < ech) ech = depart;
   const fin = ot.statut === 'fait' && ot.traiteLe ? Date.parse(ot.traiteLe) : now;
   const dansLesTemps = fin <= limite22h(ech);
   const etat: EtatDelai =

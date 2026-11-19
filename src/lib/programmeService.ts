@@ -523,6 +523,94 @@ export async function ajouterContact(fgp: string, tel: string): Promise<string[]
   return telephones;
 }
 
+/**
+ * Nouvelle zone / nouveau DIS d'une ligne (superviseur, au renvoi ou en cas urgent) : enregistré
+ * sur la ligne, donc sur toutes ses fiches. La zone vide n'est pas écrite.
+ */
+export async function modifierZoneDis(fgp: string, opts: { zone?: string; dis?: string }): Promise<void> {
+  const patch: Record<string, string> = {};
+  const zone = opts.zone?.replace(/\s+/g, '').toUpperCase();
+  const dis = opts.dis?.replace(/\s+/g, '').toUpperCase();
+  if (zone) patch.zone = zone;
+  if (dis) patch.dis = dis;
+  if (!Object.keys(patch).length) return;
+  const { data, error } = await supabase.from('lignes').update(patch).eq('fgp', fgp.trim()).select('id');
+  if (error) throw dbError(error, 'Changement de zone / DIS impossible');
+  if (!data?.length) throw new Error(`Ligne ${fgp} introuvable`);
+}
+
+/** Clôture précédente d'une ligne (autre fiche du même FGP), pour la distribution */
+export interface MotifPrecedent {
+  id: string;
+  numeroOt: string;
+  nature: ProgrammeOT['nature'];
+  statut: OtStatut;
+  motif: string;
+  commentaire: string;
+  equipe: string;
+  traiteLe: string | null;
+  dateProgramme: string;
+}
+
+/**
+ * Motifs des fiches déjà clôturées (faites ou non faites) de ces lignes : FGP → clôtures, la plus
+ * récente d'abord (5 au plus par ligne). Les clôtures archivées (fiche renvoyée puis refaite) en font partie.
+ */
+export async function fetchMotifsPrecedents(fgps: string[]): Promise<Map<string, MotifPrecedent[]>> {
+  const out = new Map<string, MotifPrecedent[]>();
+  const liste = [...new Set(fgps.map((f) => f.trim()).filter(Boolean))];
+  for (let i = 0; i < liste.length; i += 200) {
+    const { data, error } = await supabase
+      .from(VUE)
+      .select('id, numero_ot, nature, status, motif_cloture, comment, equipe, traite_le, updated_at, date_programme, fgp')
+      .in('fgp', liste.slice(i, i + 200))
+      .in('status', [versStatus.fait, versStatus.non_fait])
+      .order('traite_le', { ascending: false, nullsFirst: false })
+      .limit(2000);
+    if (error) throw dbError(error, 'Lecture des motifs précédents impossible');
+    for (const r of data ?? []) {
+      const m: MotifPrecedent = {
+        id: r.id as string,
+        numeroOt: (r.numero_ot as string) ?? '',
+        nature: r.nature === 'derangement' ? 'derangement' : 'installation',
+        statut: versStatut(r.status as string),
+        motif: (r.motif_cloture as string) ?? '',
+        commentaire: (r.comment as string) ?? '',
+        equipe: (r.equipe as string) ?? '',
+        traiteLe: (r.traite_le as string) ?? (r.updated_at as string) ?? null,
+        dateProgramme: (r.date_programme as string) ?? '',
+      };
+      out.set(r.fgp as string, [...(out.get(r.fgp as string) ?? []), m]);
+    }
+    // anciennes clôtures des fiches renvoyées (motif « non fait » gardé dans l'historique)
+    const { data: arch, error: e2 } = await supabase
+      .from('historique_clotures_detail')
+      .select('*')
+      .in('fgp', liste.slice(i, i + 200))
+      .limit(2000);
+    if (!e2)
+      for (const r of arch ?? []) {
+        const h = mapArchive(r);
+        out.set(h.fgp, [
+          ...(out.get(h.fgp) ?? []),
+          {
+            id: h.id,
+            numeroOt: '',
+            nature: h.nature === 'installation' ? 'installation' : 'derangement',
+            statut: h.statut === 'non_ok' ? 'non_fait' : 'fait',
+            motif: h.motif,
+            commentaire: h.commentaire,
+            equipe: h.equipe,
+            traiteLe: h.traiteLe,
+            dateProgramme: '',
+          },
+        ]);
+      }
+  }
+  out.forEach((l, k) => out.set(k, l.sort((a, b) => (b.traiteLe ?? '').localeCompare(a.traiteLe ?? '')).slice(0, 5)));
+  return out;
+}
+
 export interface OtUrgentInput {
   nature: 'derangement' | 'installation';
   typeLigne?: 'FGP' | 'TPH';

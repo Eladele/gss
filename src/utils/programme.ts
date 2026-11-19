@@ -144,6 +144,15 @@ export const MOTIFS_FAUX_OK = [
 export type MotifFauxOk = (typeof MOTIFS_FAUX_OK)[number]['code'];
 /** Faux OK : réservé à l'administrateur et au superviseur (la base le vérifie aussi) */
 export const peutSignalerFauxOk = (role?: string) => role === 'admin' || role === 'superviseur';
+/** « + Contact » sur une fiche : réservé à l'administrateur et au superviseur (pas au chef d'équipe) */
+export const peutAjouterContact = (role?: string) => role === 'admin' || role === 'superviseur';
+/** Changer la zone / le DIS d'une fiche (renvoi, cas urgent) : administrateur et superviseur */
+export const peutModifierZoneDis = (role?: string) => role === 'admin' || role === 'superviseur';
+/** Zone écrite au début du DIS : CA1Z042611/1-4 → CA1Z04 (null si le DIS ne commence pas par une zone) */
+export const zoneDuDis = (dis?: string | null) => {
+  const m = /^([A-Z]{2}\d[A-Z]\d{2})/.exec((dis ?? '').replace(/\s+/g, '').toUpperCase());
+  return m ? m[1] : null;
+};
 /** « Ne synchronise pas », « Autre : modem absent » ; ancien faux OK sans code : sa note */
 export const libelleFauxOk = (code: string | null | undefined, note?: string | null) => {
   const label = MOTIFS_FAUX_OK.find((m) => m.code === code)?.label;

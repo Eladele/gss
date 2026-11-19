@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react';
 import { AlertCircle, AlertTriangle, Cable, Check, Flame, Plus, Search, Wrench } from 'lucide-react';
 import { Button, Modal, Select } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel, zoneDuDis } from '@/utils/programme';
 import {
   affecterUrgent,
   creerEtAffecterOtUrgent,
+  modifierZoneDis,
   rechercherFichesProgramme,
   urgentDepuisFiche,
   type OtUrgentInput,
@@ -20,6 +21,8 @@ interface Props {
   user: { id: string; name: string };
   fichesActuelles?: ProgrammeOT[];
   onSuccess: (msg: string) => void;
+  /** superviseur / administrateur : peut changer la zone et le DIS de la fiche affectée */
+  peutModifierZoneDis?: boolean;
 }
 
 export function AffecterUrgentModal({
@@ -30,6 +33,7 @@ export function AffecterUrgentModal({
   user,
   fichesActuelles = [],
   onSuccess,
+  peutModifierZoneDis = false,
 }: Props) {
   const today = new Date().toISOString().slice(0, 10);
   const [tab, setTab] = useState<'existant' | 'nouveau'>('existant');
@@ -46,6 +50,29 @@ export function AffecterUrgentModal({
   const [urgentMotif, setUrgentMotif] = useState('');
   // nature du cas urgent : celle de la fiche par défaut (ex. dérangement sur une ancienne installation)
   const [urgentNature, setUrgentNature] = useState<ProgrammeOT['nature']>('derangement');
+  // nouvelle zone / nouveau DIS de la fiche (superviseur) : préremplis avec ceux de la fiche
+  const [targetZone, setTargetZone] = useState('');
+  const [targetDis, setTargetDis] = useState('');
+  const norm = (v: string) => v.replace(/\s+/g, '').toUpperCase();
+  const zoneChangee = !!selectedFiche && !!norm(targetZone) && norm(targetZone) !== norm(selectedFiche.zone);
+  const disChange = !!selectedFiche && !!norm(targetDis) && norm(targetDis) !== norm(selectedFiche.dis);
+  /** l'équipe de la zone est proposée quand la zone change */
+  const proposerEquipe = (z: string) => {
+    const eq = zoneEquipe[norm(z)];
+    if (eq && equipeNames.includes(eq)) setTargetEquipe(eq);
+  };
+  const changerZone = (z: string) => {
+    setTargetZone(z);
+    proposerEquipe(z);
+  };
+  const changerDis = (d: string) => {
+    setTargetDis(d);
+    const z = zoneDuDis(d);
+    if (z) {
+      setTargetZone(z);
+      proposerEquipe(z);
+    }
+  };
   /** fiche close (faite / non faite) ou nature changée : nouvel OT urgent, l'ancienne fiche garde sa clôture */
   const nouvelOt = !!selectedFiche && (selectedFiche.statut !== 'a_faire' || urgentNature !== selectedFiche.nature);
 
@@ -104,6 +131,8 @@ export function AffecterUrgentModal({
     setTargetDate(f.statut === 'a_faire' ? f.dateProgramme || today : today);
     setUrgentMotif(f.statut === 'a_faire' ? f.motif || '' : '');
     setUrgentNature(f.nature);
+    setTargetZone(f.zone || '');
+    setTargetDis(f.dis || '');
   };
 
   const handleConfirmExistant = async () => {
@@ -112,14 +141,21 @@ export function AffecterUrgentModal({
     setLoading(true);
     setError('');
     try {
+      const zd = peutModifierZoneDis && (zoneChangee || disChange);
+      const suffixe = zd ? ` · ${[zoneChangee && `zone ${norm(targetZone)}`, disChange && `DIS ${norm(targetDis)}`].filter(Boolean).join(', ')}` : '';
+      // nouvelle zone / nouveau DIS : enregistrés sur la ligne (toutes ses fiches)
+      if (zd) await modifierZoneDis(selectedFiche.fgp, { zone: zoneChangee ? targetZone : undefined, dis: disChange ? targetDis : undefined });
+      const fiche = zd
+        ? { ...selectedFiche, zone: zoneChangee ? norm(targetZone) : selectedFiche.zone, dis: disChange ? norm(targetDis) : selectedFiche.dis }
+        : selectedFiche;
       if (nouvelOt) {
         // toute la fiche reprise (client, contacts, adresse, DIS, ONT…) dans un nouvel OT urgent
         await urgentDepuisFiche(
-          selectedFiche,
+          fiche,
           { nature: urgentNature, equipe: targetEquipe, dateProgramme: targetDate, motif: urgentMotif.trim() || undefined },
           user,
         );
-        onSuccess(`Cas urgent (${NATURE_LABEL[urgentNature]}) créé depuis ${ligneLabel(selectedFiche)} avec l’OT complet, affecté à ${targetEquipe}`);
+        onSuccess(`Cas urgent (${NATURE_LABEL[urgentNature]}) créé depuis ${ligneLabel(selectedFiche)} avec l’OT complet, affecté à ${targetEquipe}${suffixe}`);
       } else {
         await affecterUrgent(selectedFiche.id, targetEquipe, {
           dateProgramme: targetDate,
@@ -127,7 +163,7 @@ export function AffecterUrgentModal({
           par: user,
           motif: urgentMotif.trim() || undefined,
         });
-        onSuccess(`Fiche ${ligneLabel(selectedFiche)} affectée en cas urgent à l’équipe ${targetEquipe}`);
+        onSuccess(`Fiche ${ligneLabel(selectedFiche)} affectée en cas urgent à l’équipe ${targetEquipe}${suffixe}`);
       }
       onClose();
     } catch (e) {
@@ -403,6 +439,42 @@ export function AffecterUrgentModal({
                     />
                   </div>
                 </div>
+
+                {peutModifierZoneDis && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label htmlFor="affect-zone" className="block font-semibold text-slate-700 mb-1">
+                        Nouvelle zone
+                      </label>
+                      <input
+                        id="affect-zone"
+                        type="text"
+                        value={targetZone}
+                        onChange={(e) => changerZone(e.target.value)}
+                        placeholder="Ex: CA1Z04"
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white font-mono uppercase focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="affect-dis" className="block font-semibold text-slate-700 mb-1">
+                        Nouveau DIS
+                      </label>
+                      <input
+                        id="affect-dis"
+                        type="text"
+                        value={targetDis}
+                        onChange={(e) => changerDis(e.target.value)}
+                        placeholder="Ex: CA1Z042611/1-4"
+                        className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white font-mono uppercase focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                    {(zoneChangee || disChange) && (
+                      <p className="sm:col-span-2 text-[11px] text-orange-800">
+                        Changement enregistré sur la ligne {ligneLabel(selectedFiche)} (toutes ses fiches) ; l’équipe de la nouvelle zone est proposée.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <label htmlFor="affect-motif" className="block font-semibold text-slate-700 mb-1 text-xs">

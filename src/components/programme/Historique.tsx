@@ -1,6 +1,32 @@
 import { History } from 'lucide-react';
-import type { ClotureArchivee } from '@/lib/programmeService';
+import type { ClotureArchivee, MotifPrecedent } from '@/lib/programmeService';
 import { jourCourt } from '@/utils/points';
+import { NATURE_LABEL } from '@/utils/programme';
+
+/**
+ * À la distribution : motifs des fiches précédentes de la même ligne
+ * (« Dérangement non fait le mar. 10/11 (EQ A) : Local fermé »), la plus récente d'abord.
+ */
+export function MotifsPrecedents({ liste }: { liste?: MotifPrecedent[] }) {
+  if (!liste?.length) return null;
+  return (
+    <div className="mt-1.5 rounded-md border border-amber-200 bg-amber-50/70 px-2 py-1 space-y-0.5">
+      <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Déjà dans l’historique de la ligne</p>
+      {liste.map((h) => (
+        <p key={h.id} className="text-[11px] text-amber-900 flex items-start gap-1.5">
+          <History className="w-3 h-3 mt-0.5 shrink-0 text-amber-600" />
+          <span>
+            {NATURE_LABEL[h.nature]} <b>{h.statut === 'non_fait' ? 'non fait' : 'fait'}</b>
+            {h.traiteLe ? ` le ${jourCourt(h.traiteLe.slice(0, 10))}` : ''}
+            {h.equipe ? ` (${h.equipe})` : ''}
+            {h.motif ? ` : ${h.motif}` : ''}
+            {h.commentaire ? ` — ${h.commentaire}` : ''}
+          </span>
+        </p>
+      ))}
+    </div>
+  );
+}
 
 /**
  * Motifs passés d'une fiche renvoyée : « Non fait le mar. 10/11 (EQ A) : RV demain — client absent ».

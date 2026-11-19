@@ -21,49 +21,66 @@ async function colEquipe(nom: string | null | undefined): Promise<{ team_id?: st
 
 const DEDUP = 'date_message,type,ligne_id,service_destination,date_depo,motif';
 
+/** Erreur passagère (réseau coupé, délai dépassé, serveur surchargé) : on peut réessayer */
+const erreurPassagere = (e: { code?: string; message?: string; status?: number } | null) =>
+  !!e && (e.code === '57014' || !e.code || /fetch|network|timeout|Failed/i.test(e.message ?? ''));
+
+/** Réessaie une requête Supabase (3 essais, 0,5 s puis 1,5 s d'attente) */
+async function avecEssais<T extends { error: { code?: string; message?: string } | null }>(requete: () => PromiseLike<T>): Promise<T> {
+  let res = await requete();
+  for (const attente of [500, 1500]) {
+    if (!res.error || !erreurPassagere(res.error)) return res;
+    await new Promise((r) => setTimeout(r, attente));
+    res = await requete();
+  }
+  return res;
+}
+
+/**
+ * Toutes les situations (vue situations_detail).
+ *
+ * Supabase renvoie 1000 lignes au plus par requête. Avant : pages par décalage (offset 0, 1000,
+ * … 5000) ; plus le décalage est grand, plus la base travaille (elle relit toutes les lignes
+ * sautées), jusqu'à dépasser son délai (erreur 500 à offset=5000) — et la page en erreur était
+ * perdue sans le dire. Maintenant : pagination « par curseur » (après la dernière ligne lue,
+ * created_at puis id), aussi rapide pour la dernière page que pour la première, avec nouveaux
+ * essais. Si une page échoue quand même, une erreur est levée : l'appelant garde les données
+ * déjà affichées au lieu d'une liste incomplète.
+ */
 export async function fetchSituations(): Promise<Situation[]> {
-  // Supabase limite les SELECT à 1000 lignes par requête par défaut — sans pagination,
-  // au-delà de 1000 situations, le refresh de la page en perdait silencieusement une
-  // partie (ex: 1552 juste après import, mais seulement 1000 après actualisation).
-  // Les pages sont demandées en parallèle (4 à la fois) après un comptage, au lieu
-  // d'attendre chaque page l'une après l'autre : le chargement est bien plus rapide.
   const PAGE = 1000;
-  const page = (from: number) =>
-    supabase
-      .from('situations_detail')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1);
-  const { count, error: errCount } = await supabase.from('situations_detail').select('id', { count: 'exact', head: true });
-  if (errCount || count == null) {
-    // comptage impossible : lecture page par page, comme avant
-    const all: Situation[] = [];
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await page(from);
-      if (error) {
-        console.error('fetchSituations:', error);
-        break;
-      }
-      if (!data || data.length === 0) break;
-      all.push(...data.map(mapSituation));
-      if (data.length < PAGE) break;
-    }
-    return all;
-  }
-  const debuts = Array.from({ length: Math.ceil(count / PAGE) }, (_, i) => i * PAGE);
-  const morceaux: Situation[][] = new Array(debuts.length);
-  for (let i = 0; i < debuts.length; i += 4) {
-    const lot = debuts.slice(i, i + 4);
-    const res = await Promise.all(lot.map(page));
-    res.forEach(({ data, error }, j) => {
-      if (error) console.error('fetchSituations:', error);
-      morceaux[i + j] = (data ?? []).map(mapSituation);
-    });
-  }
-  // une ligne ajoutée pendant la lecture peut apparaître sur deux pages : dédoublonnage
+  const all: Situation[] = [];
   const vus = new Set<string>();
-  return morceaux.flat().filter((s) => (vus.has(s.id) ? false : (vus.add(s.id), true)));
+  let curseur: { createdAt: string; id: string } | null = null;
+  for (;;) {
+    const c = curseur;
+    const { data, error } = await avecEssais(() => {
+      let q = supabase
+        .from('situations_detail')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .limit(PAGE);
+      if (c) q = q.or(`created_at.lt."${c.createdAt}",and(created_at.eq."${c.createdAt}",id.gt.${c.id})`);
+      return q;
+    });
+    if (error) {
+      console.error('fetchSituations:', error);
+      throw new Error(`Chargement des situations interrompu après ${all.length} lignes : ${error.message || 'erreur serveur'}`);
+    }
+    const rows = data ?? [];
+    for (const r of rows) {
+      if (vus.has(r.id)) continue;
+      vus.add(r.id);
+      all.push(mapSituation(r));
+    }
+    if (rows.length < PAGE) break;
+    const dernier = rows[rows.length - 1];
+    // created_at manquant : impossible d'avancer le curseur, on s'arrête plutôt que de boucler
+    if (!dernier.created_at) break;
+    curseur = { createdAt: dernier.created_at as string, id: dernier.id as string };
+  }
+  return all;
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {

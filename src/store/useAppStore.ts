@@ -233,8 +233,15 @@ export const useAppStore = create<AppState>()(
       loadAll: async () => {
         set({ loading: true });
         try {
-          const [situations, equipes, importHistory] = await Promise.all([fetchSituations(), fetchEquipes(), fetchImportHistory()]);
-          set({ situations, equipes, importHistory });
+          // chaque chargement est indépendant : une erreur sur les situations ne bloque pas les
+          // équipes, et les données déjà affichées sont gardées plutôt qu'une liste incomplète
+          const [situations, equipes, importHistory] = await Promise.allSettled([fetchSituations(), fetchEquipes(), fetchImportHistory()]);
+          if (situations.status === 'fulfilled') set({ situations: situations.value });
+          else console.error('loadAll situations:', situations.reason);
+          if (equipes.status === 'fulfilled') set({ equipes: equipes.value });
+          else console.error('loadAll equipes:', equipes.reason);
+          if (importHistory.status === 'fulfilled') set({ importHistory: importHistory.value });
+          else console.error('loadAll importHistory:', importHistory.reason);
         } catch (err) {
           console.error('loadAll error:', err);
         } finally {
@@ -411,7 +418,11 @@ export const useAppStore = create<AppState>()(
           // Recharge l'état réel depuis la base plutôt que de fusionner localement :
           // avec un upsert, certaines lignes mettent à jour des situations existantes
           // au lieu d'en créer de nouvelles — impossible à déterminer fiablement côté client.
-          const situations = await fetchSituations();
+          // import déjà enregistré : si le rechargement échoue, on garde la liste actuelle
+          const situations = await fetchSituations().catch((e) => {
+            console.error('importSituations reload:', e);
+            return get().situations;
+          });
 
           set((s) => ({
             situations,

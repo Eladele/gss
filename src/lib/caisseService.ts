@@ -243,7 +243,12 @@ export async function fetchNotifications(userId: string): Promise<AppNotificatio
     .eq('destinataire_id', userId)
     .order('created_at', { ascending: false })
     .limit(100);
-  if (error) return []; // module pas encore installé : pas de notifications, pas de blocage
+  if (error) {
+    // module pas encore installé : pas de notifications, pas de blocage
+    if (error.code === '42P01' || error.code === 'PGRST205') return [];
+    // réseau coupé ou serveur indisponible : l'appelant garde les notifications déjà affichées
+    throw new Error(error.message || 'Notifications indisponibles');
+  }
   return (data ?? []).map(mapNotification);
 }
 

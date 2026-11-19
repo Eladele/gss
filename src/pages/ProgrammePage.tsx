@@ -23,7 +23,7 @@ import {
 } from '@/lib/programmeService';
 import { CheckCircle2, ExternalLink, Eye, EyeOff, Flame, ListTodo, MapPin, ScanLine } from 'lucide-react';
 import { ClotureSheet } from '@/components/programme/ClotureSheet';
-import { DECHARGE_URL, hubDe, hubLabel, ligneLabel } from '@/utils/programme';
+import { DECHARGE_URL, hubDe, hubLabel, ligneLabel, peutAjouterContact } from '@/utils/programme';
 import { POINTS, classement, delaiOT, fmtPts, fmtPtsSigne } from '@/utils/points';
 import { errMsg } from '@/utils';
 
@@ -165,9 +165,24 @@ function FichesOT() {
     );
   }, [view, aFaire, termines, q]);
 
-  // Programme regroupé par zone (la zone de la fiche la plus urgente d'abord), puis par HUB-BOX
-  // (hub 1 à 4, d'après le DIS) ; dans un hub, l'ordre ci-dessus
+  // Programme regroupé par zone, puis par HUB-BOX (hub 1 à 4, d'après le DIS) ; dans un hub, l'ordre
+  // ci-dessus. Les zones (et les hubs d'une zone) qui ont le plus de cas urgents, puis de fiches en
+  // retard, puis de prioritaires passent en premier.
   const parZone = useMemo(() => {
+    const poids = (fiches: ProgrammeOT[]) => {
+      let urgents = 0;
+      let retards = 0;
+      let prios = 0;
+      for (const o of fiches) {
+        if (o.statut !== 'a_faire') continue;
+        const d = delaiOT(o);
+        if (o.isUrgent) urgents++;
+        if (d.etat === 'retard') retards++;
+        if (d.prioritaire) prios++;
+      }
+      return [urgents, retards, prios] as const;
+    };
+    const compare = (a: readonly number[], b: readonly number[]) => b[0] - a[0] || b[1] - a[1] || b[2] - a[2];
     const m = new Map<string, ProgrammeOT[]>();
     for (const o of list) {
       const z = o.zone?.trim() || 'Sans zone';
@@ -175,17 +190,23 @@ function FichesOT() {
       if (l) l.push(o);
       else m.set(z, [o]);
     }
-    return [...m.entries()].map(([zone, fiches]) => {
-      const hubs = new Map<number | null, ProgrammeOT[]>();
-      for (const o of fiches) {
-        const h = hubDe(o);
-        const l = hubs.get(h);
-        if (l) l.push(o);
-        else hubs.set(h, [o]);
-      }
-      const parHub = [...hubs.entries()].sort(([a], [b]) => (a ?? 9) - (b ?? 9));
-      return [zone, fiches, parHub] as const;
-    });
+    return [...m.entries()]
+      .map(([zone, fiches], rang) => {
+        const hubs = new Map<number | null, ProgrammeOT[]>();
+        for (const o of fiches) {
+          const h = hubDe(o);
+          const l = hubs.get(h);
+          if (l) l.push(o);
+          else hubs.set(h, [o]);
+        }
+        const parHub = [...hubs.entries()]
+          .map(([h, l]) => ({ h, l, p: poids(l) }))
+          .sort((a, b) => compare(a.p, b.p) || (a.h ?? 9) - (b.h ?? 9))
+          .map(({ h, l }) => [h, l] as const);
+        return { zone, fiches, parHub, rang, p: poids(fiches) };
+      })
+      .sort((a, b) => compare(a.p, b.p) || a.rang - b.rang)
+      .map(({ zone, fiches, parHub }) => [zone, fiches, parHub] as const);
   }, [list]);
   const nbZone = (z: string, statut: 'a_faire' | 'fini') =>
     (statut === 'a_faire' ? aFaire : termines).filter((o) => (o.zone?.trim() || 'Sans zone') === z).length;
@@ -362,7 +383,8 @@ function FichesOT() {
                     onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}
                     onReset={() => change(o, { statut: 'a_faire' })}
                     onAjouterContact={
-                      o.fgp && o.statut === 'a_faire'
+                      // « + Contact » : superviseur ou administrateur seulement, pas le chef d'équipe
+                      o.fgp && o.statut === 'a_faire' && peutAjouterContact(user.role)
                         ? async (tel) => {
                             try {
                               const telephones = await ajouterContact(o.fgp, tel);
