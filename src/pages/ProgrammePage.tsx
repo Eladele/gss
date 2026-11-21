@@ -11,6 +11,7 @@ import {
   fetchReclamations,
   fetchHistoriqueClotures,
   fetchIpsOts,
+  fetchNotesChef,
   ajouterContact,
   type ClotureArchivee,
   type IpsOT,
@@ -73,6 +74,8 @@ function FichesOT() {
   const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
   // OT Réseau (ANS…) : IPS / IPM de la constitution
   const [ips, setIps] = useState<Map<string, IpsOT>>(new Map());
+  // commentaires du superviseur pour le chef
+  const [notes, setNotes] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
     if (!team) return;
@@ -89,6 +92,7 @@ function FichesOT() {
             fetchScanOts(rows.map((r) => r.id)).then((m) => alive && setScans(m));
             fetchHistoriqueClotures(rows.map((r) => r.id)).then((h) => alive && setHistorique(h));
             fetchIpsOts(rows.map((r) => r.numeroOt)).then((m) => alive && setIps(m));
+            fetchNotesChef(rows.map((r) => r.id)).then((m) => alive && setNotes(m));
             if (user.teamId)
               fetchReclamations({ teamId: user.teamId }).then(
                 (rs) => alive && setReclamations(new Map([...rs].reverse().map((r) => [r.situationId, r]))),
@@ -378,6 +382,7 @@ function FichesOT() {
                     key={o.id}
                     ot={o}
                     scan={scans.get(o.id)}
+                    note={notes.get(o.id)}
                     busy={busy === o.id}
                     onFait={() => setSheet({ ot: o, mode: 'fait' })}
                     onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}

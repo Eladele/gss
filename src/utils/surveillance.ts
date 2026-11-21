@@ -6,7 +6,7 @@
 //   • une pénalité compte le jour où elle a été donnée (contrôle de 22 h, retard, faux OK) ;
 //   • « à faire » et « en retard » : fiches encore ouvertes (programme en cours, maintenant).
 import type { Penalite, ProgrammeOT } from '@/types';
-import { delaiOT, estPourPlusTard } from '@/utils/points';
+import { delaiOT, doublonsCable, estPourPlusTard } from '@/utils/points';
 
 export type Granularite = 'jour' | 'semaine' | 'mois';
 
@@ -91,10 +91,11 @@ export function bilans(ots: ProgrammeOT[], penalites: Pick<Penalite, 'equipe' | 
     if (!b) m.set(cle, (b = vide()));
     return b;
   };
+  const doublons = doublonsCable(ots);
   for (const o of ots) {
     if (o.statut === 'a_faire' || !o.traiteLe || !o.equipe) continue;
     const b = cellule(o.equipe, clePeriode(isoJour(new Date(o.traiteLe)), g));
-    const d = delaiOT(o, now);
+    const d = delaiOT({ ...o, doublonCable: doublons.has(o.id) }, now);
     if (o.statut === 'fait') {
       b.faites++;
       if (d.etat === 'dans') b.dans++;
@@ -170,6 +171,7 @@ export interface StatEquipe {
  */
 export function statsEquipes(ots: ProgrammeOT[], debut: string, fin: string, avecOuvertes: boolean, now = Date.now()): StatEquipe[] {
   const m = new Map<string, StatEquipe>();
+  const doublons = doublonsCable(ots);
   for (const o of ots) {
     if (!o.equipe) continue;
     const ouverte = o.statut === 'a_faire';
@@ -188,7 +190,7 @@ export function statsEquipes(ots: ProgrammeOT[], debut: string, fin: string, ave
       s.enCours++;
       continue;
     }
-    const d = delaiOT(o, now);
+    const d = delaiOT({ ...o, doublonCable: doublons.has(o.id) }, now);
     s.points += d.points;
     if (o.statut === 'fait') {
       s.faites++;

@@ -98,6 +98,8 @@ export async function updateSituationStatus(
     poteau?: number;
     equipe?: string;
     motif?: string;
+    /** date du message (« OT reçu le ») : date_message et date_recu */
+    dateMessage?: string;
     /** profil qui clôture (id) — le nom affiché vient de profiles */
     closedById?: string | null;
   },
@@ -110,6 +112,10 @@ export async function updateSituationStatus(
     if (extra.poteau !== undefined) payload.poteau = extra.poteau;
     if (extra.equipe !== undefined) Object.assign(payload, await colEquipe(extra.equipe));
     if (extra.motif !== undefined) payload.motif = extra.motif;
+    if (extra.dateMessage) {
+      payload.date_message = extra.dateMessage;
+      payload.date_recu = extra.dateMessage;
+    }
     if (extra.closedById) {
       payload.traite_par = extra.closedById;
       payload.traite_le = now;
@@ -304,6 +310,7 @@ function mapSituation(row: any): Situation {
     fgp: row.fgp ?? '',
     type: row.type,
     zone: row.zone ?? '',
+    clientNom: row.client_nom ?? '',
     equipe: row.equipe ?? '',
     motif: row.motif ?? '',
     dateDepo: row.date_depo ?? '',

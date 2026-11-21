@@ -13,7 +13,7 @@ import {
   subscribeProgramme,
 } from '@/lib/programmeService';
 import { FauxOkButton } from '@/components/programme/FauxOk';
-import { ETAT_DELAI, POINTS, classement, delaiOT, fmtPts, fmtPtsSigne, jourCourt, motPoint } from '@/utils/points';
+import { BAREME_OT, ETAT_DELAI, POINTS, classement, delaiOT, doublonsCable, fmtPts, fmtPtsSigne, jourCourt, motPoint } from '@/utils/points';
 import { MOTIF_PENALITE, NATURE_CLASS, NATURE_LABEL, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
 import { downloadWorkbookBuffer } from '@/utils/stats';
 import type { ClotureAVerifier, Penalite, ProgrammeOT } from '@/types';
@@ -76,6 +76,7 @@ export default function PointsPage() {
   const scoped = useMemo(() => ots.filter((o) => nature === 'all' || o.nature === nature), [ots, nature]);
   const pensScoped = useMemo(() => penalites.filter((p) => nature === 'all' || p.nature === nature), [penalites, nature]);
   const rows = useMemo(() => classement(scoped, pensScoped), [scoped, pensScoped]);
+  const doublons = useMemo(() => doublonsCable(scoped), [scoped]);
   const maxPts = Math.max(1, ...rows.map((r) => r.points));
   /** Faux OK depuis « clôtures à vérifier » ou depuis le détail d'une équipe */
   const fauxOk = async (c: Pick<ClotureAVerifier, 'id' | 'equipe' | 'fgp' | 'typeLigne'>, motif: MotifFauxOk, note: string) => {
@@ -122,7 +123,7 @@ export default function PointsPage() {
       const wd = wb.addWorksheet('Détail');
       wd.addRow(['Équipe', 'Type', 'Ligne', 'Client', 'OT reçu le', 'Échéance officielle', 'Confié à l’équipe le', 'Échéance équipe', 'Prioritaire', 'Statut', 'Fait le', 'Jours ouvrés (équipe)', 'Délai équipe', 'Points', 'Motif']).font = { bold: true };
       scoped.forEach((o) => {
-        const d = delaiOT(o);
+        const d = delaiOT({ ...o, doublonCable: doublons.has(o.id) });
         wd.addRow([
           o.equipe,
           o.typeOt || NATURE_LABEL[o.nature],
@@ -210,16 +211,17 @@ export default function PointsPage() {
           ))}
         </div>
         <p className="text-xs text-slate-500">
-          <b>{fmtPtsSigne(POINTS.dansDelai)} {motPoint(POINTS.dansDelai)}</b> par fiche marquée « Fait » avant son échéance de <b>22 h</b> : dérangement le jour où l’équipe l’a reçue,
-          installation le jour ouvré suivant. Fiche <b>prioritaire</b> (délai officiel depuis « OT reçu le » déjà dépassé quand l’équipe la reçoit) : le
-          jour même. Dimanches et jours fériés non comptés. Période : fiches reçues du{' '}
-          {from.split('-').reverse().join('/')} au {to.split('-').reverse().join('/')}.
+          Barème depuis « OT reçu le » (jours ouvrés, dimanches et jours fériés non comptés) : installation faite en 24 h <b>{fmtPtsSigne(BAREME_OT.inst24h)}</b>, en 48 h{' '}
+          <b>{fmtPtsSigne(BAREME_OT.inst48h)}</b>, en 48 h avec poteau <b>{fmtPtsSigne(BAREME_OT.inst48hPoteau)}</b>, plantation de poteau <b>{fmtPtsSigne(BAREME_OT.plantationPoteau)}</b> ;
+          installation en retard <b className="text-red-700">{fmtPts(BAREME_OT.instRetard)}</b> puis <b className="text-red-700">{fmtPts(BAREME_OT.retardParJour)}</b> par jour en plus ·
+          dérangement <b>{fmtPtsSigne(BAREME_OT.drg)}</b>, <b className="text-red-700">{fmtPts(BAREME_OT.retardParJour)}</b> par jour de retard · câble distribution{' '}
+          <b>{fmtPtsSigne(BAREME_OT.cableDistribution)}</b>, câble MPO <b>{fmtPtsSigne(BAREME_OT.cableMpo)}</b> (une seule fiche par panne) · « non fait » <b>{fmtPts(POINTS.nonFait)}</b>.
+          Période : fiches reçues du {from.split('-').reverse().join('/')} au {to.split('-').reverse().join('/')}.
         </p>
         <p className="text-xs text-slate-500">
-          Hors délai : <b>{fmtPtsSigne(POINTS.horsDelai)}</b> · « non fait » : <b>{fmtPtsSigne(POINTS.nonFait)}</b> · panne réseau (câble distribution ou
-          transport coupé, HUB-BOX ou SUB-BOX défectueux) : points <b>× {fmtPts(POINTS.coefReseau)}</b> · modem défectueux, problème
-          électricité : <b>{fmtPts(POINTS.sansIntervention)}</b> + <b>{fmtPts(POINTS.bonusDecharge)}</b> si décharge + <b>{fmtPts(POINTS.bonusScan)}</b> si
-          scanné · installé par quelqu’un, confirmé par client, erreur de signalisation : <b>{fmtPts(POINTS.faitSansPoint)}</b>.{' '}
+          Autre panne réseau (câble transport, HUB-BOX, SUB-BOX) : points <b>× {fmtPts(POINTS.coefReseau)}</b> · modem défectueux, problème électricité : au plus{' '}
+          <b>{fmtPts(POINTS.sansIntervention)}</b> + <b>{fmtPts(POINTS.bonusDecharge)}</b> si décharge + <b>{fmtPts(POINTS.bonusScan)}</b> si scanné · installé par quelqu’un,
+          confirmé par client, erreur de signalisation : <b>{fmtPts(POINTS.faitSansPoint)}</b>.{' '}
           <b className="text-red-700">{fmtPts(POINTS.penalites.non_traitee)} {motPoint(POINTS.penalites.non_traitee)}</b> par fiche ni faite ni « non faite » au contrôle de 22 h une fois son
           échéance arrivée (et à chaque contrôle suivant), <b className="text-red-700">{fmtPts(POINTS.penalites.retardee)}</b> quand une fiche ouverte est
           retardée. Réaffecter une fiche avant son échéance ne pénalise pas.{' '}
@@ -300,7 +302,7 @@ export default function PointsPage() {
               const detail = isOpen
                 ? scoped
                     .filter((o) => (o.equipe || 'Sans équipe') === r.equipe)
-                    .map((o) => ({ o, d: delaiOT(o) }))
+                    .map((o) => ({ o, d: delaiOT({ ...o, doublonCable: doublons.has(o.id) }) }))
                     .sort((a, b) => a.d.echeance.localeCompare(b.d.echeance))
                 : [];
               return (

@@ -3,14 +3,44 @@ import { useMemo, type ReactNode } from 'react';
 import { statsByVille, statsDelaiDetailleParVilleEtType, statsBacklogParAnciennete, statsNonOk, MERGED_TYPES } from '@/utils/stats';
 import { Card, CardHeader, CardTitle, EmptyState } from '@/components/ui';
 import type { Equipe, Situation } from '@/types';
-import { poteauxDe, poteauxNecessaires } from './commun';
+import { poteauxDansPeriode, poteauxDe, type NatureFilter } from './commun';
+import type { PeriodFilter } from '@/utils/stats';
+import { motifSansCst } from '@/utils/programme';
 
 interface Props {
   scoped: Situation[];
   scopedAll: Situation[];
   scopedSansPeriode: Situation[];
+  nature: NatureFilter;
+  period: PeriodFilter;
   equipes: Equipe[];
   villeDe: (equipe?: string) => string;
+}
+
+interface LigneMotif {
+  motif: string;
+  total: number;
+  faites: number;
+  nonFaites: number;
+  equipes: number;
+}
+
+/** Motifs les plus fréquents (motif de clôture sans la partie CST ; NON OK sans motif : son commentaire) */
+function statsMotifs(liste: Situation[]): LigneMotif[] {
+  const m = new Map<string, LigneMotif & { eq: Set<string> }>();
+  for (const s of liste) {
+    if (s.status !== 'ok' && s.status !== 'non_ok') continue;
+    const brut = motifSansCst(s.motifCloture || (s.status === 'non_ok' ? s.comment : '') || '').replace(/\s+/g, ' ').trim();
+    const motif = brut || 'Sans motif';
+    const cle = motif.toLowerCase();
+    const r = m.get(cle) ?? { motif, total: 0, faites: 0, nonFaites: 0, equipes: 0, eq: new Set<string>() };
+    r.total++;
+    if (s.status === 'ok') r.faites++;
+    else r.nonFaites++;
+    if (s.equipe) r.eq.add(s.equipe);
+    m.set(cle, r);
+  }
+  return [...m.values()].map(({ eq, ...r }) => ({ ...r, equipes: eq.size })).sort((a, b) => b.total - a.total || a.motif.localeCompare(b.motif));
 }
 
 type Cell = ReactNode;
@@ -70,21 +100,27 @@ const vert = (v: Cell) => <span className="text-green-700">{v}</span>;
 const rouge = (v: Cell) => <span className="text-red-700">{v}</span>;
 const bleu = (v: Cell) => <span className="text-blue-600">{v}</span>;
 
-export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode, equipes, villeDe }: Props) {
+export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode, nature, period, equipes, villeDe }: Props) {
   const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
   const poteauxParVille = useMemo(() => {
-    const m = new Map<string, { poteaux: number; necessaires: number }>();
-    scoped.forEach((s) => {
-      const v = m.get(villeDe(s.equipe)) ?? { poteaux: 0, necessaires: 0 };
-      v.poteaux += poteauxDe(s);
-      v.necessaires += poteauxNecessaires(s);
-      m.set(villeDe(s.equipe), v);
-    });
+    // datés par la mise à jour de la fiche (updated_at)
+    const m = new Map<string, number>();
+    poteauxDansPeriode(scopedSansPeriode, period, nature).forEach((s) => m.set(villeDe(s.equipe), (m.get(villeDe(s.equipe)) ?? 0) + poteauxDe(s)));
     return [...m.entries()]
-      .map(([ville, v]) => ({ ville, ...v }))
-      .filter((v) => v.poteaux || v.necessaires)
-      .sort((a, b) => b.poteaux - a.poteaux || b.necessaires - a.necessaires);
-  }, [scoped, villeDe]);
+      .filter(([, poteaux]) => poteaux > 0)
+      .map(([ville, poteaux]) => ({ ville, poteaux }))
+      .sort((a, b) => b.poteaux - a.poteaux);
+  }, [scopedSansPeriode, period, nature, villeDe]);
+  const motifsDrg = useMemo(() => statsMotifs(scopedAll.filter((s) => s.type === 'DRG')), [scopedAll]);
+  const motifsIns = useMemo(() => statsMotifs(scopedAll.filter((s) => s.type !== 'DRG')), [scopedAll]);
+  const lignesMotifs = (rows: LigneMotif[]) => {
+    const total = rows.reduce((a, r) => a + r.total, 0);
+    return rows.slice(0, 20).map((r) => ({
+      key: r.motif,
+      cells: [r.motif, <b>{r.total}</b>, <span className="text-slate-500">{total ? Math.round((r.total / total) * 100) : 0}%</span>, vert(r.faites), rouge(r.nonFaites), r.equipes],
+    }));
+  };
+  const ENTETES_MOTIFS = ['Motif', 'Fiches', '%', 'Faites', 'Non faites', 'Équipes'];
   const typesInstall = useMemo(() => MERGED_TYPES.filter((t) => !['CST', 'RLR', 'ANS'].includes(t)), []);
   const installDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, typesInstall), [scopedAll, equipes, typesInstall]);
   const cstDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['CST']), [scopedAll, equipes]);
@@ -107,17 +143,30 @@ export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode
           lignes={byVille.map((v) => ({ key: v.ville, cells: [v.ville, v.total, vert(v.dansDelai), rouge(v.horsDelai), `${v.pctConformite}%`] }))}
         />
         <Tableau
-          titre="Poteaux — par ville"
-          entetes={['Ville', 'Posés', 'Nécessaires']}
-          lignes={poteauxParVille.map((v) => ({
-            key: v.ville,
-            cells: [
-              v.ville,
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{v.poteaux}</span>,
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-orange-50 text-orange-700">{v.necessaires}</span>,
-            ],
-          }))}
-          total={['Total', poteauxParVille.reduce((a, v) => a + v.poteaux, 0), poteauxParVille.reduce((a, v) => a + v.necessaires, 0)]}
+          titre="Poteaux posés — par ville"
+          aide="Fiches OK avec poteaux et NON OK dont le motif contient « besoin poteau », datées par leur mise à jour."
+          entetes={['Ville', 'Poteaux posés']}
+          lignes={poteauxParVille.map((v) => ({ key: v.ville, cells: [v.ville, <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{v.poteaux}</span>] }))}
+          total={['Total', poteauxParVille.reduce((a, v) => a + v.poteaux, 0)]}
+        />
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4 sm:gap-6 [&>*]:min-w-0">
+        <Tableau
+          titre="Motifs des dérangements"
+          aide="Motifs de clôture (faits et non faits) des DRG de la période, du plus fréquent au moins fréquent (20 premiers)."
+          entetes={ENTETES_MOTIFS}
+          lignes={lignesMotifs(motifsDrg)}
+          total={['Total', motifsDrg.reduce((a, r) => a + r.total, 0), '100%', motifsDrg.reduce((a, r) => a + r.faites, 0), motifsDrg.reduce((a, r) => a + r.nonFaites, 0), '']}
+          vide="Aucun dérangement clôturé sur cette période"
+        />
+        <Tableau
+          titre="Motifs des installations"
+          aide="Motifs de clôture des installations (tous types) de la période."
+          entetes={ENTETES_MOTIFS}
+          lignes={lignesMotifs(motifsIns)}
+          total={['Total', motifsIns.reduce((a, r) => a + r.total, 0), '100%', motifsIns.reduce((a, r) => a + r.faites, 0), motifsIns.reduce((a, r) => a + r.nonFaites, 0), '']}
+          vide="Aucune installation clôturée sur cette période"
         />
       </div>
 

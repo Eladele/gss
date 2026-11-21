@@ -1,9 +1,10 @@
 // Outils partagés du tableau de bord (filtres, dates, ville d'une équipe)
 import type { Equipe, Situation, SituationNature } from '@/types';
 import { countPoteaux, inPeriod, MERGED_TYPES, type PeriodFilter } from '@/utils/stats';
+import { delaiOT, doublonsCable } from '@/utils/points';
 
 export type NatureFilter = 'all' | SituationNature;
-export type PeriodPreset = 'tout' | 'jour' | 'semaine' | 'mois' | 'custom';
+export type PeriodPreset = 'tout' | 'jour' | 'date' | 'semaine' | 'mois' | 'custom';
 
 export const MOIS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 // 2025 à l'année en cours + 1
@@ -62,13 +63,84 @@ export function dansPeriodeClassement(s: Situation, period: PeriodFilter): boole
   return inPeriod(todayStr(), period) || inPeriod(dateRef(s), period);
 }
 
-/** Poteaux d'une situation : colonne dédiée, sinon extraits du motif (« Poteau cassé » compte 1) */
-const poteauxBruts = (s: Situation) => (s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif));
-/** Poteaux POSÉS : seulement les fiches faites (OK) */
-export const poteauxDe = (s: Situation) => (s.status === 'ok' ? poteauxBruts(s) : 0);
-/** Poteaux NÉCESSAIRES : fiches pas encore faites qui en demandent (besoin poteau, poteau cassé) */
-export const poteauxNecessaires = (s: Situation) =>
-  s.status === 'ok' ? 0 : s.poteau && s.poteau > 0 ? s.poteau : s.status === 'non_ok' ? countPoteaux(s.motif) : 0;
+/**
+ * Poteaux posés d'une situation :
+ *   • fiche OK : colonne poteau, sinon nombre lu dans le motif (« +2 poteaux ») ;
+ *   • fiche NON OK dont le motif contient « besoin poteau » (« Besoin poteau », « Besoin 2 poteaux »,
+ *     « besoin de poteau … ») : colonne poteau, sinon le nombre écrit (1 par défaut).
+ * Le tableau de bord les date par leur mise à jour (updated_at) : voir poteauxDansPeriode.
+ */
+const BESOIN_POTEAU = /besoin\s+(?:de\s+|d'un\s+)?(?:\d+\s*)?poteaux?/i;
+export const poteauxDe = (s: Situation) => {
+  if (s.status === 'ok') return s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+  if (s.status !== 'non_ok') return 0;
+  const texte = [s.motifCloture, s.comment, s.motif].filter(Boolean).join(' · ');
+  if (!BESOIN_POTEAU.test(texte)) return 0;
+  return s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(BESOIN_POTEAU.exec(texte)![0]) || 1;
+};
+/** Situations dont les poteaux comptent dans la période : date de mise à jour (updated_at) */
+export const poteauxDansPeriode = (liste: Situation[], period: PeriodFilter, nature: NatureFilter) =>
+  liste.filter((s) => matchesNature(s, nature) && inPeriod((s.updatedAt ?? '').slice(0, 10), period));
+
+// ─── Programme d'un jour (tableau de bord, « Choisir une date ») ──────────────
+/** Fiche du programme de ce jour : distribuée (n° d'OT) avec ce jour comme date de programme */
+export const estDuProgramme = (s: Situation, jour: string) => !!s.numeroOt && (s.dateProgramme ?? '').slice(0, 10) === jour;
+
+const statutDe = (s: Situation) => (s.status === 'ok' ? 'fait' : s.status === 'non_ok' ? 'non_fait' : 'a_faire');
+
+export interface LigneProgramme {
+  equipe: string;
+  total: number;
+  faites: number;
+  nonFaites: number;
+  enCours: number;
+  enRetard: number;
+  points: number;
+}
+
+/** Bilan du programme par équipe : faites, non faites, en cours (dont en retard), points du barème */
+export function bilanProgramme(liste: Situation[], now = Date.now()): { lignes: LigneProgramme[]; total: LigneProgramme } {
+  const doublons = doublonsCable(
+    liste.map((s) => ({ id: s.id, equipe: s.equipe, zone: s.zone, motif: s.motifCloture, statut: statutDe(s), traiteLe: s.traiteLe ?? s.updatedAt ?? null })),
+  );
+  const vide = (equipe: string): LigneProgramme => ({ equipe, total: 0, faites: 0, nonFaites: 0, enCours: 0, enRetard: 0, points: 0 });
+  const m = new Map<string, LigneProgramme>();
+  const total = vide('Total');
+  for (const s of liste) {
+    const statut = statutDe(s);
+    const d = delaiOT(
+      {
+        nature: s.type === 'DRG' ? 'derangement' : 'installation',
+        statut,
+        dateRecu: s.dateRecu ?? null,
+        dateProgramme: s.dateProgramme || s.dateRecu || s.dateMessage || s.dateDepo || '',
+        traiteLe: s.traiteLe ?? s.updatedAt ?? null,
+        assigneLe: s.assigneLe ?? null,
+        motif: s.motifCloture,
+        echeanceEquipe: s.echeanceEquipe ?? null,
+        prioritaire: s.prioritaire,
+        poteaux: s.poteau ?? 0,
+        doublonCable: doublons.has(s.id),
+      },
+      now,
+    );
+    const eq = s.equipe || 'Sans équipe';
+    const r = m.get(eq) ?? vide(eq);
+    for (const x of [r, total]) {
+      x.total++;
+      x.points += d.points;
+      if (statut === 'fait') x.faites++;
+      else if (statut === 'non_fait') x.nonFaites++;
+      else {
+        x.enCours++;
+        if (d.etat === 'retard') x.enRetard++;
+      }
+    }
+    m.set(eq, r);
+  }
+  const lignes = [...m.values()].sort((a, b) => b.points - a.points || b.faites - a.faites || a.equipe.localeCompare(b.equipe));
+  return { lignes, total };
+}
 
 /** Ville de chaque équipe (nom en minuscules → ville), calculée une fois */
 export function villesDesEquipes(equipes: Equipe[]) {

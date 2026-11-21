@@ -5,7 +5,8 @@ import { statsByEquipe, statsByVille, statsByType, repeatDerangementByClient, is
 import { Card, CardHeader, CardTitle, EquipeTag, ZoneChip, TypeBadge, EmptyState, StatCard } from '@/components/ui';
 import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
 import type { Equipe, Situation } from '@/types';
-import { dateRef, matchesNature, poteauxDe, poteauxNecessaires, presetToRange, todayStr, VILLE_COLORS, type NatureFilter } from './commun';
+import { fmtPts } from '@/utils/points';
+import { bilanProgramme, dateRef, matchesNature, poteauxDansPeriode, poteauxDe, presetToRange, todayStr, VILLE_COLORS, type NatureFilter } from './commun';
 
 const WEEKDAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
@@ -18,14 +19,18 @@ interface Props {
   scopedSansPeriode: Situation[];
   nature: NatureFilter;
   period: PeriodFilter;
+  /** « Choisir une date » : jour du programme montré (null sinon) */
+  jourProgramme?: string | null;
   equipes: Equipe[];
   villeDe: (equipe?: string) => string;
   nbVilles: number;
 }
 
-export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, nature, period, equipes, villeDe, nbVilles }: Props) {
+export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, nature, period, jourProgramme, equipes, villeDe, nbVilles }: Props) {
   const [delaiDetail, setDelaiDetail] = useState<'dans' | 'hors' | null>(null);
   const [repeatsOpen, setRepeatsOpen] = useState(false);
+  const [poteauxOpen, setPoteauxOpen] = useState(false);
+  const programme = useMemo(() => (jourProgramme ? bilanProgramme(scoped) : null), [jourProgramme, scoped]);
   const couleur = nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0';
 
   const byEquipe = useMemo(() => statsByEquipe(scoped, equipes), [scoped, equipes]);
@@ -34,8 +39,16 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
   const repeats = useMemo(() => repeatDerangementByClient(scopedAll), [scopedAll]);
 
   const total = scoped.length;
-  const totalPoteaux = useMemo(() => scoped.reduce((sum, s) => sum + poteauxDe(s), 0), [scoped]);
-  const totalPoteauxNecessaires = useMemo(() => scoped.reduce((sum, s) => sum + poteauxNecessaires(s), 0), [scoped]);
+  // poteaux posés : datés par la mise à jour de la fiche (updated_at), pas par la date du message
+  const fichesPoteaux = useMemo(
+    () =>
+      poteauxDansPeriode(scopedSansPeriode, period, nature)
+        .map((s) => ({ s, n: poteauxDe(s) }))
+        .filter((x) => x.n > 0)
+        .sort((a, b) => (b.s.updatedAt ?? '').localeCompare(a.s.updatedAt ?? '')),
+    [scopedSansPeriode, period, nature],
+  );
+  const totalPoteaux = fichesPoteaux.reduce((sum, x) => sum + x.n, 0);
   const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
   const dansDelai = total - horsDelai;
   const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
@@ -91,19 +104,79 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
 
   return (
     <div className="space-y-4 sm:space-y-6">
+      {programme && jourProgramme && (
+        <Card className="border-blue-200">
+          <CardHeader>
+            <CardTitle>
+              Programme du {jourProgramme.split('-').reverse().join('/')} — {programme.total.total} fiche{programme.total.total > 1 ? 's' : ''}
+            </CardTitle>
+          </CardHeader>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 px-4 pb-3">
+            {(
+              [
+                ['Faites', programme.total.faites, 'text-green-700'],
+                ['Non faites', programme.total.nonFaites, 'text-red-700'],
+                ['En cours', programme.total.enCours, 'text-sky-700'],
+                ['En retard', programme.total.enRetard, 'text-red-700'],
+                ['Points', fmtPts(programme.total.points), 'text-amber-700'],
+              ] as const
+            ).map(([label, v, cls]) => (
+              <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-500 uppercase">{label}</p>
+                <p className={`text-xl font-black tabular-nums ${cls}`}>{v}</p>
+              </div>
+            ))}
+          </div>
+          {programme.lignes.length === 0 ? (
+            <EmptyState icon="" text="Aucune fiche distribuée pour ce jour" />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    {['Équipe', 'Fiches', 'Faites', 'Non faites', 'En cours', 'En retard', 'Points'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {programme.lignes.map((l) => (
+                    <tr key={l.equipe} className="border-b border-slate-50">
+                      <td className="px-3 py-2">
+                        <EquipeTag name={l.equipe} color={getEquipeColor(l.equipe, equipes)} />
+                      </td>
+                      <td className="px-3 py-2 font-bold tabular-nums">{l.total}</td>
+                      <td className="px-3 py-2 text-green-700 tabular-nums">{l.faites}</td>
+                      <td className="px-3 py-2 text-red-700 tabular-nums">{l.nonFaites}</td>
+                      <td className="px-3 py-2 text-sky-700 tabular-nums">{l.enCours}</td>
+                      <td className="px-3 py-2 text-red-700 tabular-nums">{l.enRetard}</td>
+                      <td className="px-3 py-2 font-black text-amber-700 tabular-nums">{fmtPts(l.points)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="px-4 py-2 text-[11px] text-slate-400">
+            Fiches distribuées pour ce jour (date du programme). Points du barème des fiches, sans les pénalités de 22 h. Une fiche renvoyée à un autre jour compte dans
+            le programme de ce jour-là.
+          </p>
+        </Card>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatCard value={`${villesActives}/${nbVilles}`} label="Villes actives" icon="" accent="#1565C0" />
         <StatCard value={totalSemaine} label="Cette semaine" icon="" accent="#2E7D32" />
         <StatCard value={totalAujourdhui} label="Aujourd'hui" icon="" accent="#00838F" />
         <StatCard value={total} label="Total période" icon="" accent="#E65100" />
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <StatCard value={`${pctConf}%`} label="Conformité" icon="" accent="#2E7D32" />
         <StatCard value={dansDelai} label="Dans délai" icon="" accent="#1565C0" active={delaiDetail === 'dans'} onClick={() => setDelaiDetail(delaiDetail === 'dans' ? null : 'dans')} />
         <StatCard value={horsDelai} label="Hors délai" icon="" accent="#C62828" active={delaiDetail === 'hors'} onClick={() => setDelaiDetail(delaiDetail === 'hors' ? null : 'hors')} />
         <StatCard value={repeats.length} label="DRG répétés" icon="" accent="#8E24AA" active={repeatsOpen} onClick={() => setRepeatsOpen(!repeatsOpen)} />
-        <StatCard value={totalPoteaux} label="Poteaux posés" icon="" accent="#6D4C41" />
-        <StatCard value={totalPoteauxNecessaires} label="Poteaux nécessaires" icon="" accent="#F57C00" />
+        <StatCard value={totalPoteaux} label="Poteaux posés" icon="" accent="#6D4C41" active={poteauxOpen} onClick={() => setPoteauxOpen(!poteauxOpen)} />
       </div>
 
       {delaiDetail && (
@@ -157,6 +230,69 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
               </table>
               {delaiDetailRows.length > 300 && (
                 <p className="text-[11px] text-slate-400 p-3">Affichage limité à 300 lignes sur {delaiDetailRows.length} — affinez les filtres.</p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {poteauxOpen && (
+        <Card className="border-amber-200 bg-amber-50/30">
+          <CardHeader>
+            <div className="flex items-center justify-between w-full gap-2">
+              <CardTitle>
+                Lignes avec poteaux ({fichesPoteaux.length} fiche{fichesPoteaux.length > 1 ? 's' : ''} · {totalPoteaux} poteau{totalPoteaux > 1 ? 'x' : ''})
+              </CardTitle>
+              <button onClick={() => setPoteauxOpen(false)} className="text-xs font-semibold text-slate-500 hover:text-slate-700 shrink-0">
+                Fermer ✕
+              </button>
+            </div>
+          </CardHeader>
+          {fichesPoteaux.length === 0 ? (
+            <EmptyState icon="" text="Aucun poteau sur cette période" />
+          ) : (
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    {['FGP', 'Client', 'Zone', 'Équipe', 'Poteaux', 'Motif', 'Statut', 'Mis à jour'].map((h) => (
+                      <th key={h} className="text-left px-3 py-2 text-xs font-bold text-slate-400 uppercase whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {fichesPoteaux.slice(0, 300).map(({ s, n }) => (
+                    <tr key={s.id} className="border-b border-slate-50">
+                      <td className="px-3 py-2 font-bold text-slate-800 whitespace-nowrap">{s.fgp}</td>
+                      <td className="px-3 py-2 text-slate-700 max-w-48 truncate" title={s.clientNom}>
+                        {s.clientNom || '—'}
+                      </td>
+                      <td className="px-3 py-2">
+                        <ZoneChip zone={s.zone} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{n}</span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500 max-w-48 truncate" title={s.motifCloture || s.comment || s.motif}>
+                        {s.motifCloture || (s.status === 'non_ok' ? s.comment : '') || s.motif || '—'}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {s.status === 'ok' ? 'OK' : 'NON OK'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{(s.updatedAt ?? '').slice(0, 10).split('-').reverse().join('/')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {fichesPoteaux.length > 300 && (
+                <p className="text-[11px] text-slate-400 p-3">Affichage limité à 300 lignes sur {fichesPoteaux.length} — affinez les filtres.</p>
               )}
             </div>
           )}

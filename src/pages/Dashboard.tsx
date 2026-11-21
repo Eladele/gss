@@ -31,6 +31,7 @@ import {
   MOIS_FR,
   dansPeriodeClassement,
   dateRef,
+  estDuProgramme,
   firstOfMonthStr,
   matchesNature,
   presetToRange,
@@ -78,6 +79,8 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
   const [preset, setPreset] = useState<PeriodPreset>('mois');
   const [customFrom, setCustomFrom] = useState(firstOfMonthStr());
   const [customTo, setCustomTo] = useState(todayStr());
+  // « Choisir une date » : statistiques d'un seul jour
+  const [jourChoisi, setJourChoisi] = useState(todayStr());
   const [fEquipe, setFEquipe] = useState('');
   // ville verrouillée pour un superviseur régional (villeScope)
   // superviseur régional : sa ville d'abord, le tableau de bord général reste consultable
@@ -91,8 +94,8 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
   const [pdfEnCours, setPdfEnCours] = useState<'villes' | 'equipes' | null>(null);
 
   const period: PeriodFilter = useMemo(
-    () => (preset === 'custom' ? { from: customFrom, to: customTo } : presetToRange(preset)),
-    [preset, customFrom, customTo],
+    () => (preset === 'custom' ? { from: customFrom, to: customTo } : preset === 'date' ? { from: jourChoisi, to: jourChoisi } : presetToRange(preset)),
+    [preset, customFrom, customTo, jourChoisi],
   );
   const villeDe = useMemo(() => villesDesEquipes(equipes), [equipes]);
   const equipesFiltrees = useMemo(
@@ -111,7 +114,11 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
       }),
     [situations, fEquipe, fVille, villeDe],
   );
-  const scopedAll = useMemo(() => scopedSansPeriode.filter((s) => inPeriod(dateRef(s), period)), [scopedSansPeriode, period]);
+  // « Choisir une date » : seulement le programme de ce jour (fiches distribuées pour cette date)
+  const scopedAll = useMemo(
+    () => scopedSansPeriode.filter((s) => (preset === 'date' ? estDuProgramme(s, jourChoisi) : inPeriod(dateRef(s), period))),
+    [scopedSansPeriode, period, preset, jourChoisi],
+  );
   const scoped = useMemo(() => scopedAll.filter((s) => matchesNature(s, nature)), [scopedAll, nature]);
 
   const libellePeriode =
@@ -119,7 +126,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
       ? 'toute la période'
       : preset === 'jour'
         ? "aujourd'hui"
-        : preset === 'semaine'
+        : preset === 'date'
+          ? `le ${fr(jourChoisi)}`
+          : preset === 'semaine'
           ? 'cette semaine'
           : preset === 'mois'
             ? 'ce mois'
@@ -130,7 +139,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
       ? 'toute la période'
       : preset === 'jour'
         ? fr(todayStr())
-        : preset === 'semaine'
+        : preset === 'date'
+          ? fr(jourChoisi)
+          : preset === 'semaine'
           ? `semaine du ${fr(period.from ?? todayStr())}`
           : `${MOIS_FR[Number((period.from ?? todayStr()).slice(5, 7)) - 1]} ${(period.from ?? todayStr()).slice(0, 4)}`;
   const filtresTexte = [fEquipe && `équipe ${fEquipe}`, fVille && `ville ${fVille}`].filter(Boolean).join(' - ');
@@ -163,7 +174,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
         {
           // classement des équipes : une fiche ouverte compte tant que la période contient aujourd'hui,
           // une fiche close compte au jour de sa clôture (voir dansPeriodeClassement)
-          situations: mode === 'equipes' ? scopedSansPeriode.filter((s) => dansPeriodeClassement(s, period)) : scopedAll,
+          situations: mode === 'equipes' && preset !== 'date' ? scopedSansPeriode.filter((s) => dansPeriodeClassement(s, period)) : scopedAll,
           periode: periodePdf, du: period.from, au: period.to, equipes: equipesFiltrees, villeDe, filtres: mode === 'villes' ? (fVille ? `ville ${fVille}` : '') : filtresTexte, auteur: user.name },
         mode,
       );
@@ -227,10 +238,21 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
           <Select value={preset} onChange={(e) => setPreset(e.target.value as PeriodPreset)} className="w-full md:w-auto min-w-0">
             <option value="tout">Toute la période</option>
             <option value="jour">Aujourd'hui</option>
+            <option value="date">Choisir une date</option>
             <option value="semaine">Cette semaine</option>
             <option value="mois">Ce mois</option>
             <option value="custom">Choisir un mois</option>
           </Select>
+          {preset === 'date' && (
+            <input
+              type="date"
+              aria-label="Date choisie"
+              value={jourChoisi}
+              max={todayStr()}
+              onChange={(e) => e.target.value && setJourChoisi(e.target.value)}
+              className="w-full md:w-auto min-w-0 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+            />
+          )}
           {preset === 'custom' && (
             <>
               <Select value={String(Number(customFrom.slice(5, 7)))} onChange={(e) => setMois(customFrom.slice(0, 4), e.target.value.padStart(2, '0'))} className="w-full md:w-auto min-w-0">
@@ -299,12 +321,13 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
           scopedSansPeriode={scopedSansPeriode}
           nature={nature}
           period={period}
+          jourProgramme={preset === 'date' ? jourChoisi : null}
           equipes={equipes}
           villeDe={villeDe}
           nbVilles={villes.length}
         />
       )}
-      {onglet === 'rapports' && <RapportsDetailles scoped={scoped} scopedAll={scopedAll} scopedSansPeriode={scopedSansPeriode} equipes={equipes} villeDe={villeDe} />}
+      {onglet === 'rapports' && <RapportsDetailles scoped={scoped} scopedAll={scopedAll} scopedSansPeriode={scopedSansPeriode} nature={nature} period={period} equipes={equipes} villeDe={villeDe} />}
       {onglet === 'equipes' && (
         <ProgressionEquipes
           scoped={scoped}

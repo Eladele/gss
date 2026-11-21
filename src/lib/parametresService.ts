@@ -36,6 +36,46 @@ export const BAREME_DEFAUT: Bareme = {
   penaliteFauxOk: -1,
 };
 
+/**
+ * Barème des fiches OT faites, compté depuis « OT reçu le » en jours ouvrés (page Paramètres,
+ * app_settings « bareme_ot »). Voir pointsFaite dans src/utils/points.ts.
+ */
+export interface BaremeOT {
+  inst24h: number; // installation faite en 24 h (1 jour ouvré)
+  inst48h: number; // installation faite en 48 h (2 jours ouvrés)
+  inst48hPoteau: number; // installation avec poteau faite en 48 h (total)
+  plantationPoteau: number; // ajouté pour un poteau planté (24 h, ou en retard)
+  instRetard: number; // installation : 1er jour de retard
+  retardParJour: number; // chaque jour de retard en plus (installation) / chaque jour de retard (dérangement)
+  drg: number; // dérangement fait dans le délai
+  cableDistribution: number; // câble distribution réparé (une fiche par panne)
+  cableMpo: number; // câble MPO réparé (une fiche par panne)
+}
+
+export const BAREME_OT_DEFAUT: BaremeOT = {
+  inst24h: 2,
+  inst48h: 1,
+  inst48hPoteau: 1.5,
+  plantationPoteau: 1,
+  instRetard: -1,
+  retardParJour: -0.5,
+  drg: 0.5,
+  cableDistribution: 2,
+  cableMpo: 5,
+};
+
+const CLES_BAREME_OT: Record<keyof BaremeOT, string> = {
+  inst24h: 'inst_24h',
+  inst48h: 'inst_48h',
+  inst48hPoteau: 'inst_48h_poteau',
+  plantationPoteau: 'plantation_poteau',
+  instRetard: 'inst_retard',
+  retardParJour: 'retard_par_jour',
+  drg: 'drg',
+  cableDistribution: 'cable_distribution',
+  cableMpo: 'cable_mpo',
+};
+
 /** Nom de chaque valeur dans la base */
 const CLES_BAREME: Record<keyof Bareme, string> = {
   faitDansDelai: 'fait_dans_delai',
@@ -141,6 +181,7 @@ export function reglagesVersBase(r: Reglages): Record<string, unknown> {
 
 export interface Parametres {
   bareme: Bareme;
+  baremeOt: BaremeOT;
   entete: EnteteVirement;
   reglages: Reglages;
 }
@@ -177,6 +218,22 @@ export function baremeDepuisBase(v: unknown): Bareme {
   return b;
 }
 
+export function baremeOtDepuisBase(v: unknown): BaremeOT {
+  const o = objet(v);
+  const b = { ...BAREME_OT_DEFAUT };
+  for (const k of Object.keys(CLES_BAREME_OT) as (keyof BaremeOT)[]) {
+    const x = o[CLES_BAREME_OT[k]];
+    if (typeof x === 'number' && Number.isFinite(x)) b[k] = x;
+  }
+  return b;
+}
+
+export function baremeOtVersBase(b: BaremeOT): Record<string, number> {
+  const o: Record<string, number> = {};
+  for (const k of Object.keys(CLES_BAREME_OT) as (keyof BaremeOT)[]) o[CLES_BAREME_OT[k]] = Number(b[k]);
+  return o;
+}
+
 export function baremeVersBase(b: Bareme): Record<string, number> {
   const o: Record<string, number> = {};
   for (const k of Object.keys(CLES_BAREME) as (keyof Bareme)[]) o[CLES_BAREME[k]] = Number(b[k]);
@@ -202,14 +259,15 @@ export function enteteDepuisBase(v: unknown): EnteteVirement {
 
 /** Paramètres enregistrés (valeurs par défaut pour ce qui manque, ou si le module n'est pas installé) */
 export async function fetchParametres(): Promise<Parametres> {
-  const { data, error } = await supabase.from('app_settings').select('key, value').in('key', ['bareme_points', 'entete_virement', 'parametres_generaux']);
+  const { data, error } = await supabase.from('app_settings').select('key, value').in('key', ['bareme_points', 'bareme_ot', 'entete_virement', 'parametres_generaux']);
   if (error) {
     console.error('fetchParametres:', error);
-    return { bareme: { ...BAREME_DEFAUT }, entete: { ...ENTETE_DEFAUT, banques: {} }, reglages: reglagesDepuisBase({}) };
+    return { bareme: { ...BAREME_DEFAUT }, baremeOt: { ...BAREME_OT_DEFAUT }, entete: { ...ENTETE_DEFAUT, banques: {} }, reglages: reglagesDepuisBase({}) };
   }
   const val = (k: string) => lireJson((data ?? []).find((r) => r.key === k)?.value);
   return {
     bareme: baremeDepuisBase(val('bareme_points')),
+    baremeOt: baremeOtDepuisBase(val('bareme_ot')),
     entete: enteteDepuisBase(val('entete_virement')),
     reglages: reglagesDepuisBase(val('parametres_generaux')),
   };
@@ -231,6 +289,14 @@ export async function enregistrerEntete(parId: string, e: EnteteVirement): Promi
   const { data, error } = await supabase.rpc('modifier_parametre', { p_par: parId, p_cle: 'entete_virement', p_valeur: e });
   if (error) throw erreurParametre(error);
   return enteteDepuisBase(data);
+}
+
+/** Barème des fiches OT : écrit dans app_settings « bareme_ot » (comme les réglages généraux) */
+export async function enregistrerBaremeOt(b: BaremeOT): Promise<BaremeOT> {
+  const valeur = baremeOtVersBase(b);
+  const { error } = await supabase.from('app_settings').upsert({ key: 'bareme_ot', value: JSON.stringify(valeur) }, { onConflict: 'key' });
+  if (error) throw new Error(error.message || 'Enregistrement impossible');
+  return baremeOtDepuisBase(valeur);
 }
 
 /** Réglages généraux : écrits dans app_settings (comme la signature du directeur) */

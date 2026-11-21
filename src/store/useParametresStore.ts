@@ -1,17 +1,20 @@
 import { create } from 'zustand';
 import {
   BAREME_DEFAUT,
+  BAREME_OT_DEFAUT,
   ENTETE_DEFAUT,
   REGLAGES_DEFAUT,
   enregistrerBareme,
+  enregistrerBaremeOt,
   enregistrerEntete,
   enregistrerReglages,
   fetchParametres,
   type Bareme,
+  type BaremeOT,
   type EnteteVirement,
   type Reglages,
 } from '@/lib/parametresService';
-import { REGLAGES_PROGRAMME, appliquerBareme } from '@/utils/points';
+import { REGLAGES_PROGRAMME, appliquerBareme, appliquerBaremeOt } from '@/utils/points';
 import { appliquerEnteteVirement } from '@/utils/leaves';
 import { appliquerJoursFeries } from '@/utils/stats';
 
@@ -26,31 +29,40 @@ function appliquerReglages(r: Reglages) {
 // l'affichage des pages) puis appliqués aux calculs de points et à l'export du virement.
 interface ParametresState {
   bareme: Bareme;
+  baremeOt: BaremeOT;
   entete: EnteteVirement;
   reglages: Reglages;
   pret: boolean;
   charger: () => Promise<void>;
   sauverBareme: (parId: string, b: Bareme) => Promise<void>;
+  sauverBaremeOt: (b: BaremeOT) => Promise<void>;
   sauverEntete: (parId: string, e: EnteteVirement) => Promise<void>;
   sauverReglages: (r: Reglages) => Promise<void>;
 }
 
 export const useParametresStore = create<ParametresState>((set) => ({
   bareme: { ...BAREME_DEFAUT },
+  baremeOt: { ...BAREME_OT_DEFAUT },
   entete: { ...ENTETE_DEFAUT, banques: {} },
   reglages: { ...REGLAGES_DEFAUT },
   pret: false,
   charger: async () => {
     const p = await fetchParametres();
     appliquerBareme(p.bareme);
+    appliquerBaremeOt(p.baremeOt);
     appliquerEnteteVirement(p.entete);
     appliquerReglages(p.reglages);
-    set({ bareme: p.bareme, entete: p.entete, reglages: p.reglages, pret: true });
+    set({ bareme: p.bareme, baremeOt: p.baremeOt, entete: p.entete, reglages: p.reglages, pret: true });
   },
   sauverBareme: async (parId, b) => {
     const enregistre = await enregistrerBareme(parId, b);
     appliquerBareme(enregistre);
     set({ bareme: enregistre });
+  },
+  sauverBaremeOt: async (b) => {
+    const enregistre = await enregistrerBaremeOt(b);
+    appliquerBaremeOt(enregistre);
+    set({ baremeOt: enregistre });
   },
   sauverEntete: async (parId, e) => {
     const enregistre = await enregistrerEntete(parId, e);

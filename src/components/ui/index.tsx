@@ -274,6 +274,8 @@ export interface OKSheetValues {
   equipe: string;
   motif: string;
   dateClt: string;
+  /** date du message (« OT reçu le ») : modifiable seulement en mode « Modifier » */
+  dateMessage?: string;
   // Lecture seule : dernier fichier de scan (scan_results), jamais saisi à la main
   rxDbm: number | '';
   rangingM: number | '';
@@ -354,6 +356,19 @@ export function OKSheet({
               onChange={(e) => set('motif', e.target.value)}
             />
           </div>
+
+          {mode === 'edit' && (
+            <div>
+              <label className="text-xs font-semibold text-slate-500 block mb-1">Date du message (OT reçu le)</label>
+              <input
+                type="date"
+                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm bg-slate-50 focus:outline-none focus:border-blue-500"
+                value={values.dateMessage ?? ''}
+                onChange={(e) => set('dateMessage', e.target.value)}
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Le délai (TLID / hors délai) et les points sont recalculés depuis cette date.</p>
+            </div>
+          )}
 
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Date de mise en service</label>

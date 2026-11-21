@@ -15,9 +15,9 @@
 // au contrôle de 22 h une fois son échéance arrivée (et à chaque contrôle suivant), −1 quand une
 // fiche ouverte est retardée. Réaffecter avant l'échéance ne pénalise pas.
 import { DELAI_THRESHOLD_DRG, DELAI_THRESHOLD_INSTALLATION, HOLIDAY_SET as HOLIDAYS } from '@/utils/stats';
-import { estMotifLeger, estMotifReseau, estMotifSansPoint } from '@/utils/programme';
+import { estMotifLeger, estMotifReseau, estMotifSansPoint, typeCable } from '@/utils/programme';
 import type { Penalite, ProgrammeOT } from '@/types';
-import { BAREME_DEFAUT, REGLAGES_DEFAUT, type Bareme } from '@/lib/parametresService';
+import { BAREME_DEFAUT, BAREME_OT_DEFAUT, REGLAGES_DEFAUT, type Bareme, type BaremeOT } from '@/lib/parametresService';
 
 /**
  * Barème en vigueur — modifiable par l'administrateur (page Paramètres, enregistré dans la base).
@@ -60,6 +60,25 @@ export function appliquerBareme(b: Bareme) {
   POINTS.faitSansPoint = b.faitSansPoint;
   POINTS.penalite = b.penaliteNonTraitee;
   POINTS.penalites = { non_traitee: b.penaliteNonTraitee, retardee: b.penaliteRetardee, reaffectee: b.penaliteReaffectee, faux_ok: b.penaliteFauxOk };
+}
+
+/**
+ * Barème des fiches faites, compté depuis « OT reçu le » en jours ouvrés (dimanches et fériés exclus) :
+ *   • installation faite en 24 h (1 jour) : 2 pt — en 48 h (2 jours) : 1 pt ;
+ *   • installation avec poteau (« Besoin poteau », « Besoin 2 poteaux », « Poteau cassé » avant) :
+ *     + 1 pt de plantation, sauf en 48 h où le total est 1,5 pt (24 h → 3 pt) ;
+ *   • installation en retard : −1 le 1er jour de retard, −0,5 par jour en plus (+ 1 si poteau) ;
+ *   • dérangement : 0,5 pt, −0,5 par jour de retard (1 jour → 0, 2 jours → −0,5) ;
+ *   • câble distribution réparé : 2 pt — câble MPO : 5 pt ; plusieurs fiches de la même panne
+ *     (même équipe, même zone, même câble, faites le même jour) : seule la première a ces points,
+ *     les autres comptent comme un dérangement normal ;
+ *   • non fait : 0.
+ */
+export const BAREME_OT: BaremeOT = { ...BAREME_OT_DEFAUT };
+
+/** Applique le barème des fiches enregistré par l'administrateur (page Paramètres) */
+export function appliquerBaremeOt(b: BaremeOT) {
+  Object.assign(BAREME_OT, b);
 }
 
 /** Arrondi au centième pour l'affichage (0.5 + 0.5 + … sans erreur de virgule) : « 1,5 », « −1 » */
@@ -193,6 +212,10 @@ export function delaiOT(
     prioritaire?: boolean;
     decharge?: boolean | null;
     scanne?: boolean | null;
+    /** poteaux posés pour cette fiche (plantation) */
+    poteaux?: number;
+    /** autre fiche de la même panne de câble déjà payée (voir doublonsCable) */
+    doublonCable?: boolean;
   },
   now = Date.now(),
 ): DelaiOT {
@@ -210,19 +233,27 @@ export function delaiOT(
   const dansLesTemps = fin <= limite22h(ech);
   const etat: EtatDelai =
     ot.statut === 'non_fait' ? 'non_fait' : ot.statut === 'fait' ? (dansLesTemps ? 'dans' : 'hors') : dansLesTemps ? 'en_cours' : 'retard';
-  const base = etat === 'dans' ? POINTS.dansDelai : etat === 'hors' ? POINTS.horsDelai : etat === 'non_fait' ? POINTS.nonFait : 0;
-  const reseau = ot.statut === 'fait' && estMotifReseau(ot.motif);
+  // barème depuis « OT reçu le » (voir BAREME_OT)
+  const joursOfficiels = joursOuvres(recuLe, fin);
+  const cable = ot.statut === 'fait' && !ot.doublonCable ? typeCable(ot.motif) : null;
+  const base = ot.statut === 'fait' ? pointsFaite(ot.nature, joursOfficiels, (ot.poteaux ?? 0) > 0) : ot.statut === 'non_fait' ? POINTS.nonFait : 0;
+  const reseau = ot.statut === 'fait' && !typeCable(ot.motif) && estMotifReseau(ot.motif);
   const sansPoint = ot.statut === 'fait' && estMotifSansPoint(ot.motif);
   const leger = ot.statut === 'fait' && !reseau && !sansPoint && estMotifLeger(ot.motif);
+  const dansOfficiel = joursOfficiels <= seuilJours(ot.nature);
   // sans intervention, dans le délai : 0,5 + 0,25 si décharge + 0,25 si scanné (barème)
-  const points = sansPoint
-    ? etat === 'dans'
+  const points = cable
+    ? cable === 'mpo'
+      ? BAREME_OT.cableMpo
+      : BAREME_OT.cableDistribution
+    : sansPoint
+    ? dansOfficiel
       ? POINTS.faitSansPoint
-      : POINTS.horsDelai
-    : reseau
+      : Math.min(0, base)
+    : reseau && base > 0
     ? base * POINTS.coefReseau
-    : leger && etat === 'dans'
-      ? POINTS.sansIntervention + (ot.decharge ? POINTS.bonusDecharge : 0) + (ot.scanne ? POINTS.bonusScan : 0)
+    : leger && dansOfficiel
+      ? Math.min(base, POINTS.sansIntervention + (ot.decharge ? POINTS.bonusDecharge : 0) + (ot.scanne ? POINTS.bonusScan : 0))
       : base;
   return {
     etat,
@@ -241,6 +272,35 @@ export function delaiOT(
     decale: depart > recuLe,
     confieEnRetard: prioritaire,
   };
+}
+
+/** Points d'une fiche faite après `jours` jours ouvrés depuis « OT reçu le » (BAREME_OT) */
+export function pointsFaite(nature: ProgrammeOT['nature'], jours: number, poteau: boolean): number {
+  const b = BAREME_OT;
+  if (nature === 'derangement') return b.drg + b.retardParJour * Math.max(0, jours - 1);
+  if (jours <= 1) return b.inst24h + (poteau ? b.plantationPoteau : 0);
+  if (jours === 2) return poteau ? b.inst48hPoteau : b.inst48h;
+  return b.instRetard + b.retardParJour * (jours - 3) + (poteau ? b.plantationPoteau : 0);
+}
+
+/**
+ * Fiches d'une même panne de câble (distribution / MPO) faites ensemble : même équipe, même zone,
+ * même câble, même jour. La première faite reçoit les points du câble ; les autres (ids renvoyés)
+ * comptent comme un dérangement normal.
+ */
+export function doublonsCable(
+  ots: { id: string; equipe?: string | null; zone?: string | null; motif?: string; statut: string; traiteLe?: string | null }[],
+): Set<string> {
+  const groupes = new Map<string, { id: string; t: string }[]>();
+  for (const o of ots) {
+    const c = o.statut === 'fait' && o.traiteLe ? typeCable(o.motif) : null;
+    if (!c) continue;
+    const k = [o.equipe ?? '', (o.zone ?? '').toUpperCase(), c, isoJour(Date.parse(o.traiteLe!))].join('|');
+    groupes.set(k, [...(groupes.get(k) ?? []), { id: o.id, t: o.traiteLe! }]);
+  }
+  const out = new Set<string>();
+  for (const l of groupes.values()) [...l].sort((a, b) => a.t.localeCompare(b.t) || a.id.localeCompare(b.id)).slice(1).forEach((x) => out.add(x.id));
+  return out;
 }
 
 export const ETAT_DELAI: Record<EtatDelai, { label: string; cls: string }> = {
@@ -287,10 +347,11 @@ export function classement(ots: ProgrammeOT[], penalites: (Pick<Penalite, 'equip
     r.points += p.points;
     m.set(p.equipe, r);
   }
+  const doublons = doublonsCable(ots);
   for (const ot of ots) {
     const key = ot.equipe || 'Sans équipe';
     const r = m.get(key) ?? ligneVide(key);
-    const d = delaiOT(ot, now);
+    const d = delaiOT({ ...ot, doublonCable: doublons.has(ot.id) }, now);
     r.total++;
     r.points += d.points;
     if (ot.nature === 'derangement') r.pointsDer += d.points;

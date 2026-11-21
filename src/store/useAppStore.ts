@@ -98,6 +98,7 @@ interface AppState {
       equipe?: string;
       motif?: string;
       dateClt?: string;
+      dateMessage?: string;
     },
   ) => Promise<void>;
   removeSituation: (id: string) => Promise<void>;
@@ -310,6 +311,7 @@ export const useAppStore = create<AppState>()(
                   poteau: details?.poteau ?? sit.poteau,
                   equipe: details?.equipe ?? sit.equipe,
                   motif: details?.motif ?? sit.motif,
+                  ...(details?.dateMessage ? { dateMessage: details.dateMessage, dateRecu: details.dateMessage } : {}),
                 }
               : sit,
           ),
@@ -319,6 +321,7 @@ export const useAppStore = create<AppState>()(
             poteau: details?.poteau,
             equipe: details?.equipe,
             motif: details?.motif,
+            dateMessage: details?.dateMessage,
           });
         } catch (err: unknown) {
           set((s) => ({ situations: s.situations.map((sit) => (sit.id === id ? previous : sit)) }));

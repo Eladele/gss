@@ -74,6 +74,7 @@ export const motifsNonFaitPour = (nature: string) => MOTIFS_NON_FAIT.filter((m) 
 export const MOTIFS_FAIT: MotifDef[] = [
   { label: 'Câble distribution coupé', reseau: true },
   { label: 'Câble transport coupé', reseau: true },
+  { label: 'Câble MPO coupé', reseau: true },
   { label: 'HUB-BOX défectueux', reseau: true },
   { label: 'SUB-BOX défectueux', reseau: true },
   { label: 'port isolé' },
@@ -119,10 +120,20 @@ export const motifAvecCst = (motif: string, cst: boolean, nouveauDis?: string) =
 };
 /** Motif sans la partie CST (pour le calcul des points) */
 export const motifSansCst = (motif: string) => motif.replace(/^\s*CST\b.*$/i, '').replace(/\s*\+\s*CST\b.*$/i, '').trim();
+/** Nouveau DIS écrit dans un motif CST (« Besoin poteau + CST CA1Z042611/1-4 » → CA1Z042611/1-4) ; null sinon */
+export const disDuMotifCst = (motif?: string | null): string | null => {
+  const m = /\bCST\s+([A-Z]{2}\d[A-Z]\d{2}\d{3,5}\/[12](?:-\d{1,2})?)/i.exec((motif ?? '').replace(/\s*\/\s*/g, '/').replace(/\s*-\s*/g, '-'));
+  return m ? m[1].toUpperCase() : null;
+};
 
 /** Motif « fait » de panne réseau (câble coupé, HUB-BOX / SUB-BOX défectueux) → demi-point */
 export const estMotifReseau = (motif?: string | null) =>
   !!motif && MOTIFS_FAIT.some((m) => m.reseau && normal(m.label) === normal(motifSansCst(motif)));
+/** Câble réparé (barème : câble distribution 2 pt, câble MPO 5 pt) ; null pour un autre motif */
+export const typeCable = (motif?: string | null): 'mpo' | 'distribution' | null => {
+  const t = normal(motifSansCst(motif ?? ''));
+  return /\bmpo\b/.test(t) ? 'mpo' : /cable distribution/.test(t) ? 'distribution' : null;
+};
 /** Motif « fait » sans intervention (modem défectueux, problème électricité) : 0,5 + bonus décharge / scan */
 export const estMotifLeger = (motif?: string | null) => !!motif && MOTIFS_LEGERS.has(normal(motifSansCst(motif)));
 /** Motif « fait » qui ne rapporte aucun point (installé par quelqu'un, confirmé par client, erreur de signalisation) */
@@ -168,8 +179,10 @@ export const poteauxDuMotif = (motif: string, liste: MotifDef[]) => liste.find((
 /** Poteaux demandés par un motif « non fait » enregistré, même suivi d'une CST
  *  (« Besoin 2 poteaux + CST … » → 2, « Poteau cassé » → 1) */
 export const poteauxBesoin = (motif?: string | null) => {
-  const t = (motif ?? '').trim().toLowerCase();
-  return MOTIFS_NON_FAIT.find((m) => m.poteaux && t.startsWith(m.label.toLowerCase()))?.poteaux ?? 0;
+  // tout motif qui contient « besoin … poteau » (« Besoin 2 poteaux », « besoin de poteau … »)
+  const b = /besoin\s+(?:de\s+|d'un\s+)?(\d+\s*)?poteaux?/i.exec(motif ?? '');
+  if (b) return b[1] ? parseInt(b[1], 10) || 1 : 1;
+  return /poteau\s+cass/i.test(motif ?? '') ? 1 : 0;
 };
 
 /** « FGP 077490 » ou « TPH 45240200 » */
@@ -185,8 +198,9 @@ export const DECHARGE_URL = 'https://41.188.123.36/ftth-intervention/nouvelle';
 //     + 2 chiffres (11, 12, 21, 22) + « /1 » ou « /2 » ;
 //   • chaque série = 8 PCO dans l'ordre x11/1, x11/2, x12/1, x12/2, x21/1, x21/2, x22/1, x22/2,
 //     de 8 ports chacun = 64 ONU ; port de l'OLT (Port ID 0 à 15) = série − 1 ;
-//   • Application ID = A/0/(hub − 1)/(série − 1)/(rang du PCO dans la série × 8 + port du PCO).
-export const APP_ID_PREFIXE = 'A/0';
+//   • Application ID = A/0/1/(série − 1)/(rang du PCO dans la série × 8 + port du PCO) :
+//     « A/0/1 » est fixe (quel que soit le hub), le reste suit la règle.
+export const APP_ID_PREFIXE = 'A/0/1';
 export interface ApplicationId {
   id: string;
   hub: number;
@@ -205,7 +219,7 @@ export function applicationIdDepuisDis(dis: string | null | undefined): Applicat
   if (serie < (hub - 1) * 4 + 1 || serie > hub * 4 || port < 1 || port > 8) return null;
   const rang = ((Number(m[3]) - 1) * 2 + (Number(m[4]) - 1)) * 2 + (Number(m[5]) - 1); // 0 à 7
   const onuId = rang * 8 + port; // 1 à 64
-  return { id: `${APP_ID_PREFIXE}/${hub - 1}/${serie - 1}/${onuId}`, hub, serie, portOlt: serie - 1, onuId };
+  return { id: `${APP_ID_PREFIXE}/${serie - 1}/${onuId}`, hub, serie, portOlt: serie - 1, onuId };
 }
 
 /**

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { AlertCircle, AlertTriangle, Cable, Check, Flame, Plus, Search, Wrench } from 'lucide-react';
 import { Button, Modal, Select } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, fmtTel, ligneLabel, zoneDuDis } from '@/utils/programme';
+import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, disDuMotifCst, fmtTel, ligneLabel, zoneDuDis } from '@/utils/programme';
 import {
   affecterUrgent,
   creerEtAffecterOtUrgent,
@@ -131,8 +131,11 @@ export function AffecterUrgentModal({
     setTargetDate(f.statut === 'a_faire' ? f.dateProgramme || today : today);
     setUrgentMotif(f.statut === 'a_faire' ? f.motif || '' : '');
     setUrgentNature(f.nature);
-    setTargetZone(f.zone || '');
-    setTargetDis(f.dis || '');
+    // non faite avec une CST dans le motif : le nouveau DIS, sa zone et l'équipe de la zone sont proposés
+    const disCst = f.statut === 'non_fait' ? disDuMotifCst(f.motif) : null;
+    setTargetZone(zoneDuDis(disCst) ?? f.zone ?? '');
+    setTargetDis(disCst ?? f.dis ?? '');
+    if (disCst && zoneDuDis(disCst)) proposerEquipe(zoneDuDis(disCst)!);
   };
 
   const handleConfirmExistant = async () => {

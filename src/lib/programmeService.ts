@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import type { ClotureAVerifier, OtStatut, Penalite, ProgrammeOT } from '@/types';
 import type { ParsedOT } from '@/utils/otPdf';
-import { poteauxBesoin, type MotifFauxOk } from '@/utils/programme';
+import { disDuMotifCst, poteauxBesoin, zoneDuDis, type MotifFauxOk } from '@/utils/programme';
 import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts } from './refs';
 import { echeance } from '@/utils/points';
 
@@ -203,6 +203,69 @@ export async function situationsOuvertes(fgps: string[]): Promise<Map<string, Si
  *  sinon une nouvelle situation est créée. La ligne (client, DIS) et l'ONT sont
  *  enregistrés une seule fois et reliés à la situation. Deux requêtes au plus sur les
  *  situations : la base envoie une seule notification par équipe. */
+/** Infos de la ligne lues sur l'OT (DIS, zone, client, contacts…) */
+const infosLigne = (o: ParsedOT) => ({
+  fgp: o.fgp,
+  zone: o.zone,
+  typeLigne: o.typeLigne,
+  dis: o.dis,
+  clientCode: o.clientCode,
+  clientNom: o.clientNom,
+  clientInfo: o.clientInfo,
+  telephones: o.telephones,
+  adresse: o.adresse,
+  abonnement: o.abonnement,
+  miseEnService: o.miseEnService,
+});
+
+/**
+ * OT réimporté pour une fiche déjà « non faite » (renvoi) : la ligne prend ce qui est écrit sur le
+ * nouvel OT — nouveau DIS (ex. après une CST), zone, client, contacts — et le nouvel ONT. Avant, le
+ * renvoi ne touchait pas la ligne : le DIS restait l'ancien.
+ */
+export async function majLignesDepuisOt(ots: ParsedOT[]): Promise<void> {
+  if (!ots.length) return;
+  // DIS d'avant, pour le garder comme « ancien DIS » sur les fiches de la ligne s'il change
+  const avant = await disDesLignes(ots.map((o) => o.fgp));
+  const lignes = await upsertLignes(ots.map(infosLigne));
+  await upsertOnts(ots.filter((o) => o.ontSerials[0]).map((o) => ({ sn: o.ontSerials[0], ligneId: lignes.get(o.fgp.trim()) })));
+  await noterAncienDis(
+    ots.flatMap((o) => {
+      const a = avant.get(o.fgp.trim());
+      const n = normDis(o.dis);
+      return a && a.dis && n && n !== a.dis ? [{ ligneId: a.id, ancien: a.dis }] : [];
+    }),
+  );
+}
+
+const normDis = (d?: string | null) => (d ?? '').replace(/\s+/g, '').toUpperCase();
+
+/** DIS actuel des lignes : fgp → { id, dis } */
+async function disDesLignes(fgps: string[]): Promise<Map<string, { id: string; dis: string }>> {
+  const out = new Map<string, { id: string; dis: string }>();
+  const liste = [...new Set(fgps.map((f) => f.trim()).filter(Boolean))];
+  for (let i = 0; i < liste.length; i += 200) {
+    const { data } = await supabase.from('lignes').select('id, fgp, dis').in('fgp', liste.slice(i, i + 200));
+    (data ?? []).forEach((r) => out.set(r.fgp as string, { id: r.id as string, dis: normDis(r.dis as string) }));
+  }
+  return out;
+}
+
+/**
+ * DIS d'une ligne changé (CST, OT réimporté, superviseur) : l'ancien DIS est gardé sur ses fiches
+ * en cours et « non faites », pour que le chef et la distribution le voient encore.
+ */
+async function noterAncienDis(changes: { ligneId: string; ancien: string }[]) {
+  for (const c of changes) {
+    const { error } = await supabase
+      .from(TABLE)
+      .update({ ancien_dis: c.ancien })
+      .eq('ligne_id', c.ligneId)
+      .in('status', [...OUVERT, versStatus.non_fait]);
+    if (error) console.warn('Ancien DIS non enregistré', error.message);
+  }
+}
+
 export async function distribuer(
   ots: (ParsedOT & { equipe: string; sourceFichier: string })[],
   dateProgramme: string,
@@ -210,21 +273,7 @@ export async function distribuer(
 ): Promise<{ crees: number; completees: number }> {
   const [existantes, lignes, equipes] = await Promise.all([
     situationsOuvertes(ots.map((o) => o.fgp)),
-    upsertLignes(
-      ots.map((o) => ({
-        fgp: o.fgp,
-        zone: o.zone,
-        typeLigne: o.typeLigne,
-        dis: o.dis,
-        clientCode: o.clientCode,
-        clientNom: o.clientNom,
-        clientInfo: o.clientInfo,
-        telephones: o.telephones,
-        adresse: o.adresse,
-        abonnement: o.abonnement,
-        miseEnService: o.miseEnService,
-      })),
-    ),
+    upsertLignes(ots.map(infosLigne)),
     teamIdsFor(ots.map((o) => o.equipe)),
   ]);
   const onts = await upsertOnts(ots.filter((o) => o.ontSerials[0]).map((o) => ({ sn: o.ontSerials[0], ligneId: lignes.get(o.fgp.trim()) })));
@@ -553,9 +602,44 @@ export async function modifierZoneDis(fgp: string, opts: { zone?: string; dis?: 
   if (zone) patch.zone = zone;
   if (dis) patch.dis = dis;
   if (!Object.keys(patch).length) return;
+  const avant = dis ? (await disDesLignes([fgp])).get(fgp.trim()) : undefined;
   const { data, error } = await supabase.from('lignes').update(patch).eq('fgp', fgp.trim()).select('id');
   if (error) throw dbError(error, 'Changement de zone / DIS impossible');
   if (!data?.length) throw new Error(`Ligne ${fgp} introuvable`);
+  // l'ancien DIS reste visible sur les fiches de la ligne
+  if (avant?.dis && dis && avant.dis !== dis) await noterAncienDis([{ ligneId: avant.id, ancien: avant.dis }]);
+}
+
+// ─── Commentaire du superviseur pour le chef d'équipe (supabase_note_chef.sql) ──
+const SQL_NOTE = 'Le commentaire pour le chef n’est pas encore installé (exécuter supabase_note_chef.sql).';
+const erreurNote = (e: { code?: string; message: string }) =>
+  e.code === '42703' || e.code === 'PGRST204' || /note_chef/.test(e.message) ? new Error(SQL_NOTE) : dbError(e, 'Commentaire non enregistré');
+
+/** Commentaires pour le chef : id de fiche → commentaire (vide si la colonne n'existe pas encore) */
+export async function fetchNotesChef(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const liste = [...new Set(ids.filter((i) => i && !i.startsWith('h:')))];
+  for (let i = 0; i < liste.length; i += 200) {
+    const { data, error } = await supabase.from(TABLE).select('id, note_chef').in('id', liste.slice(i, i + 200)).neq('note_chef', '');
+    if (error) return out;
+    (data ?? []).forEach((r) => r.note_chef && out.set(r.id as string, r.note_chef as string));
+  }
+  return out;
+}
+
+/** Commentaire pour le chef sur une fiche ('' l'efface) */
+export async function enregistrerNoteChef(id: string, note: string): Promise<void> {
+  const { error } = await supabase.from(TABLE).update({ note_chef: note.trim() }).eq('id', id);
+  if (error) throw erreurNote(error);
+}
+
+/** Commentaires saisis à la distribution : par n° OT (fiches qui viennent d'être créées / complétées) */
+export async function enregistrerNotesParOt(notes: Record<string, string>): Promise<void> {
+  for (const [numeroOt, note] of Object.entries(notes)) {
+    if (!note.trim()) continue;
+    const { error } = await supabase.from(TABLE).update({ note_chef: note.trim() }).eq('numero_ot', numeroOt);
+    if (error) throw erreurNote(error);
+  }
 }
 
 /** Clôture précédente d'une ligne (autre fiche du même FGP), pour la distribution */
@@ -1110,8 +1194,31 @@ async function redaterRenvoi(ids: string[], date: string, datesOt: Record<string
 }
 
 /**
+ * Fiches « non faites » avec une CST dans le motif (« … + CST CA1Z042611/1-4 ») : au renvoi, la
+ * ligne prend ce nouveau DIS et sa zone, pour que l'équipe voie la bonne distribution et le bon port.
+ */
+async function appliquerCstRenvoi(ids: string[]) {
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabase.from(VUE).select('id, status, fgp, dis, zone, motif_cloture').in('id', ids.slice(i, i + 200));
+    if (error) throw dbError(error, 'Lecture des fiches à renvoyer impossible');
+    for (const r of data ?? []) {
+      if (r.status !== 'non_ok' || !r.fgp) continue;
+      const dis = disDuMotifCst(r.motif_cloture as string);
+      if (!dis || dis === String(r.dis ?? '').replace(/\s+/g, '').toUpperCase()) continue;
+      try {
+        await modifierZoneDis(r.fgp as string, { dis, zone: zoneDuDis(dis) ?? undefined });
+      } catch {
+        /* droit insuffisant sur la ligne : le renvoi se fait quand même, DIS inchangé */
+      }
+    }
+  }
+}
+
+/**
  * Renvoie des fiches « non faites » à une équipe (null : la même) pour le jour donné : le motif
  * passé est gardé dans l'historique, la fiche redevient « à faire ». Renvoie le nombre renvoyé.
+ * Motif avec CST : le nouveau DIS (et sa zone) est appliqué à la ligne, sauf `cst: false`
+ * (zone / DIS déjà choisis à la main par le superviseur).
  */
 export async function redistribuer(
   ids: string[],
@@ -1120,9 +1227,11 @@ export async function redistribuer(
   par: Par,
   /** date « OT reçu le » lue sur l'OT réimporté, par id de fiche */
   datesOt: Record<string, string | null | undefined> = {},
+  opts: { cst?: boolean } = {},
 ): Promise<number> {
   const teamId = equipe ? await teamIdFor(equipe) : null;
   if (equipe && !teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
+  if (opts.cst !== false) await appliquerCstRenvoi(ids);
   // avant le renvoi : l'échéance et la priorité calculées par la base partent de la nouvelle date
   await redaterRenvoi(ids, date, datesOt);
   const { data, error } = await supabase.rpc('redistribuer_fiches', { p_ids: ids, p_team: teamId, p_date: date, p_par: par.id });

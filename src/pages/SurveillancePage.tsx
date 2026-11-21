@@ -71,6 +71,24 @@ function Kpi({ label, value, cls = 'text-slate-900', sub }: { label: string; val
  * chaque équipe, fiches faites / non faites et points du jour, de la semaine ou du mois, et leur
  * évolution sur les dernières périodes.
  */
+// ─── Filtre par type de fiche ────────────────────────────────────────────────
+const INST_SANS_CST_ANS = '__inst';
+const INST_TOUTES = '__inst_tout';
+const TYPE_LABEL: Record<string, string> = {
+  DRG: 'Dérangements (DRG)',
+  [INST_SANS_CST_ANS]: 'Installations sauf CST / ANS',
+  [INST_TOUTES]: 'Toutes les installations',
+};
+/** Type d'une fiche : CPL, TRL, CMI, CLS, RLR, CST, ANS, DRG */
+const typeDe = (o: Pick<ProgrammeOT, 'typeOt' | 'nature'>) => (o.typeOt || (o.nature === 'derangement' ? 'DRG' : '')).trim().toUpperCase();
+function typeOk(o: Pick<ProgrammeOT, 'typeOt' | 'nature'>, f: string): boolean {
+  if (!f) return true;
+  if (f === 'DRG') return o.nature === 'derangement';
+  if (f === INST_TOUTES) return o.nature === 'installation';
+  if (f === INST_SANS_CST_ANS) return o.nature === 'installation' && !['CST', 'ANS'].includes(typeDe(o));
+  return o.nature === 'installation' && typeDe(o) === f;
+}
+
 export default function SurveillancePage() {
   // superviseur régional : seulement les équipes et fiches de sa ville
   const { equipes, ficheOk, equipeOk } = usePerimetre();
@@ -86,6 +104,8 @@ export default function SurveillancePage() {
   const [fEquipe, setFEquipe] = useState('');
   const [fZone, setFZone] = useState('');
   const [fVille, setFVille] = useState('');
+  // type : DRG, une installation précise (CPL, TRL…), toutes les installations, ou toutes sauf CST / ANS
+  const [fType, setFType] = useState('');
   const [mesure, setMesure] = useState<Mesure>('points');
   const [otsBruts, setOts] = useState<ProgrammeOT[]>([]);
   const [archives, setArchives] = useState<ClotureArchivee[]>([]);
@@ -203,21 +223,31 @@ export default function SurveillancePage() {
       });
     const villeDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.ville ?? '';
     return ([...otsBruts, ...passees] as ProgrammeOT[]).filter(
-      (o) => (!fEquipe || o.equipe === fEquipe) && (!fZone || (o.zone ?? '').trim() === fZone) && (!fVille || villeDe(o.equipe) === fVille),
+      (o) =>
+        (!fEquipe || o.equipe === fEquipe) &&
+        (!fZone || (o.zone ?? '').trim() === fZone) &&
+        (!fVille || villeDe(o.equipe) === fVille) &&
+        typeOk(o, fType),
     );
-  }, [otsBruts, archives, basesArchives, fEquipe, fZone, fVille, equipes]);
+  }, [otsBruts, archives, basesArchives, fEquipe, fZone, fVille, fType, equipes]);
+  const typesConnus = useMemo(
+    () => [...new Set(otsBruts.filter((o) => o.nature === 'installation').map(typeDe).filter(Boolean))].sort(),
+    [otsBruts],
+  );
   const zonesConnues = useMemo(() => [...new Set(otsBruts.map((o) => (o.zone ?? '').trim()).filter(Boolean))].sort(), [otsBruts]);
   const villes = useMemo(() => [...new Set(equipes.map((e) => e.ville).filter((v): v is NonNullable<typeof v> => !!v))].sort(), [equipes]);
   const penalitesFiltrees = useMemo(() => {
     const villeDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.ville ?? '';
     const zoneFiche = new Map(otsBruts.map((o) => [o.id, (o.zone ?? '').trim()]));
+    const fiche = new Map(otsBruts.map((o) => [o.id, o]));
     return penalites.filter(
       (p) =>
         (!fEquipe || p.equipe === fEquipe) &&
         (!fVille || villeDe(p.equipe) === fVille) &&
-        (!fZone || zoneFiche.get(p.situationId) === fZone),
+        (!fZone || zoneFiche.get(p.situationId) === fZone) &&
+        (!fType || (fiche.has(p.situationId) && typeOk(fiche.get(p.situationId)!, fType))),
     );
-  }, [penalites, fEquipe, fZone, fVille, equipes, otsBruts]);
+  }, [penalites, fEquipe, fZone, fVille, fType, equipes, otsBruts]);
   const parEquipe = useMemo(() => bilans(ots, penalitesFiltrees, g), [ots, penalitesFiltrees, g]);
   const ouvert = useMemo(() => programmeOuvert(ots), [ots]);
   const cle = clePeriode(debut, g);
@@ -270,7 +300,7 @@ export default function SurveillancePage() {
       doc.text(pdfTxt(`Surveillance des équipes - ${libellePeriode(debut, g, true)}`), 14, 15);
       doc.setFontSize(9);
       doc.setTextColor(100);
-      const filtres = [fVille && `ville ${fVille}`, fEquipe && `équipe ${fEquipe}`, fZone && `zone ${fZone}`].filter(Boolean).join(' · ');
+      const filtres = [fVille && `ville ${fVille}`, fEquipe && `équipe ${fEquipe}`, fZone && `zone ${fZone}`, fType && `type ${TYPE_LABEL[fType] ?? fType}`].filter(Boolean).join(' · ');
       doc.text(
         pdfTxt(`Édité le ${new Date().toLocaleString('fr-FR')} par ${user.name}${filtres ? ` · ${filtres}` : ''} · une fiche compte le jour de sa clôture`),
         14,
@@ -458,7 +488,7 @@ export default function SurveillancePage() {
             </Button>
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[
             { label: 'Ville', value: fVille, set: setFVille, options: villes as string[] },
             { label: 'Équipe', value: fEquipe, set: setFEquipe, options: equipes.filter((e) => !fVille || e.ville === fVille).map((e) => e.name) },
@@ -479,6 +509,22 @@ export default function SurveillancePage() {
               ))}
             </select>
           ))}
+          <select
+            aria-label="Filtrer par type"
+            value={fType}
+            onChange={(e) => setFType(e.target.value)}
+            className={`min-w-0 border rounded-lg px-2 py-1.5 text-xs sm:text-sm bg-white ${fType ? 'border-blue-400 text-blue-900 font-semibold' : 'border-slate-200 text-slate-600'}`}
+          >
+            <option value="">Type : tous</option>
+            <option value="DRG">{TYPE_LABEL.DRG}</option>
+            <option value={INST_SANS_CST_ANS}>{TYPE_LABEL[INST_SANS_CST_ANS]}</option>
+            <option value={INST_TOUTES}>{TYPE_LABEL[INST_TOUTES]}</option>
+            {typesConnus.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
         </div>
         <p className="text-[11px] sm:text-xs text-slate-500 mt-2">
           Une fiche compte le jour où elle a été clôturée (« Fait » ou « Non fait »), avec les points du barème ; une pénalité, le jour où elle a été donnée.

@@ -37,6 +37,7 @@ export interface Situation {
   fgp: string;
   type: SituationType;
   zone: string;
+  clientNom?: string; // nom du client de la ligne (vue situations_detail)
   equipe: string;
   motif: string;
   dateDepo: string;

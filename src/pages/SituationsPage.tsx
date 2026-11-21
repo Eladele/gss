@@ -54,6 +54,8 @@ export default function SituationsPage() {
   const [fEquipe, setFEquipe] = useState('');
   const [fStatus, setFStatus] = useState('__default__');
   const [fDate, setFDate] = useState('');
+  // conformité du délai : TLID (dans le délai), hors délai, ou non applicable (NON OK, sans date)
+  const [fConformite, setFConformite] = useState<'' | 'tlid' | 'hors' | 'na'>('');
   const [fgpOpen, setFgpOpen] = useState(false);
   const [nokFgp, setNokFgp] = useState('');
   const [nokId, setNokId] = useState('');
@@ -185,20 +187,25 @@ export default function SituationsPage() {
         // "__default__" = vue par défaut du sélecteur Statut : seulement les situations pas
         // encore décidées (en attente / en cours) — OK et NON OK sont des issues finales.
         // Une recherche active lève cette restriction (on cherche alors dans tout l'historique).
+        // un filtre de conformité lève aussi cette restriction (la conformité concerne surtout les OK)
         if (fStatus === '__default__') {
-          if (!search.trim() && s.status !== 'pending' && s.status !== 'in_progress') return false;
+          if (!search.trim() && !fConformite && s.status !== 'pending' && s.status !== 'in_progress') return false;
         } else if (fStatus && s.status !== fStatus) {
           return false;
+        }
+        if (fConformite) {
+          const applicable = s.status !== 'non_ok' && !!(s.dateDepo || s.dateMessage);
+          if (fConformite === 'na' ? applicable : !applicable || isHorsDelai(s) !== (fConformite === 'hors')) return false;
         }
         return true;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [situations, search, fType, fEquipe, fStatus, fDate, villeScope, equipes],
+    [situations, search, fType, fEquipe, fStatus, fDate, fConformite, villeScope, equipes],
   );
 
   // Colonnes réduites tant qu'on est dans la vue "en cours" par défaut (sans filtre
   // statut/date explicite) — vue simplifiée pour aller à l'essentiel au quotidien.
-  const isEnCoursView = fStatus === '__default__' && !fDate && !search.trim();
+  const isEnCoursView = fStatus === '__default__' && !fDate && !fConformite && !search.trim();
 
   const sorted = useMemo(() => {
     if (!sortBy || !SORT_GETTERS[sortBy]) return filtered;
@@ -217,7 +224,7 @@ export default function SituationsPage() {
   // Remise à la page 1 quand un filtre change — ajustée PENDANT le rendu (pattern
   // recommandé par React) plutôt que dans un useEffect, qui provoquerait un rendu
   // supplémentaire inutile ("Calling setState synchronously within an effect").
-  const filterKey = `${search}|${fType}|${fEquipe}|${fStatus}|${fDate}`;
+  const filterKey = `${search}|${fType}|${fEquipe}|${fStatus}|${fDate}|${fConformite}`;
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey);
@@ -264,6 +271,7 @@ export default function SituationsPage() {
       equipe: s.equipe || '',
       motif: s.motif || '',
       dateClt: s.dateClt || '',
+      dateMessage: (s.dateMessage || s.dateRecu || s.dateDepo || '').slice(0, 10),
       rxDbm: sc?.rxPower ?? '',
       rangingM: sc?.ranging ?? '',
       scanStatut: sc?.result ?? 'NON SCANE',
@@ -281,7 +289,9 @@ export default function SituationsPage() {
     };
     try {
       if (okMode === 'edit') {
-        await editSituation(okId, payload);
+        // date du message envoyée seulement si elle a été changée
+        const dateChangee = values.dateMessage && values.dateMessage !== okInitialValues.dateMessage;
+        await editSituation(okId, { ...payload, ...(dateChangee ? { dateMessage: values.dateMessage } : {}) });
         setOkOpen(false);
         showToast(`FGP ${okFgp} modifié `, 'success');
       } else {
@@ -633,6 +643,17 @@ export default function SituationsPage() {
               <option value="in_progress">En cours</option>
               <option value="ok">OK</option>
               <option value="non_ok">NON OK</option>
+            </Select>
+            <Select
+              value={fConformite}
+              onChange={(e) => setFConformite(e.target.value as typeof fConformite)}
+              className={`w-full md:w-auto min-w-0 ${fConformite ? '!border-blue-500 !text-blue-800' : ''}`}
+              aria-label="Filtrer par conformité"
+            >
+              <option value="">Toute conformité</option>
+              <option value="tlid">TLID (dans le délai)</option>
+              <option value="hors">Hors délai</option>
+              <option value="na">Non applicable (NON OK, sans date)</option>
             </Select>
             <input
               type="date"

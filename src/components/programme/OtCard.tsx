@@ -9,6 +9,7 @@ import type { SituationType } from '@/types';
 import type { ClotureArchivee, IpsOT, ReclamationFauxOk, ScanOT } from '@/lib/programmeService';
 import { HistoriqueMotifs } from '@/components/programme/Historique';
 import { ReclamerFauxOk } from '@/components/programme/Reclamation';
+import { NoteChefAffichee } from '@/components/programme/NoteChef';
 
 /** Copie dans le presse-papiers ; `done` passe à vrai 1,5 s pour confirmer à l'écran */
 function useCopy(value: string) {
@@ -56,7 +57,10 @@ export function OtCard({
   historique,
   ip,
   onAjouterContact,
+  note,
 }: {
+  /** commentaire du superviseur pour le chef (donné à la distribution) */
+  note?: string;
   /** ajouter un contact à la ligne (après la distribution) */
   onAjouterContact?: (tel: string) => Promise<void>;
   /** OT Réseau (ANS…) : adresses IPS / IPM de la constitution */
@@ -130,6 +134,12 @@ export function OtCard({
         <span className={`flex-shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full border ${st.cls}`}>{st.label}</span>
       </div>
 
+      {note && (
+        <div className="px-4 pb-2">
+          <NoteChefAffichee note={note} />
+        </div>
+      )}
+
       {/* Appeler le client */}
       {(ot.telephones.length > 0 || onAjouterContact) && (
         <div className="px-4 pb-2 flex flex-wrap items-center gap-2">
@@ -176,7 +186,11 @@ export function OtCard({
             <Cable className="w-3.5 h-3.5" /> Câble fibre : {ot.cableFibreM} m
           </p>
         ) : null}
-        {ot.ancienDis && <p className="text-xs text-amber-700">Ancien DIS : {ot.ancienDis}</p>}
+        {ot.ancienDis && ot.ancienDis.replace(/\s+/g, '').toUpperCase() !== ot.dis.replace(/\s+/g, '').toUpperCase() && (
+          <p className="text-xs text-amber-700">
+            Ancien DIS : <span className="font-mono">{ot.ancienDis}</span>
+          </p>
+        )}
         {ot.adresse && (
           <p className="text-xs text-slate-500 flex items-start gap-1">
             <MapPin className="w-3.5 h-3.5 mt-px flex-shrink-0" />

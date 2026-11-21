@@ -15,6 +15,7 @@ import {
   marquerUrgent,
   rattraperControles,
   reassign,
+  majLignesDepuisOt,
   redistribuer,
   retarder,
   fetchHistoriqueClotures,
@@ -23,6 +24,9 @@ import {
   ajouterContact,
   fetchMotifsPrecedents,
   modifierZoneDis,
+  fetchNotesChef,
+  enregistrerNoteChef,
+  enregistrerNotesParOt,
   type ClotureArchivee,
   type MotifPrecedent,
   signalerFauxOk,
@@ -31,15 +35,18 @@ import {
 } from '@/lib/programmeService';
 import { HistoriqueMotifs, MotifsPrecedents } from '@/components/programme/Historique';
 import { AffecterUrgentModal } from '@/components/programme/AffecterUrgentModal';
+import { NoteChefEditeur } from '@/components/programme/NoteChef';
 import {
   NATURE_CLASS,
   NATURE_LABEL,
   STATUT_OT,
+  disDuMotifCst,
   fmtTel,
   hubDe,
   hubLabel,
   libelleFauxOk,
   ligneLabel,
+  motifSansCst,
   peutAjouterContact,
   peutModifierZoneDis,
   peutSignalerFauxOk,
@@ -64,15 +71,21 @@ type Item = ParsedOT & {
   renvoi?: { id: string; equipe: string; motif: string; traiteLe: string | null };
   /** fiches déjà clôturées de la même ligne (dérangements, installation…) : leurs motifs */
   precedents?: MotifPrecedent[];
+  /** commentaire du superviseur pour le chef, enregistré avec la distribution */
+  note?: string;
   include: boolean;
 };
-type Row = Pick<ParsedOT, 'nature' | 'fgp' | 'clientCode' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'>;
+type Row = Pick<
+  ParsedOT,
+  'nature' | 'fgp' | 'clientCode' | 'clientNom' | 'telephones' | 'zone' | 'pco' | 'port' | 'ontSerials' | 'dis' | 'ancienDis' | 'adresse' | 'sousType' | 'cableFibreM' | 'typeOt' | 'typeLigne'
+>;
 
 const todayISO = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 const frDate = (iso: string) => iso.split('-').reverse().join('/');
+const normDis = (d?: string | null) => (d ?? '').replace(/\s+/g, '').toUpperCase();
 const addDays = (iso: string, n: number) => {
   const d = new Date(iso + 'T12:00:00');
   d.setDate(d.getDate() + n);
@@ -223,6 +236,11 @@ function RowCells({ o, prioritaire, isUrgent }: { o: Row; prioritaire?: boolean;
         <Info label="DIS">
           <span className="font-mono">{o.dis || '—'}</span>
           {hub && <span className="ml-1.5 text-[10px] font-black px-1 rounded bg-sky-600 text-white">{hubLabel(hub)}</span>}
+          {o.ancienDis && normDis(o.ancienDis) !== normDis(o.dis) && (
+            <span className="block text-[10px] text-amber-700" title="DIS d'avant le changement (CST, nouvel OT…)">
+              Ancien DIS : <span className="font-mono">{o.ancienDis}</span>
+            </span>
+          )}
         </Info>
         <Info label="Zone · PCO">
           <span className="font-mono">
@@ -344,6 +362,8 @@ export default function DistributionPage() {
       const { crees, completees } = nouvelles.length ? await distribuer(nouvelles, dateProgramme, user) : { crees: 0, completees: 0 };
       // fiches déjà « non faites » : renvoyées équipe par équipe, motif passé gardé
       let renvoyees = 0;
+      // la ligne prend le DIS, la zone et les contacts du nouvel OT (ex. nouveau DIS après une CST)
+      await majLignesDepuisOt(aRenvoyer);
       // la date « OT reçu le » du nouvel OT remplace l'ancienne (sinon le jour du renvoi)
       const datesOt = Object.fromEntries(aRenvoyer.map((i) => [i.renvoi!.id, i.dateRecu]));
       for (const eq of new Set(aRenvoyer.map((i) => i.equipe)))
@@ -359,6 +379,13 @@ export default function DistributionPage() {
         `${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''}${completees ? ` (dont ${completees} situation${completees > 1 ? 's' : ''} existante${completees > 1 ? 's' : ''} complétée${completees > 1 ? 's' : ''})` : ''}${renvoyees ? ` · ${renvoyees} déjà non faite${renvoyees > 1 ? 's' : ''} renvoyée${renvoyees > 1 ? 's' : ''} (motifs gardés)` : ''} : les chefs d’équipe sont prévenus`,
         'success',
       );
+      // commentaires pour les chefs : la distribution est déjà faite, une erreur ici ne l'annule pas
+      try {
+        await enregistrerNotesParOt(Object.fromEntries(nouvelles.filter((i) => i.note).map((i) => [i.numeroOt, i.note!])));
+        for (const i of aRenvoyer) if (i.note) await enregistrerNoteChef(i.renvoi!.id, i.note);
+      } catch (e) {
+        showToast(errMsg(e), 'error');
+      }
       setItems([]);
       setHistDate(dateProgramme);
     } catch (e) {
@@ -383,6 +410,9 @@ export default function DistributionPage() {
   const [urgentModalOpen, setUrgentModalOpen] = useState(false);
   // motifs passés des fiches renvoyées, et renvoi en cours (une fiche ou toutes les non faites d'une équipe)
   const [historique, setHistorique] = useState<Map<string, ClotureArchivee[]>>(new Map());
+  // commentaires pour les chefs (fiche → commentaire)
+  const [notes, setNotes] = useState<Map<string, string>>(new Map());
+  const ajouterNotes = (ids: string[]) => fetchNotesChef(ids).then((m) => setNotes((cur) => new Map([...cur, ...m])));
   // fiche seule : le superviseur peut aussi corriger sa zone et son DIS
   const [renvoi, setRenvoi] = useState<{
     cle: string;
@@ -400,6 +430,8 @@ export default function DistributionPage() {
   const [nonFaites, setNonFaites] = useState<ProgrammeOT[]>([]);
   // filtre du suivi et équipes repliées (mémorisées sur cet appareil)
   const [filtreSuivi, setFiltreSuivi] = useState<'tout' | 'a_faire' | 'fait' | 'non_fait'>('tout');
+  // filtre par motif (motif de clôture ; fiche en cours : son défaut)
+  const [filtreMotif, setFiltreMotif] = useState('');
   const [fermees, setFermees] = useState<Set<string>>(() => {
     try {
       return new Set(JSON.parse(localStorage.getItem('gss.distribution.fermees') ?? '[]') as string[]);
@@ -466,6 +498,7 @@ export default function DistributionPage() {
           setHistError('');
           setVersion((v) => v + 1);
           fetchHistoriqueClotures([...rows, ...ouv, ...nf].filter(ficheOk).map((o) => o.id)).then((h) => alive && setHistorique(h));
+          fetchNotesChef([...rows, ...ouv, ...nf].map((o) => o.id)).then((m) => alive && setNotes(m));
         },
         (e) => alive && setHistError(errMsg(e)),
       );
@@ -489,7 +522,11 @@ export default function DistributionPage() {
     const id = setTimeout(
       () =>
         rechercherProgramme(t).then(
-          (r) => alive && setResultats(r.filter(ficheOk)),
+          (r) => {
+            if (!alive) return;
+            setResultats(r.filter(ficheOk));
+            ajouterNotes(r.map((o) => o.id));
+          },
           (e) => alive && showToast(errMsg(e), 'error'),
         ),
       300,
@@ -501,16 +538,32 @@ export default function DistributionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq, version]);
 
+  const motifDe = (o: ProgrammeOT) => (motifSansCst(o.motif || '') || (o.statut === 'a_faire' ? o.defaut : '') || '').replace(/\s+/g, ' ').trim();
+  const motifsSuivi = useMemo(() => {
+    const m = new Map<string, number>();
+    [...ouvertes, ...hist, ...nonFaites].forEach((o) => {
+      const k = motifDe(o);
+      if (k) m.set(k, (m.get(k) ?? 0) + 1);
+    });
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [ouvertes, hist, nonFaites]);
+  const parMotif = (l: ProgrammeOT[]) => (filtreMotif ? l.filter((o) => motifDe(o) === filtreMotif) : l);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const histF = useMemo(() => parMotif(hist), [hist, filtreMotif]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nonFaitesF = useMemo(() => parMotif(nonFaites), [nonFaites, filtreMotif]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const ouvertesF = useMemo(() => parMotif(ouvertes), [ouvertes, filtreMotif]);
   const histGroups = useMemo(() => {
     const m = new Map<string, ProgrammeOT[]>();
-    hist.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
+    histF.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [hist]);
+  }, [histF]);
   const nonFaitesGroups = useMemo(() => {
     const m = new Map<string, ProgrammeOT[]>();
-    nonFaites.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
+    nonFaitesF.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [nonFaites]);
+  }, [nonFaitesF]);
   // fiches en cours, épinglées : par équipe, les urgentes et en retard d'abord, puis par échéance
   const ouvertesIds = useMemo(() => new Set(ouvertes.map((o) => o.id)), [ouvertes]);
   const nonFaitesIds = useMemo(() => new Set(nonFaites.map((o) => o.id)), [nonFaites]);
@@ -521,13 +574,13 @@ export default function DistributionPage() {
       return o.isUrgent ? 0 : d.etat === 'retard' ? 1 : d.prioritaire ? 2 : 3;
     };
     const m = new Map<string, ProgrammeOT[]>();
-    ouvertes.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
+    ouvertesF.forEach((o) => m.set(o.equipe, [...(m.get(o.equipe) ?? []), o]));
     return [...m.entries()]
       .map(([e, l]) => [e, [...l].sort((a, b) => rang(a) - rang(b) || delaiOT(a).echeance.localeCompare(delaiOT(b).echeance))] as const)
       .sort(([a], [b]) => a.localeCompare(b));
-  }, [ouvertes]);
+  }, [ouvertesF]);
   // le jour choisi : seulement ce qui n'est ni épinglé en haut (en cours) ni en bas (non faites à renvoyer)
-  const faitesDuJour = useMemo(() => hist.filter((o) => !ouvertesIds.has(o.id) && !nonFaitesIds.has(o.id)), [hist, ouvertesIds, nonFaitesIds]);
+  const faitesDuJour = useMemo(() => histF.filter((o) => !ouvertesIds.has(o.id) && !nonFaitesIds.has(o.id)), [histF, ouvertesIds, nonFaitesIds]);
 
   const pen = (n: number, motif: 'retardee' | 'reaffectee' = 'retardee') =>
     n ? ` · ${n} pénalité${n > 1 ? 's' : ''} (${fmtPts(n * POINTS.penalites[motif])} pt)` : '';
@@ -602,21 +655,40 @@ export default function DistributionPage() {
     }
   };
 
+  /** Commentaire pour le chef sur une fiche déjà distribuée */
+  const doNoteChef = async (o: ProgrammeOT, note: string) => {
+    try {
+      await enregistrerNoteChef(o.id, note);
+      setNotes((cur) => {
+        const m = new Map(cur);
+        if (note) m.set(o.id, note);
+        else m.delete(o.id);
+        return m;
+      });
+      showToast(note ? `${ligneLabel(o)} : commentaire envoyé à ${o.equipe || 'l’équipe'}` : `${ligneLabel(o)} : commentaire retiré`, 'success');
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+      throw err;
+    }
+  };
+
   /** Renvoyer des fiches « non faites » (motif passé gardé) */
-  const ouvrirRenvoi = (cle: string, ids: string[], equipe: string, fiche?: ProgrammeOT) =>
-    setRenvoi(
-      renvoi?.cle === cle
-        ? null
-        : {
-            cle,
-            ids,
-            equipe,
-            date: estSoir() ? jourOuvreSuivant(todayISO()) : todayISO(),
-            fiche,
-            nouvelleZone: fiche?.zone ?? '',
-            nouveauDis: fiche?.dis ?? '',
-          },
-    );
+  const ouvrirRenvoi = (cle: string, ids: string[], equipe: string, fiche?: ProgrammeOT) => {
+    if (renvoi?.cle === cle) return setRenvoi(null);
+    // motif avec CST (« … + CST CA1Z042611/1-4 ») : le nouveau DIS, sa zone et l'équipe de la zone sont proposés
+    const disCst = fiche ? disDuMotifCst(fiche.motif) : null;
+    const zoneCst = zoneDuDis(disCst);
+    const eqCst = zoneCst ? zoneEquipe[zoneCst] : undefined;
+    setRenvoi({
+      cle,
+      ids,
+      equipe: eqCst && equipeNames.includes(eqCst) ? eqCst : equipe,
+      date: estSoir() ? jourOuvreSuivant(todayISO()) : todayISO(),
+      fiche,
+      nouvelleZone: zoneCst ?? fiche?.zone ?? '',
+      nouveauDis: disCst ?? fiche?.dis ?? '',
+    });
+  };
   /** Zone / DIS changés par le superviseur sur une fiche : enregistrés sur la ligne avant l'envoi */
   const appliquerZoneDis = async (fiche: ProgrammeOT | undefined, zone?: string, dis?: string) => {
     if (!fiche?.fgp || !peutZoneDis) return '';
@@ -644,7 +716,8 @@ export default function DistributionPage() {
     if (!renvoi) return;
     try {
       const zd = await appliquerZoneDis(renvoi.fiche, renvoi.nouvelleZone, renvoi.nouveauDis);
-      const n = await redistribuer(renvoi.ids, renvoi.equipe, renvoi.date, user);
+      // fiche seule modifiable : zone / DIS (CST compris) déjà appliqués ci-dessus
+      const n = await redistribuer(renvoi.ids, renvoi.equipe, renvoi.date, user, {}, { cst: !(renvoi.fiche && peutZoneDis) });
       showToast(
         `${n} fiche${n > 1 ? 's' : ''} renvoyée${n > 1 ? 's' : ''} à ${renvoi.equipe} pour le ${jourCourt(renvoi.date)}${zd} — motif${n > 1 ? 's' : ''} précédent${n > 1 ? 's' : ''} gardé${n > 1 ? 's' : ''}`,
         'success',
@@ -752,6 +825,14 @@ export default function DistributionPage() {
           </div>
         )}
         {o.statut !== 'a_faire' && <ClotureResume ot={o} />}
+        {/* commentaire pour le chef : modifiable tant que la fiche est à faire ou à renvoyer */}
+        {o.statut !== 'fait' && !o.id.startsWith('h:') ? (
+          <NoteChefEditeur note={notes.get(o.id) ?? ''} onSave={(note) => doNoteChef(o, note)} />
+        ) : notes.get(o.id) ? (
+          <p className="text-[11px] text-indigo-900">
+            <b>Pour le chef :</b> {notes.get(o.id)}
+          </p>
+        ) : null}
         <HistoriqueMotifs liste={historique.get(o.id)} />
         {o.statut === 'non_fait' && peutRenvoyer && renvoi?.cle !== o.id && (
           <button
@@ -1028,6 +1109,26 @@ export default function DistributionPage() {
                     <div className="min-w-0 flex-1">
                       <RowCells o={i} prioritaire={!!i.dateRecu && estPrioritaire(i.dateRecu, i.nature, jourRemise(null, dateProgramme))} />
                       <MotifsPrecedents liste={i.precedents} />
+                      {(() => {
+                        // renvoi d'une fiche « non faite » avec CST : son nouveau DIS remplace celui de l'OT
+                        const cst = i.renvoi ? disDuMotifCst(i.renvoi.motif) : null;
+                        return cst && cst !== normDis(i.dis) ? (
+                          <p className="mt-1 text-[11px] text-emerald-800">
+                            CST : la fiche part avec le DIS <b className="font-mono">{cst}</b>
+                            {i.dis && (
+                              <>
+                                {' '}
+                                · ancien DIS <span className="font-mono">{i.dis}</span> (gardé sur la fiche)
+                              </>
+                            )}
+                          </p>
+                        ) : null;
+                      })()}
+                      {!i.deja && (
+                        <div className="mt-1 flex">
+                          <NoteChefEditeur note={i.note ?? ''} onSave={(note) => update(i.key, { note })} />
+                        </div>
+                      )}
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       {i.deja ? (
@@ -1170,10 +1271,10 @@ export default function DistributionPage() {
           <div className="inline-flex rounded-full bg-slate-100 p-0.5 overflow-x-auto max-w-full">
             {(
               [
-                ['tout', 'Tout', ouvertes.length + faitesDuJour.length + nonFaites.length],
-                ['a_faire', 'En cours', ouvertes.length],
+                ['tout', 'Tout', ouvertesF.length + faitesDuJour.length + nonFaitesF.length],
+                ['a_faire', 'En cours', ouvertesF.length],
                 ['fait', `Faites · ${jourCourt(histDate)}`, faitesDuJour.length],
-                ['non_fait', 'Non faites', nonFaites.length],
+                ['non_fait', 'Non faites', nonFaitesF.length],
               ] as const
             ).map(([id, label, n]) => (
               <button
@@ -1186,6 +1287,22 @@ export default function DistributionPage() {
               </button>
             ))}
           </div>
+          {motifsSuivi.length > 0 && (
+            <Select
+              aria-label="Filtrer par motif"
+              className={`!py-1 !text-xs max-w-[16rem] ${filtreMotif ? '!border-blue-500 !text-blue-800' : ''}`}
+              value={filtreMotif}
+              onChange={(e) => setFiltreMotif(e.target.value)}
+            >
+              <option value="">Tous les motifs</option>
+              {filtreMotif && !motifsSuivi.some(([m]) => m === filtreMotif) && <option value={filtreMotif}>{filtreMotif} (0)</option>}
+              {motifsSuivi.map(([m, n]) => (
+                <option key={m} value={m}>
+                  {m} ({n})
+                </option>
+              ))}
+            </Select>
+          )}
           {(histGroups.length > 0 || ouvertesGroups.length > 0 || nonFaitesGroups.length > 0) && (
             <span className="ml-auto flex gap-1">
               <Button
@@ -1383,7 +1500,7 @@ export default function DistributionPage() {
         )}
 
         {/* 3. En bas : les non faites à renvoyer, sans changer le jour du programme */}
-        {(filtreSuivi === 'tout' || filtreSuivi === 'non_fait') && nonFaites.length > 0 && (
+        {(filtreSuivi === 'tout' || filtreSuivi === 'non_fait') && nonFaitesF.length > 0 && (
           <Card className="border-amber-300">
             <div className="px-4 py-3 border-b border-amber-100 bg-amber-50/70">
               <p className="font-bold text-amber-900">

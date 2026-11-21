@@ -12,7 +12,7 @@
 import type { Equipe, Situation } from '@/types';
 import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
 import { isHorsDelai } from '@/utils/stats';
-import { delaiOT } from '@/utils/points';
+import { delaiOT, doublonsCable } from '@/utils/points';
 import { poteauxDe } from '@/components/dashboard/commun';
 
 export const fr = (s: string) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '');
@@ -208,7 +208,7 @@ export async function exporterStatsDelais(o: OptionsStats, mode: 'villes' | 'equ
     else parVille.set(v, [s]);
   });
   const noms = [...parVille.keys()].sort();
-  const poteaux = (l: Situation[]) => l.reduce((n, s) => n + (s.status === 'ok' ? poteauxDe(s) : 0), 0);
+  const poteaux = (l: Situation[]) => l.reduce((n, s) => n + poteauxDe(s), 0);
   const head = enteteGroupe(['Ville']);
   head[0].push({ content: 'Poteaux', rowSpan: 2 });
   y = sousTitre(doc, y, 'Par ville');
@@ -239,10 +239,11 @@ export async function exporterStatsDelais(o: OptionsStats, mode: 'villes' | 'equ
 
 type EtatChef = 'dans' | 'hors' | 'retard' | 'en_cours' | 'non_fait' | null;
 
-/** État de la fiche pour le chef (échéance 22 h de l'équipe) ; null si la fiche n'a pas été distribuée */
-function etatChef(s: Situation): EtatChef {
-  if (!s.numeroOt) return null;
-  const statut = s.status === 'ok' ? 'fait' : s.status === 'non_ok' ? 'non_fait' : 'a_faire';
+const statutDe = (s: Situation) => (s.status === 'ok' ? 'fait' : s.status === 'non_ok' ? 'non_fait' : 'a_faire');
+
+/** Délai et points d'une fiche (barème des points des équipes) */
+function delaiSituation(s: Situation, doublonCable = false) {
+  const statut = statutDe(s);
   const ref = s.dateProgramme || s.dateRecu || s.dateMessage || s.dateDepo || new Date().toISOString().slice(0, 10);
   return delaiOT({
     nature: s.type === 'DRG' ? 'derangement' : 'installation',
@@ -254,7 +255,15 @@ function etatChef(s: Situation): EtatChef {
     motif: s.motifCloture,
     echeanceEquipe: s.echeanceEquipe ?? null,
     prioritaire: s.prioritaire,
-  }).etat;
+    poteaux: s.poteau ?? 0,
+    doublonCable,
+  });
+}
+
+/** État de la fiche pour le chef (échéance 22 h de l'équipe) ; null si la fiche n'a pas été distribuée */
+function etatChef(s: Situation): EtatChef {
+  if (!s.numeroOt) return null;
+  return delaiSituation(s).etat;
 }
 
 interface Compte {
@@ -265,10 +274,12 @@ interface Compte {
   enRetard: number;
   horsChef: number;
   horsOfficiel: number;
+  points: number;
 }
-const compteVide = (): Compte => ({ total: 0, faites: 0, nonFaites: 0, enCours: 0, enRetard: 0, horsChef: 0, horsOfficiel: 0 });
-function ajouter(c: Compte, s: Situation) {
+const compteVide = (): Compte => ({ total: 0, faites: 0, nonFaites: 0, enCours: 0, enRetard: 0, horsChef: 0, horsOfficiel: 0, points: 0 });
+function ajouter(c: Compte, s: Situation, points = 0) {
   c.total++;
+  c.points += points;
   const chef = etatChef(s);
   if (s.status === 'ok') {
     c.faites++;
@@ -289,6 +300,7 @@ async function exporterClassementEquipes(o: OptionsStats) {
     `Période : ${texteDates(o)}${o.filtres ? ` - ${o.filtres}` : ''} - installations = tous les types (CPL, TRL, CMI, CLS, RLR, CST, ANS), dérangements = DRG`,
     "Hors délai chef : faite après l'échéance de l'équipe (22 h ; dérangement le jour donné, installation le lendemain, le jour même si déjà en retard).",
     'Hors délai officiel : dérangement 24 h (48 h si câble distribution / transport coupé), installation 48 h après la date du message.',
+    'Classement par points : installation 24 h = 2, 48 h = 1 (1,5 avec poteau), plantation poteau +1, retard -1 puis -0,5/jour ; dérangement 0,5 (-0,5/jour de retard) ; câble distribution 2, MPO 5 (une fiche par panne) ; non fait 0.',
     `Édité le ${new Date().toLocaleString('fr-FR')} par ${o.auteur}`,
   ]);
 
@@ -296,12 +308,17 @@ async function exporterClassementEquipes(o: OptionsStats) {
   const totIns = compteVide();
   const totDrg = compteVide();
   const parEquipe = new Map<string, { ins: Compte; drg: Compte }>();
+  // points des fiches du programme (barème des équipes) : une seule fiche payée par panne de câble
+  const doublons = doublonsCable(
+    o.situations.filter((s) => s.numeroOt).map((s) => ({ id: s.id, equipe: s.equipe, zone: s.zone, motif: s.motifCloture, statut: statutDe(s), traiteLe: s.traiteLe ?? s.updatedAt ?? null })),
+  );
   for (const s of o.situations) {
     const k = (s.equipe || '').toLowerCase();
     let e = parEquipe.get(k);
     if (!e) parEquipe.set(k, (e = { ins: compteVide(), drg: compteVide() }));
-    ajouter(estDrg(s) ? e.drg : e.ins, s);
-    ajouter(estDrg(s) ? totDrg : totIns, s);
+    const pts = s.numeroOt ? delaiSituation(s, doublons.has(s.id)).points : 0;
+    ajouter(estDrg(s) ? e.drg : e.ins, s, pts);
+    ajouter(estDrg(s) ? totDrg : totIns, s, pts);
   }
 
   // 1. Synthèse
@@ -314,6 +331,7 @@ async function exporterClassementEquipes(o: OptionsStats) {
     enRetard: a.enRetard + b.enRetard,
     horsChef: a.horsChef + b.horsChef,
     horsOfficiel: a.horsOfficiel + b.horsOfficiel,
+    points: a.points + b.points,
   });
   const couleurs = (debut: number) => (data: { section: string; column: { index: number }; cell: { styles: { textColor: unknown; fontStyle?: unknown } } }) => {
     if (data.section !== 'body' || data.column.index < debut) return;
@@ -341,7 +359,7 @@ async function exporterClassementEquipes(o: OptionsStats) {
   });
   y = finY(doc) + 9;
 
-  // 2. Classement : le plus de fiches faites, puis le moins de hors délai (chef + officiel)
+  // 2. Classement : le plus de points (barème des équipes), puis le plus de fiches faites, puis le moins de hors délai
   const lignes = o.equipes.map((e) => {
     const c = parEquipe.get(e.name.toLowerCase()) ?? { ins: compteVide(), drg: compteVide() };
     const tout = somme(c.ins, c.drg);
@@ -349,12 +367,14 @@ async function exporterClassementEquipes(o: OptionsStats) {
   });
   lignes.sort(
     (a, b) =>
+      b.tout.points - a.tout.points ||
       b.tout.faites - a.tout.faites ||
       a.tout.horsChef + a.tout.horsOfficiel - (b.tout.horsChef + b.tout.horsOfficiel) ||
       b.tout.total - a.tout.total ||
       a.e.name.localeCompare(b.e.name),
   );
   const sansEquipe = parEquipe.get('');
+  const pts = (n: number) => String(Math.round(n * 100) / 100).replace('.', ',');
   y = sousTitre(doc, y, 'Classement des équipes');
   const court = ['Total', 'Faites', 'Non faites', 'En cours', 'En retard', 'H.D. chef', 'H.D. officiel'];
   autoTable(doc, {
@@ -365,19 +385,21 @@ async function exporterClassementEquipes(o: OptionsStats) {
     headStyles: { ...STYLE.headStyles, fontSize: 7.5 },
     head: [
       [
-        ...['Rang', 'Équipe', "Chef d'équipe"].map((p) => ({ content: t(p), rowSpan: 2 })),
+        ...['Rang', 'Équipe', "Chef d'équipe", 'Points'].map((p) => ({ content: t(p), rowSpan: 2 })),
         { content: 'Installations', colSpan: 7 },
         { content: t('Dérangements'), colSpan: 7 },
       ],
       [...court, ...court].map(t),
     ],
     body: [
-      ...lignes.map((x, i) => [x.tout.total ? i + 1 : '-', x.e.name, x.e.leader || '-', ...sept(x.ins), ...sept(x.drg)].map(t)),
-      ...(sansEquipe && sansEquipe.ins.total + sansEquipe.drg.total > 0 ? [['-', 'Non affectées', '-', ...sept(sansEquipe.ins), ...sept(sansEquipe.drg)].map(t)] : []),
+      ...lignes.map((x, i) => [x.tout.total ? i + 1 : '-', x.e.name, x.e.leader || '-', pts(x.tout.points), ...sept(x.ins), ...sept(x.drg)].map(t)),
+      ...(sansEquipe && sansEquipe.ins.total + sansEquipe.drg.total > 0
+        ? [['-', 'Non affectées', '-', pts(somme(sansEquipe.ins, sansEquipe.drg).points), ...sept(sansEquipe.ins), ...sept(sansEquipe.drg)].map(t)]
+        : []),
     ],
-    foot: [['', 'Total', '', ...sept(totIns), ...sept(totDrg)].map(t)],
-    columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 10 }, 1: { halign: 'left', fontStyle: 'bold' }, 2: { halign: 'left' } },
-    didParseCell: couleurs(3),
+    foot: [['', 'Total', '', pts(totIns.points + totDrg.points), ...sept(totIns), ...sept(totDrg)].map(t)],
+    columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 10 }, 1: { halign: 'left', fontStyle: 'bold' }, 2: { halign: 'left' }, 3: { fontStyle: 'bold' } },
+    didParseCell: couleurs(4),
   });
 
   piedDePage(doc);

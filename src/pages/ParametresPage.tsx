@@ -5,6 +5,7 @@ import { useParametresStore } from '@/store/useParametresStore';
 import { Button, Card, Input, useToast } from '@/components/ui';
 import {
   BAREME_DEFAUT,
+  BAREME_OT_DEFAUT,
   ENTETE_DEFAUT,
   REGLAGES_DEFAUT,
   baremeDepuisBase,
@@ -12,6 +13,7 @@ import {
   enteteDepuisBase,
   fetchHistoriqueParametres,
   type Bareme,
+  type BaremeOT,
   type EnteteVirement,
   type ModifParametre,
   type Reglages,
@@ -33,11 +35,27 @@ const FAMILLES: Record<Famille, { min: number; max: number; pas: number; unite: 
   coef: { min: 0, max: 1, pas: 0.05, unite: '×' },
   penalite: { min: -10, max: 0, pas: 0.25, unite: 'pt' },
 };
-type LigneBareme = { cle: keyof Bareme; label: string; aide: string; famille: Famille };
+type ChampDef = { label: string; aide: string; famille: Famille };
+type LigneBareme = ChampDef & { cle: keyof Bareme };
+type LigneOT = ChampDef & { cle: keyof BaremeOT };
+
+// Barème des fiches faites : délai compté depuis « OT reçu le », en jours ouvrés
+const FICHES_OT: LigneOT[] = [
+  { cle: 'inst24h', label: 'Installation faite en 24 h', aide: 'Faite 1 jour ouvré au plus après « OT reçu le ».', famille: 'points' },
+  { cle: 'inst48h', label: 'Installation faite en 48 h', aide: 'Faite le 2e jour ouvré après « OT reçu le ».', famille: 'points' },
+  { cle: 'inst48hPoteau', label: 'Installation avec poteau en 48 h', aide: 'Total pour une installation avec poteau faite en 48 h (le point de plantation ne s’ajoute pas).', famille: 'points' },
+  { cle: 'plantationPoteau', label: 'Plantation poteau', aide: '« Besoin poteau », « Besoin 2 poteaux », « Poteau cassé » puis faite : ajouté en 24 h et en retard.', famille: 'points' },
+  { cle: 'drg', label: 'Dérangement fait dans le délai', aide: 'Fait 1 jour ouvré au plus après « OT reçu le ».', famille: 'points' },
+  { cle: 'cableDistribution', label: 'Câble distribution', aide: 'Motif câble distribution : une seule fiche par panne (même équipe, zone et jour), les autres comptent comme un dérangement.', famille: 'points' },
+  { cle: 'cableMpo', label: 'Câble MPO', aide: 'Motif câble MPO : une seule fiche par panne, comme le câble distribution.', famille: 'points' },
+];
+const RETARDS_OT: LigneOT[] = [
+  { cle: 'instRetard', label: 'Installation en retard', aide: '1er jour de retard (3e jour ouvré après « OT reçu le »).', famille: 'penalite' },
+  { cle: 'retardParJour', label: 'Par jour de retard', aide: 'Installation : chaque jour en plus du 1er. Dérangement : chaque jour de retard, ajouté à ses points.', famille: 'penalite' },
+];
+const LIGNES_OT = [...FICHES_OT, ...RETARDS_OT];
 
 const FICHES: LigneBareme[] = [
-  { cle: 'faitDansDelai', label: 'Faite dans le délai', aide: 'Marquée « Fait » avant son échéance de 22 h.', famille: 'points' },
-  { cle: 'faitHorsDelai', label: 'Faite hors délai', aide: 'Marquée « Fait » après son échéance.', famille: 'points' },
   { cle: 'nonFait', label: 'Non faite', aide: 'Clôturée « Non fait » avec un motif.', famille: 'points' },
   {
     cle: 'faitSansPoint',
@@ -50,13 +68,13 @@ const AJUSTEMENTS: LigneBareme[] = [
   {
     cle: 'coefReseau',
     label: 'Coefficient panne réseau',
-    aide: 'Motif câble distribution / transport coupé, HUB-BOX ou SUB-BOX défectueux : les points de la fiche sont multipliés par ce coefficient (0,5 = moitié).',
+    aide: 'Motif câble transport coupé, HUB-BOX ou SUB-BOX défectueux : les points de la fiche sont multipliés par ce coefficient (0,5 = moitié).',
     famille: 'coef',
   },
   {
     cle: 'sansIntervention',
     label: 'Faite sans intervention',
-    aide: 'Dans le délai, motif « Modem défectueux » ou « Problème électricité » : ces points au lieu de « faite dans le délai ».',
+    aide: 'Dans le délai, motif « Modem défectueux » ou « Problème électricité » : ces points (avec les bonus), sans dépasser ceux du barème des fiches.',
     famille: 'points',
   },
   { cle: 'bonusDecharge', label: '+ bonus décharge', aide: 'Ajouté à une fiche « sans intervention » si la décharge est faite.', famille: 'points' },
@@ -71,7 +89,7 @@ const PENALITES: LigneBareme[] = [
 const LIGNES_BAREME = [...FICHES, ...AJUSTEMENTS, ...PENALITES];
 
 /** Valeur normalisée : signe d'une pénalité, arrondi au pas, bornes de la famille */
-function normaliser(l: LigneBareme, v: number): number {
+function normaliser(l: ChampDef, v: number): number {
   const f = FAMILLES[l.famille];
   let x = l.famille === 'penalite' ? -Math.abs(v) : v;
   x = Math.round(x / f.pas) * f.pas;
@@ -94,7 +112,7 @@ const LIBELLE_BAREME: Record<string, string> = {
   penalite_faux_ok: 'Faux OK',
 };
 
-function ChampBareme({ l, valeur, onChange }: { l: LigneBareme; valeur: number | ''; onChange: (v: number | '') => void }) {
+function ChampBareme({ l, valeur, onChange }: { l: ChampDef; valeur: number | ''; onChange: (v: number | '') => void }) {
   const f = FAMILLES[l.famille];
   const vide = valeur === '' || Number.isNaN(valeur);
   const corrige = !vide && normaliser(l, valeur as number) !== valeur;
@@ -167,13 +185,14 @@ const resume = (m: ModifParametre): string => {
 
 export default function ParametresPage() {
   const user = useAppStore((s) => s.user)!;
-  const { bareme, entete, reglages, sauverBareme, sauverEntete, sauverReglages } = useParametresStore();
+  const { bareme, baremeOt, entete, reglages, sauverBareme, sauverBaremeOt, sauverEntete, sauverReglages } = useParametresStore();
   const { showToast } = useToast();
 
   const [b, setB] = useState<Record<keyof Bareme, number | ''>>(bareme);
+  const [bo, setBo] = useState<Record<keyof BaremeOT, number | ''>>(baremeOt);
   const [e, setE] = useState<EnteteVirement>(entete);
   const [banque, setBanque] = useState('BPM');
-  const [busy, setBusy] = useState<'' | 'bareme' | 'entete' | 'reglages'>('');
+  const [busy, setBusy] = useState<'' | 'bareme' | 'baremeOt' | 'entete' | 'reglages'>('');
   const [nouvelleBanque, setNouvelleBanque] = useState('');
   const [r, setR] = useState<Reglages>(reglages);
   const [nouveauFerie, setNouveauFerie] = useState('');
@@ -204,29 +223,49 @@ export default function ParametresPage() {
     return v !== '' && !Number.isNaN(v);
   });
   const baremeModifie = lignes.some((l) => b[l.cle] !== bareme[l.cle]);
+  const baremeOtValide = LIGNES_OT.every((l) => bo[l.cle] !== '' && !Number.isNaN(bo[l.cle]));
+  const baremeOtModifie = LIGNES_OT.some((l) => bo[l.cle] !== baremeOt[l.cle]);
   const reglagesModifies = JSON.stringify(r) !== JSON.stringify(reglages);
   const enteteModifie = JSON.stringify(e) !== JSON.stringify(entete);
   const exemple = useMemo(() => {
     const n = (k: keyof Bareme) => (typeof b[k] === 'number' ? (b[k] as number) : 0);
+    const o = (k: keyof BaremeOT) => (typeof bo[k] === 'number' ? (bo[k] as number) : 0);
     return {
-      reseau: n('faitDansDelai') * n('coefReseau'),
-      dans: n('faitDansDelai'),
+      reseau: o('drg') * n('coefReseau'),
+      dans: o('drg'),
+      instPoteau24: o('inst24h') + o('plantationPoteau'),
+      instRetard2: o('instRetard') + o('retardParJour'),
+      drgRetard2: o('drg') + 2 * o('retardParJour'),
       pen: n('penaliteNonTraitee'),
       leger: n('sansIntervention'),
       legerComplet: n('sansIntervention') + n('bonusDecharge') + n('bonusScan'),
     };
-  }, [b]);
+  }, [b, bo]);
 
   const enregistrerBareme = async () => {
     setBusy('bareme');
     try {
       // valeurs normalisées (signe des pénalités, pas, bornes) avant l'enregistrement
-      const propre = Object.fromEntries(lignes.map((l) => [l.cle, normaliser(l, b[l.cle] as number)])) as unknown as Bareme;
+      const propre = { ...bareme, ...Object.fromEntries(lignes.map((l) => [l.cle, normaliser(l, b[l.cle] as number)])) } as Bareme;
       setB(propre);
       await sauverBareme(user.id, propre);
       setB(useParametresStore.getState().bareme); // valeurs arrondies par la base
       showToast('Barème enregistré : appliqué aux points et aux prochaines pénalités', 'success');
       chargerHistorique();
+    } catch (err) {
+      showToast(errMsg(err), 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+  const enregistrerBaremeOt = async () => {
+    setBusy('baremeOt');
+    try {
+      const propre = Object.fromEntries(LIGNES_OT.map((l) => [l.cle, normaliser(l, bo[l.cle] as number)])) as unknown as BaremeOT;
+      setBo(propre);
+      await sauverBaremeOt(propre);
+      setBo(useParametresStore.getState().baremeOt);
+      showToast('Barème des fiches enregistré : appliqué aux points de toutes les fiches', 'success');
     } catch (err) {
       showToast(errMsg(err), 'error');
     } finally {
@@ -287,16 +326,56 @@ export default function ParametresPage() {
 
   return (
     <div className="space-y-5 max-w-4xl">
-      {/* Barème des points */}
+      {/* Barème des fiches faites (depuis « OT reçu le ») */}
       <Card>
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
           <Trophy className="w-4 h-4 text-amber-600" />
-          <h2 className="font-bold text-slate-800">Barème des points des équipes</h2>
+          <h2 className="font-bold text-slate-800">Barème des fiches faites</h2>
+          <span className="text-xs text-slate-400">délai compté depuis « OT reçu le », jours ouvrés</span>
         </div>
         <div className="grid md:grid-cols-2 gap-x-8 px-4">
           {(
             [
-              ['Points d’une fiche', 'text-slate-400', FICHES],
+              ['Points d’une fiche faite', 'text-slate-400', FICHES_OT],
+              ['Retards (toujours négatifs)', 'text-red-400', RETARDS_OT],
+            ] as const
+          ).map(([titre, cls, liste]) => (
+            <div key={titre}>
+              <p className={`text-[11px] font-bold uppercase tracking-wide pt-3 ${cls}`}>{titre}</p>
+              {liste.map((l) => (
+                <ChampBareme key={l.cle} l={l} valeur={bo[l.cle]} onChange={(v) => setBo((cur) => ({ ...cur, [l.cle]: v }))} />
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className="px-4 py-3 bg-slate-50/70 border-t border-slate-100 text-xs text-slate-600">
+          Exemple : installation avec poteau faite en 24 h <b>{fmtPtsSigne(exemple.instPoteau24)}</b> · installation 2 jours en retard{' '}
+          <b className="text-red-700">{fmtPts(exemple.instRetard2)}</b> · dérangement 2 jours en retard <b className="text-red-700">{fmtPts(exemple.drgRetard2)}</b>. Les points sont
+          recalculés pour toutes les fiches, y compris les périodes passées.
+        </div>
+        <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap gap-2 justify-end">
+          <Button variant="ghost" size="sm" icon={<RotateCcw className="w-3.5 h-3.5" />} onClick={() => setBo(BAREME_OT_DEFAUT)}>
+            Valeurs par défaut
+          </Button>
+          <Button variant="outline" size="sm" disabled={!baremeOtModifie} onClick={() => setBo(baremeOt)}>
+            Annuler
+          </Button>
+          <Button size="sm" icon={<Save className="w-3.5 h-3.5" />} disabled={!baremeOtModifie || !baremeOtValide || busy !== ''} onClick={enregistrerBaremeOt}>
+            {busy === 'baremeOt' ? 'Enregistrement…' : 'Enregistrer le barème des fiches'}
+          </Button>
+        </div>
+      </Card>
+
+      {/* Barème des points */}
+      <Card>
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+          <Trophy className="w-4 h-4 text-amber-600" />
+          <h2 className="font-bold text-slate-800">Autres points et pénalités</h2>
+        </div>
+        <div className="grid md:grid-cols-2 gap-x-8 px-4">
+          {(
+            [
+              ['Non faite, faite sans point', 'text-slate-400', FICHES],
               ['Sans intervention, panne réseau et bonus', 'text-slate-400', AJUSTEMENTS],
               ['Pénalités (toujours négatives)', 'text-red-400', PENALITES],
             ] as const
@@ -311,7 +390,8 @@ export default function ParametresPage() {
         </div>
         <div className="px-4 py-3 bg-slate-50/70 border-t border-slate-100 text-xs text-slate-600 space-y-1">
           <p>
-            Exemple : dérangement fait dans le délai <b>{fmtPtsSigne(exemple.dans)}</b> · même fiche avec panne réseau <b>{fmtPtsSigne(exemple.reseau)}</b> ·
+            Exemple : dérangement fait dans le délai <b>{fmtPtsSigne(exemple.dans)}</b> · même fiche avec panne réseau (transport, HUB/SUB-BOX){' '}
+            <b>{fmtPtsSigne(exemple.reseau)}</b> ·
             « modem défectueux » sans décharge ni scan <b>{fmtPtsSigne(exemple.leger)}</b>, avec décharge et scan <b>{fmtPtsSigne(exemple.legerComplet)}</b> · fiche oubliée
             deux soirs <b className="text-red-700">{fmtPts(exemple.pen * 2)}</b>.
           </p>
@@ -328,7 +408,7 @@ export default function ParametresPage() {
             variant="ghost"
             size="sm"
             disabled={!baremeValide}
-            onClick={() => setB((cur) => Object.fromEntries(lignes.map((l) => [l.cle, normaliser(l, cur[l.cle] as number)])) as Record<keyof Bareme, number>)}
+            onClick={() => setB((cur) => ({ ...cur, ...Object.fromEntries(lignes.map((l) => [l.cle, normaliser(l, cur[l.cle] as number)])) }))}
             title="Pénalités en négatif, valeurs arrondies au pas, dans les bornes"
           >
             Normaliser
