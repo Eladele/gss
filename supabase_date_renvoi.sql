@@ -6,7 +6,10 @@
 --     renvoi (ex. installation reçue le 16, non faite le 16, renvoyée le 17, faite le 18 :
 --     délai compté depuis le 17 → dans le délai) ;
 --   • fiche dite « non faite » APRÈS son délai (ex. reçue le 16, échéance le 18, non faite le
---     19) → elle garde sa date et reste hors délai.
+--     19) → elle garde sa date et reste hors délai ;
+--   • fiche dite « non faite » SANS motif → elle garde sa date (rien ne prouve un problème du
+--     client).
+-- Peut être exécuté de nouveau sans risque : une date n'est jamais reculée.
 -- Délai officiel : dérangement 1 jour ouvré, installation 2. Ne comptent pas : les dimanches,
 -- les jours fériés de l'application et ceux ajoutés dans la page Paramètres.
 -- Plusieurs renvois : appliqués dans l'ordre. La date n'est jamais reculée, ni mise après le
@@ -60,6 +63,8 @@ renvois AS (
          row_number() OVER (PARTITION BY h.situation_id ORDER BY h.renvoye_le) AS k
   FROM public.historique_clotures_detail h
   WHERE h.renvoye_le IS NOT NULL AND h.statut = 'non_ok'
+    -- « non fait » sans motif : pas de nouvelle date (rien ne prouve un problème du client)
+    AND coalesce(trim(h.motif_cloture), '') <> ''
 ),
 marche AS (
   -- départ : date actuelle de la fiche

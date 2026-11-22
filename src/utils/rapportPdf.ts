@@ -158,6 +158,8 @@ export interface OptionsStats {
   villeDe: (equipe?: string) => string;
   filtres: string;
   auteur: string;
+  /** classement des équipes : pénalités de la période (retirées des points, comme la page Points) */
+  penalites?: { equipe: string; points: number }[];
 }
 
 const nomFichier = (periode: string) =>
@@ -300,7 +302,8 @@ async function exporterClassementEquipes(o: OptionsStats) {
     `Période : ${texteDates(o)}${o.filtres ? ` - ${o.filtres}` : ''} - installations = tous les types (CPL, TRL, CMI, CLS, RLR, CST, ANS), dérangements = DRG`,
     "Hors délai chef : faite après l'échéance de l'équipe (22 h ; dérangement le jour donné, installation le lendemain, le jour même si déjà en retard).",
     'Hors délai officiel : dérangement 24 h (48 h si câble distribution / transport coupé), installation 48 h après la date du message.',
-    'Classement par points : installation 24 h = 2, 48 h = 1 (1,5 avec poteau), plantation poteau +1, retard -1 puis -0,5/jour ; dérangement 0,5 (-0,5/jour de retard) ; câble distribution 2, MPO 5 (une fiche par panne) ; non fait 0.',
+    'Classement par points : installation 24 h = 2, 48 h = 1 (1,5 avec poteau), plantation poteau +1, retard -1 puis -0,5/jour ; dérangement 0,5 (-0,5/jour de retard) ; câble distribution 2, MPO 5 (une fiche par panne) ; non fait 0. Fiche reçue déjà hors délai et faite à temps par l\'équipe : barème dans le délai.',
+    'Points = points des fiches + pénalités (non traitée à 22 h, retardée, réaffectée, faux OK). Égalité : le plus de fiches faites, puis le moins de hors délai.',
     `Édité le ${new Date().toLocaleString('fr-FR')} par ${o.auteur}`,
   ]);
 
@@ -359,15 +362,26 @@ async function exporterClassementEquipes(o: OptionsStats) {
   });
   y = finY(doc) + 9;
 
-  // 2. Classement : le plus de points (barème des équipes), puis le plus de fiches faites, puis le moins de hors délai
+  // pénalités par équipe (non traitée à 22 h, retardée, réaffectée, faux OK) : nombre et total
+  const pens = new Map<string, { n: number; pts: number }>();
+  for (const p of o.penalites ?? []) {
+    const k = (p.equipe || '').toLowerCase();
+    const x = pens.get(k) ?? { n: 0, pts: 0 };
+    pens.set(k, { n: x.n + 1, pts: x.pts + p.points });
+  }
+  const totPen = [...pens.entries()].filter(([k]) => o.equipes.some((e) => e.name.toLowerCase() === k)).reduce((s, [, x]) => s + x.pts, 0);
+
+  // 2. Classement : le plus de points (barème des fiches − pénalités, comme la page Points),
+  //    puis le plus de fiches faites, puis le moins de hors délai
   const lignes = o.equipes.map((e) => {
     const c = parEquipe.get(e.name.toLowerCase()) ?? { ins: compteVide(), drg: compteVide() };
     const tout = somme(c.ins, c.drg);
-    return { e, ...c, tout };
+    const pen = pens.get(e.name.toLowerCase()) ?? { n: 0, pts: 0 };
+    return { e, ...c, tout, pen, net: tout.points + pen.pts };
   });
   lignes.sort(
     (a, b) =>
-      b.tout.points - a.tout.points ||
+      b.net - a.net ||
       b.tout.faites - a.tout.faites ||
       a.tout.horsChef + a.tout.horsOfficiel - (b.tout.horsChef + b.tout.horsOfficiel) ||
       b.tout.total - a.tout.total ||
@@ -385,21 +399,32 @@ async function exporterClassementEquipes(o: OptionsStats) {
     headStyles: { ...STYLE.headStyles, fontSize: 7.5 },
     head: [
       [
-        ...['Rang', 'Équipe', "Chef d'équipe", 'Points'].map((p) => ({ content: t(p), rowSpan: 2 })),
+        ...['Rang', 'Équipe', "Chef d'équipe", 'Points', 'Fiches', 'Pénalités'].map((p) => ({ content: t(p), rowSpan: 2 })),
         { content: 'Installations', colSpan: 7 },
         { content: t('Dérangements'), colSpan: 7 },
       ],
       [...court, ...court].map(t),
     ],
     body: [
-      ...lignes.map((x, i) => [x.tout.total ? i + 1 : '-', x.e.name, x.e.leader || '-', pts(x.tout.points), ...sept(x.ins), ...sept(x.drg)].map(t)),
+      ...lignes.map((x, i) =>
+        [
+          x.tout.total || x.pen.n ? i + 1 : '-',
+          x.e.name,
+          x.e.leader || '-',
+          pts(x.net),
+          pts(x.tout.points),
+          x.pen.n ? `${pts(x.pen.pts)} (${x.pen.n})` : '0',
+          ...sept(x.ins),
+          ...sept(x.drg),
+        ].map(t),
+      ),
       ...(sansEquipe && sansEquipe.ins.total + sansEquipe.drg.total > 0
-        ? [['-', 'Non affectées', '-', pts(somme(sansEquipe.ins, sansEquipe.drg).points), ...sept(sansEquipe.ins), ...sept(sansEquipe.drg)].map(t)]
+        ? [['-', 'Non affectées', '-', pts(somme(sansEquipe.ins, sansEquipe.drg).points), pts(somme(sansEquipe.ins, sansEquipe.drg).points), '-', ...sept(sansEquipe.ins), ...sept(sansEquipe.drg)].map(t)]
         : []),
     ],
-    foot: [['', 'Total', '', pts(totIns.points + totDrg.points), ...sept(totIns), ...sept(totDrg)].map(t)],
+    foot: [['', 'Total', '', pts(totIns.points + totDrg.points + totPen), pts(totIns.points + totDrg.points), pts(totPen), ...sept(totIns), ...sept(totDrg)].map(t)],
     columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 10 }, 1: { halign: 'left', fontStyle: 'bold' }, 2: { halign: 'left' }, 3: { fontStyle: 'bold' } },
-    didParseCell: couleurs(4),
+    didParseCell: couleurs(6),
   });
 
   piedDePage(doc);

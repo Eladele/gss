@@ -72,7 +72,11 @@ export function appliquerBareme(b: Bareme) {
  *   • câble distribution réparé : 2 pt — câble MPO : 5 pt ; plusieurs fiches de la même panne
  *     (même équipe, même zone, même câble, faites le même jour) : seule la première a ces points,
  *     les autres comptent comme un dérangement normal ;
- *   • non fait : 0.
+ *   • non fait : 0 ;
+ *   • fiche reçue par l'équipe alors que le délai officiel était déjà dépassé (prioritaire, pas sa
+ *     faute) et faite avant l'échéance de l'équipe (22 h) : barème « dans le délai » — installation
+ *     comme en 48 h (1 pt, 1,5 avec poteau), dérangement 0,5. Faite après son échéance : barème
+ *     normal depuis « OT reçu le » (retard).
  */
 export const BAREME_OT: BaremeOT = { ...BAREME_OT_DEFAUT };
 
@@ -235,12 +239,16 @@ export function delaiOT(
     ot.statut === 'non_fait' ? 'non_fait' : ot.statut === 'fait' ? (dansLesTemps ? 'dans' : 'hors') : dansLesTemps ? 'en_cours' : 'retard';
   // barème depuis « OT reçu le » (voir BAREME_OT)
   const joursOfficiels = joursOuvres(recuLe, fin);
+  // reçue déjà hors délai officiel (pas la faute de l'équipe) et faite avant SON échéance de 22 h :
+  // barème « dans le délai » (installation 48 h = 1, 1,5 avec poteau ; dérangement 0,5), jamais négatif
+  const pasSaFaute = ot.statut === 'fait' && prioritaire && dansLesTemps;
+  const joursPoints = pasSaFaute ? Math.min(joursOfficiels, seuilJours(ot.nature)) : joursOfficiels;
   const cable = ot.statut === 'fait' && !ot.doublonCable ? typeCable(ot.motif) : null;
-  const base = ot.statut === 'fait' ? pointsFaite(ot.nature, joursOfficiels, (ot.poteaux ?? 0) > 0) : ot.statut === 'non_fait' ? POINTS.nonFait : 0;
+  const base = ot.statut === 'fait' ? pointsFaite(ot.nature, joursPoints, (ot.poteaux ?? 0) > 0) : ot.statut === 'non_fait' ? POINTS.nonFait : 0;
   const reseau = ot.statut === 'fait' && !typeCable(ot.motif) && estMotifReseau(ot.motif);
   const sansPoint = ot.statut === 'fait' && estMotifSansPoint(ot.motif);
   const leger = ot.statut === 'fait' && !reseau && !sansPoint && estMotifLeger(ot.motif);
-  const dansOfficiel = joursOfficiels <= seuilJours(ot.nature);
+  const dansOfficiel = joursPoints <= seuilJours(ot.nature);
   // sans intervention, dans le délai : 0,5 + 0,25 si décharge + 0,25 si scanné (barème)
   const points = cable
     ? cable === 'mpo'

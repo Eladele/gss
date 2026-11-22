@@ -26,6 +26,7 @@ import VueEnsemble from '@/components/dashboard/VueEnsemble';
 import RapportsDetailles from '@/components/dashboard/RapportsDetailles';
 import ProgressionEquipes from '@/components/dashboard/ProgressionEquipes';
 import { exporterStatsDelais, fr } from '@/utils/rapportPdf';
+import { fetchPenalites } from '@/lib/programmeService';
 import {
   ANNEES_SELECT,
   MOIS_FR,
@@ -170,8 +171,11 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
   const exporterPdf = async (mode: 'villes' | 'equipes') => {
     setPdfEnCours(mode);
     try {
+      // classement des équipes : pénalités de la période retirées des points (comme la page Points)
+      const penalites = mode === 'equipes' ? await fetchPenalites(period.from || '2000-01-01', period.to || '2100-12-31') : [];
       await exporterStatsDelais(
         {
+          penalites,
           // classement des équipes : une fiche ouverte compte tant que la période contient aujourd'hui,
           // une fiche close compte au jour de sa clôture (voir dansPeriodeClassement)
           situations: mode === 'equipes' && preset !== 'date' ? scopedSansPeriode.filter((s) => dansPeriodeClassement(s, period)) : scopedAll,

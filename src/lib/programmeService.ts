@@ -1160,7 +1160,8 @@ export async function fetchHistoriquePeriode(from: string, to: string): Promise<
  * (au plus tard le jour du programme). Sans cela, le délai partait toujours de la première
  * réception et la fiche renvoyée était « hors délai » d'office. La date n'avance jamais en arrière.
  *
- * Seulement si la fiche a été dite « non faite » DANS son délai. Déjà hors délai ce jour-là
+ * Seulement si la fiche a été dite « non faite » AVEC un motif (problème du client) et DANS son
+ * délai ; sans motif, elle garde sa date. Déjà hors délai ce jour-là
  * (ex. installation reçue le 16, échéance le 18, « non faite » le 19) : elle garde sa date
  * et reste hors délai.
  */
@@ -1172,11 +1173,13 @@ async function redaterRenvoi(ids: string[], date: string, datesOt: Record<string
   for (let i = 0; i < ids.length; i += 200) {
     const { data, error } = await supabase
       .from(TABLE)
-      .select('id, status, nature, date_recu, date_message, traite_le')
+      .select('id, status, nature, date_recu, date_message, traite_le, motif_cloture')
       .in('id', ids.slice(i, i + 200));
     if (error) throw dbError(error, 'Lecture des fiches à renvoyer impossible');
     for (const r of data ?? []) {
       if (r.status !== 'non_ok') continue;
+      // « non fait » sans motif : rien ne prouve un problème du client, la fiche garde sa date
+      if (!String(r.motif_cloture ?? '').trim()) continue;
       const ancienne = ((r.date_recu ?? r.date_message ?? '') as string).slice(0, 10);
       // « non faite » après l'échéance officielle : déjà hors délai, on garde la date
       const jourNonFait = ((r.traite_le ?? '') as string).slice(0, 10);
