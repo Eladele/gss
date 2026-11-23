@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { AlertCircle, AlertTriangle, Cable, Check, Flame, Plus, Search, Wrench } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Cable, Check, Flame, Search, Wrench } from 'lucide-react';
 import { Button, Modal, Select } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
 import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, disDuMotifCst, fmtTel, ligneLabel, zoneDuDis } from '@/utils/programme';
@@ -77,15 +77,17 @@ export function AffecterUrgentModal({
   const nouvelOt = !!selectedFiche && (selectedFiche.statut !== 'a_faire' || urgentNature !== selectedFiche.nature);
 
   // Recherche dans les fiches actuelles ou via la base
-  useEffect(() => {
+  // fermeture : on vide la recherche
+  const [openPrec, setOpenPrec] = useState(open);
+  if (open !== openPrec) {
+    setOpenPrec(open);
     if (!open) {
       setSearch('');
       setSelectedFiche(null);
       setSearchResults([]);
       setError('');
-      return;
     }
-  }, [open]);
+  }
 
   const handleSearch = async (val: string) => {
     setSearch(val);

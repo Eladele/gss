@@ -185,11 +185,14 @@ export function Modal({
   onClose,
   title,
   children,
+  size = 'md',
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  /** largeur sur grand écran : md (formulaires) ou lg (tableaux, historique) */
+  size?: 'md' | 'lg';
 }) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -199,14 +202,32 @@ export function Modal({
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
   if (!open) return null;
+  // Téléphone : feuille en bas de l'écran, pleine largeur ; grand écran : fenêtre centrée
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/50"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl animate-modal-in">
-        <h2 className="text-lg font-bold text-slate-800 mb-5">{title}</h2>
-        {children}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={`bg-white w-full ${size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-md'} rounded-t-2xl sm:rounded-2xl max-h-[92dvh] sm:max-h-[90vh] flex flex-col shadow-2xl animate-modal-in`}
+      >
+        <div className="flex items-start justify-between gap-3 px-4 sm:px-6 pt-4 sm:pt-5 pb-3 border-b border-slate-100 shrink-0">
+          <h2 className="text-base sm:text-lg font-bold text-slate-800 min-w-0 break-words">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Fermer"
+            className="-mr-1 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 shrink-0"
+          >
+            <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="overflow-y-auto px-4 sm:px-6 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-6">{children}</div>
       </div>
     </div>
   );
@@ -226,10 +247,13 @@ export function NOKSheet({
   onClose: () => void;
   onConfirm: (comment: string) => void;
 }) {
-  const [comment, setComment] = useState('');
-  useEffect(() => {
+  const [comment, setComment] = useState(open ? initialComment : '');
+  // à l'ouverture (ou si le commentaire initial change) : on repart du commentaire initial
+  const [prec, setPrec] = useState({ open, initialComment });
+  if (open !== prec.open || initialComment !== prec.initialComment) {
+    setPrec({ open, initialComment });
     if (open) setComment(initialComment);
-  }, [open, initialComment]);
+  }
   const valid = comment.trim().length >= 3;
   if (!open) return null;
   return (
@@ -301,10 +325,12 @@ export function OKSheet({
   onConfirm: (values: OKSheetValues) => void;
 }) {
   const [values, setValues] = useState<OKSheetValues>(initialValues);
-  useEffect(() => {
+  // à l'ouverture : on repart des valeurs initiales
+  const [openPrec, setOpenPrec] = useState(open);
+  if (open !== openPrec) {
+    setOpenPrec(open);
     if (open) setValues(initialValues);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }
   if (!open) return null;
 
   const set = <K extends keyof OKSheetValues>(key: K, v: OKSheetValues[K]) => setValues((s) => ({ ...s, [key]: v }));

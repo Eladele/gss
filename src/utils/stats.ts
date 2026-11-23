@@ -129,7 +129,69 @@ function workingDaysBetween(startMs: number, endMs: number): number {
 //   2. sinon, updatedAt si la situation est traitée (OK / NON OK) — date de
 //      clôture dans l'app, utilisée seulement quand aucune date terrain n'existe.
 //   3. sinon, maintenant (délai toujours "en cours").
+/** Un passage de la fiche chez une équipe : de la réception (ou du renvoi) au « non fait » ou à la fin */
+export interface PassageDelai {
+  equipe: string;
+  debut: string; // YYYY-MM-DD
+  fin: string | null; // instant ISO ; null = en cours
+  jours: number; // jours ouvrés
+  seuil: number;
+  hors: boolean;
+  motif: string; // motif « non fait » qui a clos le passage ('' pour le dernier)
+}
+
+/** Motif « non fait » lié à un poteau (« Besoin poteau », « Besoin 2 poteaux », « Poteau cassé ») */
+const motifPoteau = (motif?: string | null) => !!motif && /poteau/i.test(motif);
+const jourMs = (iso: string) => Date.parse(`${iso.slice(0, 10)}T00:00:00Z`);
+
+/**
+ * Délai officiel passage par passage, pour une fiche « non faite » puis renvoyée. Le temps entre le
+ * « non fait » (avec motif) et le renvoi n'est pas compté : la fiche n'était pas chez nous. Chaque
+ * passage est jugé avec son propre seuil (installation 2 j, dérangement 1 j ; +1 j quand le passage
+ * s'arrête sur un motif poteau : installation « Besoin poteau » 3 j, dérangement « Poteau cassé » 2 j).
+ * Ex. installation reçue le 16, non faite le 19 (Besoin poteau), renvoyée le 22, faite le 23 :
+ * 3 j (≤ 3) + 1 j (≤ 2) → 4 j, dans le délai.
+ * Sans renvoi : null (calcul habituel).
+ */
+export function passagesDelai(s: Situation): PassageDelai[] | null {
+  const renvois = (s.renvois ?? []).filter((r) => r.motif.trim());
+  if (!renvois.length) return null;
+  // départ officiel : la première réception (date_depo n'est pas changée au renvoi, date_message peut l'être)
+  const origine = [s.dateDepo, s.dateMessage, s.dateRecu ?? undefined]
+    .filter((d): d is string => !!d && !Number.isNaN(jourMs(d)))
+    .sort()[0];
+  if (!origine) return null;
+  const base = (motif?: string) => delaiThresholdFor({ type: s.type, motifCloture: motif });
+  const out: PassageDelai[] = [];
+  let debut = origine.slice(0, 10);
+  for (const r of renvois) {
+    const finMs = Date.parse(r.traiteLe);
+    const jours = workingDaysBetween(jourMs(debut), finMs);
+    const seuil = base(r.motif) + (motifPoteau(r.motif) ? 1 : 0);
+    out.push({ equipe: r.equipe, debut, fin: r.traiteLe, jours, seuil, hors: jours > seuil, motif: r.motif });
+    debut = r.renvoyeLe.slice(0, 10);
+  }
+  // dernier passage : jusqu'à la clôture (ou maintenant)
+  const finMs = finDelai(s);
+  const jours = workingDaysBetween(jourMs(debut), finMs);
+  const seuil = base(s.motifCloture);
+  const resolu = s.status === 'ok' || s.status === 'non_ok';
+  out.push({ equipe: s.equipe, debut, fin: resolu ? new Date(finMs).toISOString() : null, jours, seuil, hors: s.status !== 'non_ok' && jours > seuil, motif: '' });
+  return out;
+}
+
+/** Fin du délai : clôture du chef, sinon mise en service, sinon dernière mise à jour d'une fiche close, sinon maintenant */
+function finDelai(s: Situation): number {
+  const resolved = s.status === 'ok' || s.status === 'non_ok';
+  const chefMs = resolved && s.traiteLe ? new Date(s.traiteLe).getTime() : NaN;
+  const cltMs = s.dateClt ? new Date(s.dateClt).getTime() : NaN;
+  return !Number.isNaN(chefMs) ? chefMs : !Number.isNaN(cltMs) ? cltMs : resolved && s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now();
+}
+
 export function calcDelai(s: Situation): number {
+  // fiche renvoyée : somme des passages chez nous (attente entre « non fait » et renvoi exclue)
+  const passages = passagesDelai(s);
+  if (passages) return passages.reduce((a, p) => a + p.jours, 0);
   // Point de départ : dateMessage en priorité — vérifié contre le champ "delait"
   // fourni par Huawei dans les fichiers sources (93% de correspondance exacte
   // en partant de dateMessage, contre 69% en partant de dateDepo) : c'est
@@ -140,8 +202,12 @@ export function calcDelai(s: Situation): number {
   const start = new Date(startRaw).getTime();
   if (Number.isNaN(start)) return s.delai ?? 0;
   const resolved = s.status === 'ok' || s.status === 'non_ok';
+  // Fiche clôturée par le chef (programme) : c'est SA date de clôture qui décide du délai
+  const chefMs = resolved && s.traiteLe ? new Date(s.traiteLe).getTime() : NaN;
   const cltMs = s.dateClt ? new Date(s.dateClt).getTime() : NaN;
-  const end = !Number.isNaN(cltMs)
+  const end = !Number.isNaN(chefMs)
+    ? chefMs
+    : !Number.isNaN(cltMs)
     ? cltMs
     : resolved && s.updatedAt
       ? new Date(s.updatedAt).getTime()
@@ -176,6 +242,9 @@ export function isHorsDelai(s: Situation): boolean {
   // hors délai (ni comme dans délai — voir les fonctions statsByX qui l'excluent
   // aussi du total ; ici on ne fait qu'éviter de le compter comme non-conforme).
   if (s.status === 'non_ok') return false;
+  // fiche renvoyée : hors délai seulement si un passage a dépassé son propre seuil
+  const passages = passagesDelai(s);
+  if (passages) return passages.some((p) => p.hors);
   return calcDelai(s) > delaiThresholdFor(s);
 }
 
@@ -190,8 +259,7 @@ export type DelaiBucket = 'moins24h' | 'dans' | 'hors';
 
 export function delaiBucket(s: Situation): DelaiBucket {
   const d = calcDelai(s);
-  const threshold = delaiThresholdFor(s);
-  if (d > threshold) return 'hors';
+  if (passagesDelai(s) ? isHorsDelai(s) : d > delaiThresholdFor(s)) return 'hors';
   if (s.type !== 'DRG' && d === 0) return 'moins24h';
   return 'dans';
 }

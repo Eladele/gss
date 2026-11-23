@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
-import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
+import { Card, CardHeader, Button, Modal, Select, Input, Textarea, EmptyState, StatCard, useToast, BtnEdit, BtnDelete } from '@/components/ui';
 import type { Vehicle, VehicleStatut } from '@/types';
 
 const STATUT_LABELS: Record<VehicleStatut, string> = {

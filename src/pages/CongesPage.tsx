@@ -8,7 +8,6 @@ import { buildExportPreview, exportEmployesPresentsExcel } from '@/utils/leaves'
 import { ExportPreviewModal } from '@/components/ExportPreviewModal';
 import { SignaturePad } from '@/components/signaturePad';
 import { DEFAULT_SIGNATURE } from '@/utils/signature';
-import { BANQUES } from '@/data';
 import type { Employee, LeaveType, LeaveRecord } from '@/types';
 import type { ExportPreview } from '@/utils/leaves';
 

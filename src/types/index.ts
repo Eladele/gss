@@ -19,6 +19,9 @@ export interface User {
   // Restreint STRICTEMENT cet utilisateur à une seule ville (ex: superviseur
   // régional) — non défini = pas de restriction géographique.
   villeScope?: Ville;
+  // Super-administrateur (profiles.est_superadmin, supabase_superadmin.sql) : compte administrateur
+  // qui gère en plus la personnalisation de l'application et les entreprises clientes.
+  superadmin?: boolean;
 }
 
 export interface Equipe {
@@ -65,6 +68,17 @@ export interface Situation {
   traiteLe?: string | null; // clôture par l'équipe
   echeanceEquipe?: string | null;
   prioritaire?: boolean;
+  /** « non faite » passées puis renvoyées (historique_clotures), la plus ancienne d'abord :
+   *  le délai officiel est jugé passage par passage (voir passagesDelai) */
+  renvois?: RenvoiFiche[];
+}
+
+/** Une clôture « non faite » archivée au renvoi de la fiche */
+export interface RenvoiFiche {
+  equipe: string;
+  motif: string;
+  traiteLe: string; // jour où l'équipe l'a dite « non faite »
+  renvoyeLe: string; // jour où elle a été renvoyée (nouveau passage)
 }
 
 export interface Notification {

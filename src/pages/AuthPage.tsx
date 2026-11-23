@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { loginWithCredentials } from '@/lib/supabaseService';
 import { InstallApkButton } from '@/components/InstallApkButton';
+import { LogoMarque } from '@/components/LogoMarque';
+import { useMarqueStore } from '@/store/useMarqueStore';
 
 export default function AuthPage() {
   const login = useAppStore((s) => s.login);
+  const marque = useMarqueStore((s) => s.affichee);
   const [name, setName] = useState('');
   const [pass, setPass] = useState('');
   const [error, setError] = useState('');
@@ -24,7 +27,7 @@ export default function AuthPage() {
       } else {
         setError('Identifiants incorrects. Vérifiez votre nom et mot de passe.');
       }
-    } catch (e: any) {
+    } catch {
       setError('Connexion impossible pour le moment. Réessayez dans quelques instants.');
     } finally {
       setLoading(false);
@@ -41,14 +44,20 @@ export default function AuthPage() {
       <div className="w-full max-w-sm mx-4">
         {/* Brand */}
         <div className="text-center mb-10">
-          <div
-            className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-5"
-            style={{ background: 'linear-gradient(135deg, #1565C0, #00BCD4)' }}
-          >
-            <span className="text-xl font-black text-white tracking-widest">GSS</span>
+          <div className="mb-5">
+            <LogoMarque taille="lg" />
           </div>
           <h1 className="text-xl font-bold text-slate-900">Connexion</h1>
-          <p className="text-slate-400 text-sm mt-1">Program Manager · FTTH Moov Mauritel</p>
+          {marque.slogan && <p className="text-slate-400 text-sm mt-1">{marque.slogan}</p>}
+          {marque.specialites.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-1.5 mt-3">
+              {marque.specialites.map((s) => (
+                <span key={s} className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-100">
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Form card */}
@@ -97,13 +106,16 @@ export default function AuthPage() {
             onClick={handleLogin}
             disabled={loading}
             className="mt-6 w-full py-3 rounded-lg font-semibold text-white text-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-            style={{ background: loading ? '#90A4AE' : '#1565C0' }}
+            style={{ background: loading ? '#90A4AE' : marque.couleurPrincipale }}
           >
             {loading ? 'Connexion...' : 'Se connecter'}
           </button>
         </div>
 
-        <p className="text-center text-slate-300 text-xs mt-6">GSS · Gestion Situations & Supervision</p>
+        <p className="text-center text-slate-300 text-xs mt-6">
+          {marque.nom}
+          {marque.nomComplet ? ` · ${marque.nomComplet}` : ''}
+        </p>
       </div>
     </div>
   );

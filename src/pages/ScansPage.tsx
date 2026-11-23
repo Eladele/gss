@@ -223,9 +223,13 @@ export default function ScansPage() {
   // ── Pagination (remplace l'ancien plafond silencieux à 300 lignes) ──
   const SCAN_PAGE_SIZE = 50;
   const [scanPage, setScanPage] = useState(1);
-  useEffect(() => {
+  // un filtre change : retour à la page 1
+  const cleFiltres = [fZone, fEquipe, fResult, fSignal, fNouveau, fDateFrom, fDateTo].join('|');
+  const [cleFiltresPrec, setCleFiltresPrec] = useState(cleFiltres);
+  if (cleFiltres !== cleFiltresPrec) {
+    setCleFiltresPrec(cleFiltres);
     setScanPage(1);
-  }, [fZone, fEquipe, fResult, fSignal, fNouveau, fDateFrom, fDateTo]);
+  }
   const scanTotalPages = Math.max(1, Math.ceil(filtered.length / SCAN_PAGE_SIZE));
   const paginatedScans = useMemo(
     () => filtered.slice((scanPage - 1) * SCAN_PAGE_SIZE, scanPage * SCAN_PAGE_SIZE),
@@ -250,11 +254,11 @@ export default function ScansPage() {
       const count = await importScans(rows, newImportId);
 
       showToast(`${count} lignes importées (historique conservé)`, 'success');
-    } catch (err: any) {
+    } catch (err) {
       // Échec réel de l'import (ex: colonne manquante côté base, ou fichier illisible) — on
       // l'affiche au lieu de laisser croire à un succès alors que la table peut être vide.
       console.error('import scan failed:', err);
-      showToast("Échec de l'import : " + (err?.message || 'vérifiez le schéma de la base (SQL à jour ?)'), 'error');
+      showToast("Échec de l'import : " + ((err as Error)?.message || 'vérifiez le schéma de la base (SQL à jour ?)'), 'error');
     } finally {
       setLoading(false);
     }

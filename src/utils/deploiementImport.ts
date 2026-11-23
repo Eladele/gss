@@ -95,7 +95,7 @@ export async function parseAvancementExcel(file: File): Promise<AvancementParsed
   // ligne calculé par "564-252").
   const asNumber = (v: unknown): number => {
     if (typeof v === 'number') return v;
-    if (v && typeof v === 'object' && 'result' in v && typeof (v as any).result === 'number') return (v as any).result;
+    if (v && typeof v === 'object' && 'result' in v && typeof (v as { result: unknown }).result === 'number') return (v as { result: number }).result;
     return 0;
   };
   const num = (row: unknown[], c: number) => (c >= 0 ? asNumber(row[c]) : 0);

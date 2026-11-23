@@ -80,7 +80,38 @@ export async function fetchSituations(): Promise<Situation[]> {
     if (!dernier.created_at) break;
     curseur = { createdAt: dernier.created_at as string, id: dernier.id as string };
   }
+  await attacherRenvois(all);
   return all;
+}
+
+/**
+ * Ajoute à chaque fiche ses « non faite » renvoyées (historique_clotures) : le délai officiel est
+ * jugé passage par passage. Module d'historique absent ou illisible : fiches inchangées.
+ */
+async function attacherRenvois(situations: Situation[]) {
+  const parId = new Map<string, NonNullable<Situation['renvois']>>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('historique_clotures_detail')
+      .select('id, situation_id, equipe, statut, motif_cloture, traite_le, renvoye_le')
+      .eq('statut', 'non_ok')
+      .not('renvoye_le', 'is', null)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return;
+    for (const r of data ?? []) {
+      if (!r.traite_le || !r.renvoye_le) continue;
+      const l = parId.get(r.situation_id) ?? [];
+      l.push({ equipe: r.equipe ?? '', motif: r.motif_cloture ?? '', traiteLe: r.traite_le, renvoyeLe: r.renvoye_le });
+      parId.set(r.situation_id, l);
+    }
+    if ((data ?? []).length < PAGE) break;
+  }
+  for (const s of situations) {
+    const l = parId.get(s.id);
+    if (l) s.renvois = l.sort((a, b) => a.traiteLe.localeCompare(b.traiteLe));
+  }
 }
 
 export async function upsertSituation(sit: Situation): Promise<void> {
@@ -1297,6 +1328,12 @@ export async function loginWithCredentials(name: string, password: string): Prom
   });
   if (error || !data?.user) return null;
   return data.user as User;
+}
+/** Compte super-administrateur ? (colonne profiles.est_superadmin ; absente → non) */
+export async function estSuperadmin(userId: string): Promise<boolean> {
+  const { data, error } = await supabase.from('profiles').select('est_superadmin').eq('id', userId).maybeSingle();
+  if (error || !data) return false;
+  return (data as { est_superadmin?: boolean }).est_superadmin === true;
 }
 export async function changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
   const { data, error } = await supabase.functions.invoke('change-password', {

@@ -22,7 +22,7 @@ import { ExportPreviewModal } from '@/components/ExportPreviewModal';
 import { exporterSalairesPdf, exporterSalairesPdfSepares } from '@/utils/salairesPdf';
 import { SignaturePad } from '@/components/signaturePad';
 import { DEFAULT_SIGNATURE } from '@/utils/signature';
-import type { Employee, Loan } from '@/types';
+import type { Loan } from '@/types';
 import {
   FileSpreadsheet,
   Download,
@@ -31,10 +31,6 @@ import {
   Search,
   Building2,
   Calendar,
-  Wallet,
-  Users,
-  CheckCircle2,
-  AlertCircle,
   FolderArchive,
   ChevronLeft,
   ChevronRight,

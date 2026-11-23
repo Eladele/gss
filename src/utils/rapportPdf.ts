@@ -10,7 +10,7 @@
 //   exporterStatsDelais(o, 'equipes') : classement de toutes les équipes — installations (tous
 //                                       types réunis) et dérangements, dans / hors délai
 import type { Equipe, Situation } from '@/types';
-import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
+import { logoExport, nomMarque } from '@/lib/marque';
 import { isHorsDelai } from '@/utils/stats';
 import { BAREME_OT, POINTS, delaiOT, doublonsCable } from '@/utils/points';
 import { poteauxDe } from '@/components/dashboard/commun';
@@ -52,7 +52,10 @@ export const ROUGE: [number, number, number] = [198, 40, 40];
 export function entete(doc: Doc, titre: string, lignes: string[]) {
   const w = doc.internal.pageSize.getWidth();
   try {
-    doc.addImage(GSS_LOGO_BASE64, 'PNG', 12, 8, 32, 19.6); // 228 × 140 px
+    // logo de l'entreprise, 19,6 mm de haut (32 mm de large pour le logo GSS 228 × 140 px)
+    const l = logoExport();
+    const larg = Math.min(19.6 * l.ratio, 34);
+    doc.addImage(l.dataUrl, l.extension === 'png' ? 'PNG' : 'JPEG', 12, 8, larg, larg / l.ratio);
   } catch {
     /* logo illisible : le rapport reste utilisable */
   }
@@ -80,7 +83,7 @@ export function piedDePage(doc: Doc) {
     doc.setPage(i);
     doc.setFontSize(8);
     doc.setTextColor(140, 150, 160);
-    doc.text(t(`GSS - page ${i} / ${n}`), w - 12, h - 6, { align: 'right' });
+    doc.text(t(`${nomMarque()} - page ${i} / ${n}`), w - 12, h - 6, { align: 'right' });
   }
 }
 

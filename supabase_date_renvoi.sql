@@ -2,11 +2,9 @@
 -- Fiches OT déjà renvoyées (installation et dérangement) : nouvelle date « OT reçu le »
 --
 -- Règle (la même que l'application) :
---   • fiche dite « non faite » DANS son délai officiel → au renvoi, « OT reçu le » = jour du
---     renvoi (ex. installation reçue le 16, non faite le 16, renvoyée le 17, faite le 18 :
---     délai compté depuis le 17 → dans le délai) ;
---   • fiche dite « non faite » APRÈS son délai (ex. reçue le 16, échéance le 18, non faite le
---     19) → elle garde sa date et reste hors délai ;
+--   • fiche dite « non faite » AVEC un motif → au renvoi, « OT reçu le » = jour du renvoi, même
+--     si elle était déjà en retard (ex. installation reçue le 16, non faite le 19 « Besoin
+--     poteau », renvoyée le 23, faite le 23 : délai compté depuis le 23 → dans le délai) ;
 --   • fiche dite « non faite » SANS motif → elle garde sa date (rien ne prouve un problème du
 --     client).
 -- Peut être exécuté de nouveau sans risque : une date n'est jamais reculée.
@@ -75,11 +73,10 @@ marche AS (
   WHERE COALESCE(s.date_recu, s.date_message) IS NOT NULL
     AND EXISTS (SELECT 1 FROM renvois r WHERE r.situation_id = s.id)
   UNION ALL
-  -- chaque renvoi, dans l'ordre : nouvelle date seulement si « non faite » dans le délai
+  -- chaque renvoi, dans l'ordre : nouvelle date = jour du renvoi (jamais en arrière)
   SELECT m.id, r.k,
          CASE
            WHEN r.jour_renvoi > m.jour
-            AND r.jour_non_fait <= pg_temp.echeance_off(m.jour, m.n)
            THEN LEAST(r.jour_renvoi, COALESCE(m.date_programme, r.jour_renvoi))
            ELSE m.jour
          END,

@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import {
   Calendar,
-  CheckCircle2,
-  Clock,
   Fuel,
   Pencil,
   Phone,

@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { usePerimetre } from '@/hooks/usePerimetre';
 import { addZoneToTeam, removeZoneFromTeam } from '@/lib/supabaseService';
-import { getEquipeColor } from '@/utils';
 import { Card, CardHeader, CardTitle, Button, Modal, Input, Select, EmptyState, BtnEdit, BtnDelete } from '@/components/ui';
 import { useToast } from '@/components/ui';
 

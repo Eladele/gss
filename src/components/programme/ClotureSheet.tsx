@@ -66,7 +66,7 @@ export function ClotureSheet({
   const [scanne, setScanne] = useState(false);
   const [cstChange, setCstChange] = useState(false);
   const [nouveauDis, setNouveauDis] = useState(ot.dis);
-  const [nouvelOnt, setNouvelOnt] = useState(ot.ontSerials[0] ?? '');
+  const [nouvelOnt] = useState(ot.ontSerials[0] ?? '');
   const [poteaux, setPoteaux] = useState(0);
 
   const choisir = (m: string) => {

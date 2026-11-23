@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui';
 import { SOCIETE, enteteBanque } from '@/utils/leaves';
 import type { ExportPreview, PreviewVirementSheet, PreviewRecapSheet, PreviewCaisseSheet } from '@/utils/leaves';
@@ -12,7 +12,7 @@ function CaisseView({ s, logo }: { s: PreviewCaisseSheet; logo: string }) {
   const noir = { border: '1px solid #000' };
   return (
     <div className="bg-white shadow border border-slate-200 mx-auto p-6 text-[13px] text-slate-900" style={{ maxWidth: 820, fontFamily: '"Times New Roman", serif' }}>
-      <img src={logo} alt="GSS" className="h-16 mb-3" />
+      <img src={logo} alt="Logo" className="h-16 mb-3" />
       <p>{SOCIETE.siege}</p>
       <p>{SOCIETE.rc}</p>
       <p>{SOCIETE.nif}</p>
@@ -65,7 +65,7 @@ function VirementView({ s, logo, signature }: { s: PreviewVirementSheet; logo: s
   const { destinataire, compte } = enteteBanque(s.banque);
   return (
     <div className="bg-white shadow border border-slate-200 mx-auto p-6 text-[13px] text-slate-800" style={{ maxWidth: 820, fontFamily: '"Times New Roman", serif' }}>
-      <img src={logo} alt="GSS" className="h-16 mb-2" />
+      <img src={logo} alt="Logo" className="h-16 mb-2" />
       <div className="py-1.5 px-3 mb-3" style={{ background: C.info, borderLeft: `3px solid ${C.dark}` }}>
         <p>{SOCIETE.siege}</p>
         <p>{SOCIETE.rc}</p>
@@ -164,9 +164,12 @@ export function ExportPreviewModal({
   const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  // à chaque ouverture : retour au premier onglet
+  const [openPrec, setOpenPrec] = useState(open);
+  if (open !== openPrec) {
+    setOpenPrec(open);
     if (open) setActive(0);
-  }, [open]);
+  }
 
   if (!open || !preview) return null;
   const sheet = preview.sheets[active];

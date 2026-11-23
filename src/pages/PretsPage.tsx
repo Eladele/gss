@@ -34,8 +34,12 @@ export default function PretsPage() {
 
   useEffect(() => {
     loadEmployees();
-    loadPayments();
-  }, []);
+    // remboursements du mois (état mis à jour dans le rappel, pas pendant l'effet)
+    fetchLoanPayments().then(
+      (pays) => setPaidLoanIdsThisMonth(new Set(pays.filter((p) => p.month === month).map((p) => p.loanId))),
+      () => undefined,
+    );
+  }, [loadEmployees, month]);
 
   const employeeById = useMemo(() => {
     const map = new Map<string, Employee>();

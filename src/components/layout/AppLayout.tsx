@@ -35,6 +35,8 @@ import {
   FileSpreadsheet,
   Settings,
   Activity,
+  Palette,
+  Building2,
 } from 'lucide-react';
 import { InstallApkButton } from '@/components/InstallApkButton';
 
@@ -64,36 +66,17 @@ const PointsPage = lazy(() => import('@/pages/PointsPage'));
 const ExportSalairePage = lazy(() => import('@/pages/ExportSalairePage'));
 const ParametresPage = lazy(() => import('@/pages/ParametresPage'));
 const SurveillancePage = lazy(() => import('@/pages/SurveillancePage'));
+const PersonnalisationPage = lazy(() => import('@/pages/PersonnalisationPage'));
+const EntreprisesPage = lazy(() => import('@/pages/EntreprisesPage'));
 import { DECHARGE_URL } from '@/utils/programme';
 import { useParametresStore } from '@/store/useParametresStore';
+import { useMarqueStore } from '@/store/useMarqueStore';
+import { libellePage, pageActive, type Marque, type PageId } from '@/lib/marque';
+import { LogoMarque } from '@/components/LogoMarque';
+import type { User as Utilisateur } from '@/types';
 import { villeDeSupervision } from '@/hooks/usePerimetre';
 
-type Page =
-  | 'dashboard'
-  | 'situations'
-  | 'chef-situations'
-  | 'programme'
-  | 'import-excel'
-  | 'equipes'
-  | 'zones'
-  | 'notifications'
-  | 'profil'
-  | 'statistiques'
-  | 'employes'
-  | 'vehicules'
-  | 'materiels'
-  | 'scans'
-  | 'prets'
-  | 'deploiement'
-  | 'maintenance'
-  | 'reseau'
-  | 'conges'
-  | 'caisses'
-  | 'distribution'
-  | 'points'
-  | 'surveillance'
-  | 'export-salaire'
-  | 'parametres';
+type Page = PageId;
 
 type NavLeaf = { id: Page; label: string };
 type NavGroup = { group: string; label: string; children: NavLeaf[] };
@@ -237,9 +220,11 @@ const PAGE_TITLES: Record<Page, string> = {
   surveillance: 'Surveillance des équipes',
   'export-salaire': 'Export Salaires (Excel)',
   parametres: 'Paramètres',
+  personnalisation: 'Personnalisation',
+  entreprises: 'Entreprises clientes',
 };
 
-const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
+const PAGE_ICONS: Record<Page, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
   situations: ClipboardList,
   'chef-situations': ClipboardList,
@@ -265,20 +250,43 @@ const PAGE_ICONS: Record<Page, React.ComponentType<any>> = {
   surveillance: Activity,
   'export-salaire': FileSpreadsheet,
   parametres: Settings,
+  personnalisation: Palette,
+  entreprises: Building2,
 };
 
-const GROUP_ICONS: Record<string, React.ComponentType<any>> = {
+const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   'deploiement-group': Construction,
   'raccordement-group': GitBranch,
   'rh-group': Briefcase,
 };
 
-// Liste à plat des pages autorisées pour un rôle (déplie les groupes) — sert au
-// garde-fou de rendu (pas seulement caché dans le menu) et au calcul de la
-// page par défaut à l'ouverture de session.
-function allowedPages(role: Role): Page[] {
+// Pages du super-administrateur (en plus de celles de l'administrateur)
+const SUPERADMIN_ITEMS: NavLeaf[] = [
+  { id: 'personnalisation', label: 'Personnalisation' },
+  { id: 'entreprises', label: 'Entreprises' },
+];
+
+/**
+ * Menu d'un utilisateur selon son rôle et la marque de l'entreprise : pages masquées retirées,
+ * pages et rubriques renommées, rubriques vides supprimées.
+ */
+function menuPour(user: Utilisateur, m: Marque): NavItem[] {
+  const base: NavItem[] = user.superadmin ? [...NAV[user.role], ...SUPERADMIN_ITEMS] : NAV[user.role];
+  const out: NavItem[] = [];
+  for (const item of base) {
+    if (isGroup(item)) {
+      const children = item.children.filter((c) => pageActive(m, c.id)).map((c) => ({ ...c, label: libellePage(m, c.id, c.label) }));
+      if (children.length) out.push({ ...item, label: m.rubriques[item.group] || item.label, children });
+    } else if (pageActive(m, item.id)) out.push({ ...item, label: libellePage(m, item.id, item.label) });
+  }
+  return out;
+}
+
+// Liste à plat des pages autorisées (déplie les groupes) — sert au garde-fou de rendu (pas
+// seulement caché dans le menu) et au calcul de la page par défaut à l'ouverture de session.
+function pagesDe(items: NavItem[]): Page[] {
   const pages: Page[] = [];
-  NAV[role].forEach((item) => {
+  items.forEach((item) => {
     if (isGroup(item)) pages.push(...item.children.map((c) => c.id));
     else pages.push(item.id);
   });
@@ -289,31 +297,34 @@ export default function AppLayout() {
   const user = useAppStore((s) => s.user)!;
   const notifications = useAppStore((s) => s.notifications);
   const logout = useAppStore((s) => s.logout);
-  const remoteNotifs = useCaisseStore((s: { notifications: any; }) => s.notifications);
+  const remoteNotifs = useCaisseStore((s) => s.notifications);
   const incoming = useCaisseStore((s) => s.incoming);
   const startCaisses = useCaisseStore((s) => s.start);
   const pendingCaisse = useCaisseStore((s) => s.operations.filter((o) => o.statut === 'en_attente' && canDecide(user, o)).length);
   const { showToast } = useToast();
-  const unread = notifications.filter((n) => !n.read).length + remoteNotifs.filter((n: { lu: any; }) => !n.lu).length;
+  const unread = notifications.filter((n) => !n.read).length + remoteNotifs.filter((n) => !n.lu).length;
 
   // ── Permission notifications ──────────────────────────────────────────────
   const [notifPerm, setNotifPerm] = useState<NotificationPermission | 'unsupported'>(
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   );
   // Bannière auto pour les chefs si permission pas encore demandée
-  const [showNotifBanner, setShowNotifBanner] = useState(false);
+  // (chef dont la permission n'a jamais été demandée)
+  const [showNotifBanner, setShowNotifBanner] = useState(
+    () => user.role === 'chef' && typeof Notification !== 'undefined' && Notification.permission === 'default',
+  );
   // Modale paramètres notifications (icône cloche dans topbar)
   const [showNotifModal, setShowNotifModal] = useState(false);
 
-  useEffect(() => {
-    if (typeof Notification === 'undefined') return;
-    const perm = Notification.permission;
-    setNotifPerm(perm);
-    // Pour les chefs : afficher la bannière au démarrage si jamais répondu
-    if (user.role === 'chef' && perm === 'default') {
-      setShowNotifBanner(true);
+  // changement de compte : relire la permission ; bannière pour un chef qui n'a jamais répondu
+  const [rolePrec, setRolePrec] = useState(user.role);
+  if (user.role !== rolePrec) {
+    setRolePrec(user.role);
+    if (typeof Notification !== 'undefined') {
+      setNotifPerm(Notification.permission);
+      if (user.role === 'chef' && Notification.permission === 'default') setShowNotifBanner(true);
     }
-  }, [user.role]);
+  }
 
   const demanderPermission = async () => {
     if (typeof Notification === 'undefined') return;
@@ -353,8 +364,11 @@ export default function AppLayout() {
   useEffect(() => {
     if (incoming) showToast(`${incoming.titre} — ${incoming.message}`, incoming.type === 'rejetee' ? 'warning' : 'info');
   }, [incoming]); // eslint-disable-line react-hooks/exhaustive-deps
-  const navItems = NAV[user.role];
-  const defaultPage = allowedPages(user.role)[0] ?? 'profil';
+  const marque = useMarqueStore((s) => s.affichee);
+  const navItems = menuPour(user, marque);
+  const pagesAutorisees = pagesDe(navItems);
+  const defaultPage = pagesAutorisees[0] ?? 'profil';
+  const titre = (p: Page) => libellePage(marque, p, PAGE_TITLES[p]);
   const [page, setPage] = useState<Page>(defaultPage);
   const [menuOpen, setMenuOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
@@ -392,6 +406,8 @@ export default function AppLayout() {
     surveillance: <SurveillancePage />,
     'export-salaire': <ExportSalairePage />,
     parametres: <ParametresPage />,
+    personnalisation: <PersonnalisationPage />,
+    entreprises: <EntreprisesPage />,
   };
 
   return (
@@ -407,14 +423,8 @@ export default function AppLayout() {
           >
             <MenuIcon className="w-5 h-5" />
           </button>
-          <div
-            className="px-2.5 py-1.5 rounded-lg text-white text-sm font-black tracking-wider cursor-pointer shrink-0"
-            style={{ background: 'linear-gradient(135deg, #1565C0, #00BCD4)' }}
-            onClick={() => setPage(defaultPage)}
-          >
-            GSS
-          </div>
-          <span className="font-semibold text-slate-800 text-sm truncate">{PAGE_TITLES[page]}</span>
+          <LogoMarque onClick={() => setPage(defaultPage)} />
+          <span className="font-semibold text-slate-800 text-sm truncate">{titre(page)}</span>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           {/* Installer l'application : masqué quand elle est déjà installée */}
@@ -579,12 +589,7 @@ export default function AppLayout() {
       >
         <div className="h-14 border-b border-slate-100 flex items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <div
-              className="px-2.5 py-1.5 rounded-lg text-white text-sm font-black tracking-wider"
-              style={{ background: 'linear-gradient(135deg, #1565C0, #00BCD4)' }}
-            >
-              GSS
-            </div>
+            <LogoMarque />
             <span className="font-bold text-slate-700 text-sm">Menu</span>
           </div>
           <button
@@ -783,7 +788,7 @@ export default function AppLayout() {
             <div className="py-16 text-center text-sm text-slate-400">Chargement…</div>
           ) : (
             <Suspense fallback={<div className="py-16 text-center text-sm text-slate-400">Chargement…</div>}>
-              {allowedPages(user.role).includes(page) ? PageMap[page] : PageMap[defaultPage]}
+              {pagesAutorisees.includes(page) ? PageMap[page] : PageMap[defaultPage]}
             </Suspense>
           )}
         </main>
@@ -831,7 +836,8 @@ export default function AppLayout() {
                 { id: 'menu', label: 'Menu', icon: MenuIcon, onClick: () => setMenuOpen(true) },
               ] as { id: string; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number; onClick?: () => void }[]
             )
-              .filter((item) => item.id === 'menu' || allowedPages(user.role).includes(item.id as Page))
+              .filter((item) => item.id === 'menu' || pagesAutorisees.includes(item.id as Page))
+              .map((item) => (item.id === 'menu' ? item : { ...item, label: libellePage(marque, item.id as Page, item.label) }))
               .filter((item, _i, arr) => item.id !== 'prets' || arr.length <= 4)
               .map((item) => {
                 const Icon = item.icon;

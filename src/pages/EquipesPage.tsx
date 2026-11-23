@@ -16,7 +16,10 @@ function EquipeFormModal({ open, onClose, editing, villeImposee }: { open: boole
   const [ville, setVille] = useState('Nouakchott');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // ouverture, autre équipe à modifier ou ville imposée changée : on remplit le formulaire
+  const [prec, setPrec] = useState<{ editing: Equipe | null; open: boolean; villeImposee?: string } | null>(null);
+  if (!prec || prec.editing !== editing || prec.open !== open || prec.villeImposee !== villeImposee) {
+    setPrec({ editing, open, villeImposee });
     if (editing) {
       setName(editing.name);
       setLeader(editing.leader);
@@ -28,7 +31,7 @@ function EquipeFormModal({ open, onClose, editing, villeImposee }: { open: boole
       setColor('#1565C0');
       setVille(villeImposee ?? 'Nouakchott');
     }
-  }, [editing, open, villeImposee]);
+  }
 
   if (!open) return null;
 

@@ -55,6 +55,7 @@ import {
   fetchReseauNoeuds,
   createReseauNoeud,
   deleteReseauNoeud,
+  estSuperadmin,
 } from '@/lib/supabaseService';
 
 interface AppState {
@@ -186,6 +187,17 @@ interface AppState {
   recordScanSnapshot: (infos?: { fileName?: string }) => Promise<string | null>; // renvoie l'id du nouvel import créé
 }
 
+/** Le compte est-il super-administrateur ? Lu après la connexion (et à chaque ouverture) */
+function verifierSuperadmin(userId: string) {
+  estSuperadmin(userId).then(
+    (oui) => {
+      const u = useAppStore.getState().user;
+      if (u && u.id === userId && !!u.superadmin !== oui) useAppStore.setState({ user: { ...u, superadmin: oui } });
+    },
+    () => {},
+  );
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -209,6 +221,7 @@ export const useAppStore = create<AppState>()(
 
       login: (user) => {
         set({ user, notifications: [...SAMPLE_NOTIFICATIONS] });
+        verifierSuperadmin(user.id);
         // Load real data from Supabase on login
         get().loadAll();
        if (user.role === 'admin') get().loadDirectorSignature(); // ← nouveau, si applicable
@@ -774,6 +787,7 @@ setDirectorSignature: async (base64) => {
       // puis on resynchronise avec Supabase en tâche de fond.
       onRehydrateStorage: () => (state) => {
         if (state?.user) {
+          verifierSuperadmin(state.user.id);
           state.loadAll();
           if (state.user.role === 'admin') {
             state.loadEmployees();

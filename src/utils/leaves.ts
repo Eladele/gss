@@ -1,7 +1,18 @@
 import ExcelJS from 'exceljs';
 import type { Employee, LeaveRecord, Loan } from '@/types';
 import { numberToFrenchWords } from './numberToWordsFr';
-import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
+import { logoExport } from '@/lib/marque';
+
+/** Logo de l'entreprise pour ExcelJS (base64 + format) */
+const imageLogo = () => {
+  const l = logoExport();
+  return { base64: l.base64, extension: l.extension };
+};
+/** Taille du logo dans une feuille : celle du modèle GSS, ou même hauteur aux proportions du logo de l'entreprise */
+const extLogo = (largeur: number, hauteur: number) => {
+  const l = logoExport();
+  return Math.abs(l.ratio - 228 / 140) < 0.01 ? { width: largeur, height: hauteur } : { width: Math.min(Math.round(hauteur * l.ratio), 320), height: hauteur };
+};
 import { ENTETE_DEFAUT, type EnteteVirement } from '@/lib/parametresService';
 
 const BANQUES_ORDER = ['BPM', 'Caisse', 'BII'];
@@ -20,7 +31,7 @@ export function enteteBanque(banque: string): { destinataire: string; compte: st
   const b = SOCIETE.banques[banque] ?? {};
   return { destinataire: b.destinataire || SOCIETE.destinataire, compte: b.compte || SOCIETE.compte };
 }
-import { resolveSignature, imageExtension, toDataUrl } from './signature';
+import { resolveSignature, imageExtension } from './signature';
 
 const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 
@@ -148,7 +159,7 @@ function buildCaisseSheet(
   ws.columns = [{ width: 2 }, { width: 7 }, { width: 8 }, { width: 30 }, { width: 14 }, { width: 16.5 }, { width: 12 }, { width: 18 }, { width: 2 }];
 
   // Logo
-  ws.addImage(logoImageId, { tl: { col: 1, row: 0 }, ext: { width: 220, height: 87 } });
+  ws.addImage(logoImageId, { tl: { col: 1, row: 0 }, ext: extLogo(220, 87) });
   for (let i = 0; i < 6; i++) ws.addRow([]);
 
   // Siège / RC / NIF
@@ -271,7 +282,7 @@ function buildVirementSheet(
   ];
 
   // ── Logo ───────────────────────────────────────────────────────────
-  ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 220, height: 87 } });
+  ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: extLogo(220, 87) });
   for (let i = 0; i < 6; i++) ws.addRow([]);
   ws.getRow(6).height = 6;
 
@@ -557,7 +568,7 @@ function buildRecapSheet(
     { width: 7 }, { width: 8 }, { width: 30 }, { width: 16 }, { width: 12 },
     { width: 18 }, { width: 10 }, { width: 26 }, { width: 14 }, { width: 32 },
   ];
-  wsAll.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 220, height: 87 } });
+  wsAll.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: extLogo(220, 87) });
   for (let i = 0; i < 6; i++) wsAll.addRow([]);
 
   const rHeadAll = wsAll.addRow([
@@ -631,7 +642,7 @@ export async function exportEmployesPresentsExcel(opts: ExportPresentsOpts) {
   const { present, motifMois, dateStr, ordreBase, banquesAExporter, inclureRecap } = resolveSheets(opts);
 
   const workbook = new ExcelJS.Workbook();
-  const logoImageId = workbook.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+  const logoImageId = workbook.addImage(imageLogo());
 
   banquesAExporter.forEach((banque, idx) => {
     const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
@@ -676,7 +687,7 @@ export async function exportEmployesPresentsExcelSepares(
     const rows = present.filter((e) => (e.banque || 'Caisse') === banque).map((e) => ({ ...e, montantSheet: e.montant ?? 0 }));
 
     const wb = new ExcelJS.Workbook();
-    const logoId = wb.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+    const logoId = wb.addImage(imageLogo());
     buildVirementSheet(wb, logoId, {
       sheetName: banque,
       banque,
@@ -692,7 +703,7 @@ export async function exportEmployesPresentsExcelSepares(
 
   if (inclureRecap) {
     const wbRecap = new ExcelJS.Workbook();
-    const logoIdRecap = wbRecap.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
+    const logoIdRecap = wbRecap.addImage(imageLogo());
     buildRecapSheet(wbRecap, logoIdRecap, present, motifMois);
     const bufRecap = await wbRecap.xlsx.writeBuffer();
     downloadWorkbook(bufRecap as ArrayBuffer, `${prefix}_Recap_${opts.month}.xlsx`);
@@ -761,7 +772,7 @@ export function buildExportPreview(opts: ExportPresentsOpts): ExportPreview {
 
   return {
     sheets,
-    logo: toDataUrl(GSS_LOGO_BASE64, 'image/png'),
+    logo: logoExport().dataUrl,
     signature: resolveSignature(opts.signatureBase64),
   };
 }
@@ -786,8 +797,8 @@ export async function exportEmployesListExcel(employees: Employee[], fileName = 
     { width: 12 }, // Statut
   ];
 
-  const logoId = wb.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
-  ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 180, height: 72 } });
+  const logoId = wb.addImage(imageLogo());
+  ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: extLogo(180, 72) });
   for (let i = 0; i < 5; i++) ws.addRow([]);
 
   const rTitle = ws.addRow(['', '', 'LISTE GÉNÉRALE DU PERSONNEL GSS']);
@@ -872,8 +883,8 @@ export async function exportPretsExcel(loans: Loan[], employees: Employee[], fil
     { width: 12 }, // Statut
   ];
 
-  const logoId = wb.addImage({ base64: GSS_LOGO_BASE64, extension: 'png' });
-  ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: { width: 180, height: 72 } });
+  const logoId = wb.addImage(imageLogo());
+  ws.addImage(logoId, { tl: { col: 0, row: 0 }, ext: extLogo(180, 72) });
   for (let i = 0; i < 5; i++) ws.addRow([]);
 
   const rTitle = ws.addRow(['', '', 'ÉTAT DES PRÊTS DU PERSONNEL']);

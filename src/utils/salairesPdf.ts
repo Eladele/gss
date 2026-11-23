@@ -6,6 +6,7 @@
 // Les données sont celles de l'aperçu (buildExportPreview) : ce que l'on voit est ce qui est exporté.
 import { SOCIETE, enteteBanque, type ExportPreview, type PreviewCaisseSheet, type PreviewRecapSheet, type PreviewVirementSheet } from '@/utils/leaves';
 import { imageExtension } from '@/utils/signature';
+import { logoExport, nomMarque } from '@/lib/marque';
 
 type RGB = [number, number, number];
 const ACCENT: RGB = [10, 127, 148]; // bleu-sarcelle du logo
@@ -42,7 +43,11 @@ const finY = (doc: Doc) => (doc as unknown as { lastAutoTable?: { finalY: number
 
 function logo(doc: Doc, src: string, x: number, y: number, largeur = 46) {
   try {
-    doc.addImage(src, 'PNG', x, y, largeur, (largeur * 140) / 228);
+    // logo de l'entreprise : même hauteur que le logo GSS, à ses propres proportions
+    const ratio = logoExport().ratio;
+    const hauteur = (largeur * 140) / 228;
+    const l = Math.min(hauteur * ratio, largeur * 1.8);
+    doc.addImage(src, /^data:image\/png/.test(src) ? 'PNG' : 'JPEG', x, y, l, l / ratio);
   } catch {
     /* logo illisible : le document reste utilisable */
   }
@@ -76,34 +81,37 @@ function blocSociete(doc: Doc, y: number, encadre: boolean) {
 }
 
 // ─── Ordre de virement (BPM, BII…) ───────────────────────────────────────────
-function pageVirement(doc: Doc, autoTable: Outils['autoTable'], s: PreviewVirementSheet, logoSrc: string, signature: string) {
+function pageVirement(doc: Doc, autoTable: Outils['autoTable'], s: PreviewVirementSheet, logoSrc: string, signature: string, k = 1) {
   const w = doc.internal.pageSize.getWidth();
+  const h = doc.internal.pageSize.getHeight();
+  const kt = Math.max(k, 0.8); // textes de l'en-tête : réduits moins que le tableau
   const cx = w / 2;
   logo(doc, logoSrc, 14, 8);
   let y = blocSociete(doc, 42, true);
 
   doc.setFont('times', 'italic');
-  doc.setFontSize(12.5);
+  doc.setFontSize(12.5 * kt);
   doc.text(t(`${SOCIETE.ville}, le ${s.dateStr}`), w - 14, y, { align: 'right' });
-  y += 10;
+  y += 10 * k;
 
   doc.setFont('times', 'bold');
-  doc.setFontSize(17);
+  doc.setFontSize(17 * kt);
   doc.setTextColor(...FONCE);
   doc.text(t(`ORDRE DE VIREMENT N° ${s.ordreNum}`), cx, y, { align: 'center' });
   doc.setDrawColor(...ACCENT);
   doc.setLineWidth(0.6);
   doc.line(14, y + 2.5, w - 14, y + 2.5);
   doc.setTextColor(...NOIR);
-  y += 10;
+  y += 10 * k;
 
   const { destinataire, compte } = enteteBanque(s.banque);
-  doc.setFontSize(12.5);
+  const pas = 6 * kt; // interligne
+  doc.setFontSize(12.5 * kt);
   doc.text('A', cx, y, { align: 'center' });
-  y += 6;
+  y += pas;
   const dest = doc.splitTextToSize(t(destinataire), w - 40);
   doc.text(dest, cx, y, { align: 'center' });
-  y += 6 * dest.length + 2;
+  y += pas * dest.length + 2 * k;
 
   const ligne = (gauche: string, droite: string, gras = true, couleur: RGB = FONCE) => {
     doc.setFont('times', 'normal');
@@ -116,7 +124,7 @@ function pageVirement(doc: Doc, autoTable: Outils['autoTable'], s: PreviewVireme
     const reste = doc.splitTextToSize(t(droite), w - 36 - lg);
     doc.text(reste, 18 + lg, y);
     doc.setTextColor(...NOIR);
-    y += 6 * reste.length;
+    y += pas * reste.length;
   };
   ligne(compte, `${montant(s.total)} MRU`);
   ligne('En chiffres :', `${montant(s.total)} MRU`);
@@ -127,18 +135,18 @@ function pageVirement(doc: Doc, autoTable: Outils['autoTable'], s: PreviewVireme
   doc.setLineWidth(0.2);
   doc.setDrawColor(...NOIR);
   doc.line(18, y + 0.8, 18 + doc.getTextWidth(motif), y + 0.8);
-  y += 6;
+  y += pas;
   doc.setFont('times', 'normal');
   doc.text(t(SOCIETE.faveur), 18, y);
-  y += 6;
+  y += pas;
   ligne('Nombre :', String(s.rows.length), true, NOIR);
 
   const bpm = s.banque === 'BPM';
   autoTable(doc, {
     startY: y + 1,
     theme: 'grid',
-    margin: { left: 14, right: 14 },
-    styles: { font: 'times', fontSize: 10.5, cellPadding: 1.6, lineColor: BORD, lineWidth: 0.2, textColor: 20, valign: 'middle' },
+    margin: { left: 14, right: 14, bottom: 12 },
+    styles: { font: 'times', fontSize: 10.5 * k, cellPadding: 1.6 * k, lineColor: BORD, lineWidth: 0.2, textColor: 20, valign: 'middle' },
     headStyles: { fillColor: ACCENT, textColor: 255, fontStyle: 'bold', halign: 'center' },
     alternateRowStyles: { fillColor: BANDE },
     footStyles: { fillColor: TOTAL, textColor: FONCE, fontStyle: 'bold' },
@@ -150,19 +158,17 @@ function pageVirement(doc: Doc, autoTable: Outils['autoTable'], s: PreviewVireme
       0: { halign: 'center', cellWidth: 13 },
       1: { halign: 'center', cellWidth: 15 },
       3: { halign: 'center', cellWidth: 17 },
-      4: { halign: 'center', font: 'helvetica', fontSize: 9, cellWidth: bpm ? 34 : 50 },
+      4: { halign: 'center', font: 'helvetica', fontSize: 9 * k, cellWidth: bpm ? 34 : 50 },
       5: { halign: 'right', cellWidth: 30 },
     },
   });
 
-  // Signataire et signature
-  y = finY(doc) + 12;
-  if (y > doc.internal.pageSize.getHeight() - 40) {
-    doc.addPage('a4', 'portrait');
-    y = 25;
-  }
+  // Signataire et signature sur la même page que le tableau (sinon la feuille est refaite plus petite)
+  y = finY(doc) + 10 * k;
+  const hSign = 15 * Math.max(k, 0.7);
+  const tient = y + 4 + hSign <= h - 10;
   doc.setFont('times', 'bold');
-  doc.setFontSize(13);
+  doc.setFontSize(13 * kt);
   doc.setTextColor(...FONCE);
   const nom = t(SOCIETE.signataire);
   doc.text(nom, cx, y, { align: 'center' });
@@ -170,15 +176,17 @@ function pageVirement(doc: Doc, autoTable: Outils['autoTable'], s: PreviewVireme
   doc.line(cx - doc.getTextWidth(nom) / 2, y + 1, cx + doc.getTextWidth(nom) / 2, y + 1);
   doc.setTextColor(...NOIR);
   try {
-    doc.addImage(signature, imageExtension(signature) === 'png' ? 'PNG' : 'JPEG', cx - 20, y + 3, 40, 15);
+    doc.addImage(signature, imageExtension(signature) === 'png' ? 'PNG' : 'JPEG', cx - (20 * hSign) / 15, y + 3, (40 * hSign) / 15, hSign);
   } catch {
     /* signature illisible */
   }
+  return tient;
 }
 
 // ─── État de paie en espèces (Caisse) ────────────────────────────────────────
-function pageCaisse(doc: Doc, autoTable: Outils['autoTable'], s: PreviewCaisseSheet, logoSrc: string) {
+function pageCaisse(doc: Doc, autoTable: Outils['autoTable'], s: PreviewCaisseSheet, logoSrc: string, k = 1) {
   const w = doc.internal.pageSize.getWidth();
+  const h = doc.internal.pageSize.getHeight();
   logo(doc, logoSrc, 40, 8);
   let y = blocSociete(doc, 42, false);
   doc.setFontSize(12);
@@ -199,10 +207,10 @@ function pageCaisse(doc: Doc, autoTable: Outils['autoTable'], s: PreviewCaisseSh
   autoTable(doc, {
     startY: y + 1.5,
     theme: 'grid',
-    margin: { left: 14, right: 14 },
-    styles: { font: 'times', fontSize: 11, cellPadding: { top: 2.6, bottom: 2.6, left: 1.5, right: 1.5 }, lineColor: NOIR, lineWidth: 0.25, textColor: 0, valign: 'middle' },
-    headStyles: { fillColor: [217, 217, 217], textColor: 0, fontStyle: 'bold', halign: 'center', cellPadding: 1.8 },
-    footStyles: { fillColor: [191, 191, 191], textColor: 0, fontStyle: 'bold', fontSize: 12 },
+    margin: { left: 14, right: 14, bottom: 12 },
+    styles: { font: 'times', fontSize: 11 * k, cellPadding: { top: 2.6 * k, bottom: 2.6 * k, left: 1.5, right: 1.5 }, lineColor: NOIR, lineWidth: 0.25, textColor: 0, valign: 'middle' },
+    headStyles: { fillColor: [217, 217, 217], textColor: 0, fontStyle: 'bold', halign: 'center', cellPadding: 1.8 * k },
+    footStyles: { fillColor: [191, 191, 191], textColor: 0, fontStyle: 'bold', fontSize: 12 * k },
     head: [['Ordre', 'Mle', 'NOM et PRENOM', 'Téléphone', 'Montant (MRU)', 'Date', 'Emargement'].map(t)],
     body: s.rows.map((r) => [r.ordre, r.mle, r.name, r.telephone, montant(r.montant), '', ''].map(t)),
     foot: [[{ content: 'TOTAL', colSpan: 4, styles: { halign: 'center' } }, { content: montant(s.total), styles: { halign: 'right' } }, '', '']],
@@ -217,25 +225,23 @@ function pageCaisse(doc: Doc, autoTable: Outils['autoTable'], s: PreviewCaisseSh
     },
   });
 
-  y = finY(doc) + 9;
-  if (y > doc.internal.pageSize.getHeight() - 30) {
-    doc.addPage('a4', 'portrait');
-    y = 25;
-  }
+  y = finY(doc) + 9 * k;
+  const tient = y + 21 * k <= h - 10;
   doc.setFont('times', 'bold');
-  doc.setFontSize(12);
+  doc.setFontSize(12 * Math.max(k, 0.8));
   doc.text(t('Arrêtez le présent état à la somme de'), 14, y);
-  doc.text(doc.splitTextToSize(t(s.totalLettres), w - 28), 14, y + 6);
-  y += 20;
+  doc.text(doc.splitTextToSize(t(s.totalLettres), w - 28), 14, y + 6 * k);
+  y += 20 * k;
   const nom = t(SOCIETE.signataire);
   const xn = w - 14 - doc.getTextWidth(nom);
   doc.text(nom, xn, y);
   doc.setLineWidth(0.25);
   doc.line(xn, y + 1, w - 14, y + 1);
+  return tient;
 }
 
 // ─── Récapitulatif (A4 paysage) ──────────────────────────────────────────────
-function pageRecap(doc: Doc, autoTable: Outils['autoTable'], s: PreviewRecapSheet, logoSrc: string) {
+function pageRecap(doc: Doc, autoTable: Outils['autoTable'], s: PreviewRecapSheet, logoSrc: string, k = 1) {
   const w = doc.internal.pageSize.getWidth();
   logo(doc, logoSrc, 14, 8, 40);
   doc.setFont('times', 'bold');
@@ -252,8 +258,8 @@ function pageRecap(doc: Doc, autoTable: Outils['autoTable'], s: PreviewRecapShee
   autoTable(doc, {
     startY: 36,
     theme: 'grid',
-    margin: { left: 10, right: 10 },
-    styles: { font: 'times', fontSize: 9, cellPadding: 1.3, lineColor: BORD, lineWidth: 0.2, textColor: 20, valign: 'middle' },
+    margin: { left: 10, right: 10, bottom: 12 },
+    styles: { font: 'times', fontSize: 9 * k, cellPadding: 1.3 * k, lineColor: BORD, lineWidth: 0.2, textColor: 20, valign: 'middle' },
     headStyles: { fillColor: ACCENT, textColor: 255, fontStyle: 'bold', halign: 'center' },
     alternateRowStyles: { fillColor: BANDE },
     footStyles: { fillColor: TOTAL, textColor: FONCE, fontStyle: 'bold' },
@@ -267,11 +273,12 @@ function pageRecap(doc: Doc, autoTable: Outils['autoTable'], s: PreviewRecapShee
       2: { cellWidth: 46 },
       4: { halign: 'center' },
       6: { halign: 'center', cellWidth: 15 },
-      7: { halign: 'center', font: 'helvetica', fontSize: 7.5, cellWidth: 44 },
+      7: { halign: 'center', font: 'helvetica', fontSize: 7.5 * k, cellWidth: 44 },
       8: { halign: 'right', cellWidth: 24 },
       9: { cellWidth: 52, textColor: FONCE, fontStyle: 'bold' },
     },
   });
+  return true;
 }
 
 /** Pied de page « GSS - Caisse - page 1 / 2 » */
@@ -284,31 +291,44 @@ function numeroter(doc: Doc, noms: string[]) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(150, 158, 168);
-    doc.text(t(`GSS - ${noms[i - 1] ?? ''} - page ${i} / ${n}`), w - 10, h - 6, { align: 'right' });
+    doc.text(t(`${nomMarque()} - ${noms[i - 1] ?? ''} - page ${i} / ${n}`), w - 10, h - 6, { align: 'right' });
   }
 }
 
-/** Construit le PDF des feuilles de l'aperçu (toutes, ou celles nommées) */
+/** Réductions essayées (texte et interlignes) pour que chaque feuille tienne sur une seule page */
+const ECHELLES = [1, 0.92, 0.85, 0.78, 0.72, 0.66, 0.6, 0.55, 0.5, 0.45];
+
+/** Construit le PDF des feuilles de l'aperçu (toutes, ou celles nommées) : une page par feuille */
 async function construire(preview: ExportPreview, feuilles?: string[]) {
   const outilsPdf = await outils();
   const sheets = preview.sheets.filter((s) => !feuilles || feuilles.includes(s.name));
+  const dessiner = (d: Doc, s: ExportPreview['sheets'][number], k: number) =>
+    s.kind === 'virement'
+      ? pageVirement(d, outilsPdf.autoTable, s, preview.logo, preview.signature, k)
+      : s.kind === 'caisse'
+        ? pageCaisse(d, outilsPdf.autoTable, s, preview.logo, k)
+        : pageRecap(d, outilsPdf.autoTable, s, preview.logo, k);
   let doc: Doc | null = null;
   const nomsPages: string[] = [];
   for (const s of sheets) {
     const orientation = s.kind === 'recap' ? 'landscape' : 'portrait';
+    // plus grande échelle qui tient sur une page (essai sur un brouillon), sinon la plus petite
+    const k =
+      ECHELLES.find((e) => {
+        const essai = new outilsPdf.jsPDF({ orientation, unit: 'mm', format: 'a4' });
+        return dessiner(essai, s, e) && essai.getNumberOfPages() === 1;
+      }) ?? ECHELLES[ECHELLES.length - 1];
     if (!doc) doc = new outilsPdf.jsPDF({ orientation, unit: 'mm', format: 'a4' });
     else doc.addPage('a4', orientation);
     const avant = doc.getNumberOfPages();
-    if (s.kind === 'virement') pageVirement(doc, outilsPdf.autoTable, s, preview.logo, preview.signature);
-    else if (s.kind === 'caisse') pageCaisse(doc, outilsPdf.autoTable, s, preview.logo);
-    else pageRecap(doc, outilsPdf.autoTable, s, preview.logo);
+    dessiner(doc, s, k);
     for (let p = avant; p <= doc.getNumberOfPages(); p++) nomsPages[p - 1] = s.name;
   }
   if (doc) numeroter(doc, nomsPages);
   return doc;
 }
 
-/** Un seul PDF A4 : une ou plusieurs pages par feuille (BPM, Caisse, BII, Récap) */
+/** Un seul PDF A4 : une page par feuille (BPM, Caisse, BII, Récap) */
 export async function exporterSalairesPdf(preview: ExportPreview, fileName: string) {
   const doc = await construire(preview);
   if (!doc) return false;

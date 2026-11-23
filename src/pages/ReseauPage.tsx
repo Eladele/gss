@@ -230,13 +230,18 @@ export default function ReseauPage() {
     if (chantiers.length === 0) loadChantiers();
   }, []);
 
-  useEffect(() => {
-    if (!zone && chantiers.length > 0) setZone(chantiers[0].zone ?? '');
-  }, [chantiers]);
+  // zone par défaut : celle du premier chantier
+  if (!zone && chantiers.length > 0 && chantiers[0].zone) setZone(chantiers[0].zone);
+
+  // changement de zone : plus de nœud sélectionné
+  const [zonePrec, setZonePrec] = useState(zone);
+  if (zone !== zonePrec) {
+    setZonePrec(zone);
+    setSelectedId(null);
+  }
 
   useEffect(() => {
     if (zone) loadReseauNoeuds(zone);
-    setSelectedId(null);
   }, [zone]);
 
   const nodesForZone = useMemo(() => reseauNoeuds.filter((n) => n.zone === zone), [reseauNoeuds, zone]);

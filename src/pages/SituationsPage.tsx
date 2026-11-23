@@ -1,8 +1,10 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type ReactNode } from 'react';
+import { ArrowDown, ArrowUp, Columns3, GripVertical, History, RotateCcw } from 'lucide-react';
+import { fetchHistoriqueClotures, type ClotureArchivee } from '@/lib/programmeService';
 import { useAppStore } from '@/store/useAppStore';
 import { usePerimetre } from '@/hooks/usePerimetre';
 import { getEquipeColor } from '@/utils';
-import { calcDelai, isHorsDelai, countPoteaux, MERGED_TYPES, addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
+import { calcDelai, isHorsDelai, passagesDelai, countPoteaux, MERGED_TYPES, addSheetFromObjects, downloadWorkbookBuffer } from '@/utils/stats';
 import ExcelJS from 'exceljs';
 import {
   Card,
@@ -24,6 +26,64 @@ import {
 import type { OKSheetValues } from '@/components/ui';
 import { useToast } from '@/components/ui';
 import { errMsg } from '@/utils';
+
+// Colonnes du tableau (grand écran) : vue « en cours » et vue complète. L'utilisateur choisit
+// celles qui s'affichent et leur ordre (mémorisé dans ce navigateur).
+const COLS_EN_COURS = ['FGP', 'Type', 'Date Message', 'Zone', 'Historique', 'Statut', 'Actions'];
+const COLS_TOUTES = [
+  'FGP',
+  'Type',
+  'Date Message',
+  'Service Dest.',
+  'Zone',
+  'Date Dépôt',
+  'Date Mise en Service',
+  'Motif équipe',
+  'Poteau',
+  'Équipe',
+  'Délai',
+  'Conformité',
+  'Réseau',
+  'ONU Install Time',
+  'Port ID',
+  'ONU ID',
+  'SN/MAC',
+  'Rx (dBm)',
+  'Ranging (m)',
+  'Remarque',
+  'Clôturé par',
+  'Historique',
+  'Statut',
+  'Actions',
+];
+type Vue = 'encours' | 'toutes';
+type ReglageColonnes = { ordre: string[]; masquees: string[] };
+const DEFAUT_COLONNES: Record<Vue, ReglageColonnes> = {
+  encours: { ordre: COLS_EN_COURS, masquees: [] },
+  toutes: { ordre: COLS_TOUTES, masquees: [] },
+};
+const CLE_COLONNES = 'situations_colonnes';
+/** Ordre enregistré, nettoyé : colonnes inconnues retirées, nouvelles colonnes insérées à leur place par défaut */
+function normaliser(r: Partial<ReglageColonnes> | undefined, toutes: string[]): ReglageColonnes {
+  const ordre = [...new Set((Array.isArray(r?.ordre) ? r.ordre : []).filter((c) => toutes.includes(c)))];
+  toutes.forEach((c, i) => {
+    if (ordre.includes(c)) return;
+    const avant = toutes[i - 1];
+    ordre.splice(avant && ordre.includes(avant) ? ordre.indexOf(avant) + 1 : ordre.length, 0, c);
+  });
+  return {
+    ordre,
+    masquees: (Array.isArray(r?.masquees) ? r.masquees : []).filter((c) => toutes.includes(c) && c !== 'FGP'),
+  };
+}
+function lireColonnes(): Record<Vue, ReglageColonnes> {
+  try {
+    const o = JSON.parse(localStorage.getItem(CLE_COLONNES) ?? '{}') as Partial<Record<Vue, ReglageColonnes>>;
+    return { encours: normaliser(o.encours, COLS_EN_COURS), toutes: normaliser(o.toutes, COLS_TOUTES) };
+  } catch {
+    return DEFAUT_COLONNES;
+  }
+}
 
 export default function SituationsPage() {
   const situations = useAppStore((s) => s.situations);
@@ -207,6 +267,40 @@ export default function SituationsPage() {
   // statut/date explicite) — vue simplifiée pour aller à l'essentiel au quotidien.
   const isEnCoursView = fStatus === '__default__' && !fDate && !fConformite && !search.trim();
 
+  // Colonnes affichées et leur ordre (par vue), mémorisés dans ce navigateur
+  const [colonnes, setColonnes] = useState<Record<Vue, ReglageColonnes>>(lireColonnes);
+  const [colonnesOpen, setColonnesOpen] = useState(false);
+  const [glisse, setGlisse] = useState<string | null>(null);
+  const vue: Vue = isEnCoursView ? 'encours' : 'toutes';
+  const reglageVue = colonnes[vue];
+  const colonnesVisibles = reglageVue.ordre.filter((c) => !reglageVue.masquees.includes(c));
+  const changerColonnes = (r: ReglageColonnes) => {
+    const n = { ...colonnes, [vue]: r };
+    setColonnes(n);
+    try {
+      localStorage.setItem(CLE_COLONNES, JSON.stringify(n));
+    } catch {
+      /* stockage indisponible : le choix vaut pour cette visite */
+    }
+  };
+  const basculerColonne = (c: string) =>
+    changerColonnes({
+      ...reglageVue,
+      masquees: reglageVue.masquees.includes(c) ? reglageVue.masquees.filter((x) => x !== c) : [...reglageVue.masquees, c],
+    });
+  /** place la colonne `c` à la position de `cible` */
+  const deplacerColonne = (c: string, cible: string) => {
+    if (c === cible) return;
+    const ordre = reglageVue.ordre.filter((x) => x !== c);
+    ordre.splice(reglageVue.ordre.indexOf(cible), 0, c);
+    changerColonnes({ ...reglageVue, ordre });
+  };
+  const decalerColonne = (c: string, d: -1 | 1) => {
+    const i = reglageVue.ordre.indexOf(c);
+    const cible = reglageVue.ordre[i + d];
+    if (cible) deplacerColonne(c, cible);
+  };
+
   const sorted = useMemo(() => {
     if (!sortBy || !SORT_GETTERS[sortBy]) return filtered;
     const getter = SORT_GETTERS[sortBy];
@@ -233,6 +327,38 @@ export default function SituationsPage() {
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const paginated = useMemo(() => sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [sorted, page]);
+
+  // Clôtures passées (fiches « non faites » puis renvoyées) des fiches affichées : elles sont
+  // archivées à chaque renvoi (historique_clotures), la fiche elle-même ne garde que l'état actuel.
+  const [historiques, setHistoriques] = useState<Map<string, ClotureArchivee[]>>(new Map());
+  const [histoId, setHistoId] = useState<string | null>(null);
+  const idsPage = paginated.map((s) => s.id).join(',');
+  useEffect(() => {
+    if (!idsPage) return;
+    let actif = true;
+    fetchHistoriqueClotures(idsPage.split(',')).then(
+      (m) => actif && setHistoriques((cur) => new Map([...cur, ...m])),
+      () => undefined,
+    );
+    return () => {
+      actif = false;
+    };
+  }, [idsPage]);
+  const boutonHistorique = (s: { id: string }) => {
+    const n = historiques.get(s.id)?.length ?? 0;
+    if (!n) return <span className="text-slate-300">—</span>;
+    return (
+      <button
+        type="button"
+        onClick={() => setHistoId(s.id)}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-violet-100 text-violet-700 hover:bg-violet-200 whitespace-nowrap"
+        title="Voir les clôtures passées et les renvois"
+      >
+        <History className="w-3 h-3" />
+        {n} renvoi{n > 1 ? 's' : ''}
+      </button>
+    );
+  };
 
   const [okMode, setOkMode] = useState<'close' | 'edit'>('close');
   const editSituation = useAppStore((s) => s.editSituation);
@@ -539,6 +665,84 @@ export default function SituationsPage() {
       </div>
     );
 
+  // Contenu de chaque colonne du tableau (grand écran), dans l'ordre choisi par l'utilisateur
+  type Sit = (typeof situations)[number];
+  type Sc = (typeof scans)[number] | undefined;
+  const CELLULES: Record<string, { cls?: string; rendu: (s: Sit, sc: Sc) => ReactNode }> = {
+    FGP: { cls: 'px-3 py-3 font-bold text-slate-800', rendu: (s) => s.fgp },
+    Type: { rendu: (s) => <TypeBadge type={s.type} /> },
+    'Date Message': { cls: 'px-3 py-3 text-xs text-slate-400 whitespace-nowrap', rendu: (s) => s.dateMessage || '—' },
+    'Service Dest.': { cls: 'px-3 py-3 text-xs text-slate-400', rendu: (s) => s.serviceDestination || '—' },
+    Zone: { rendu: (s) => <ZoneChip zone={s.zone} /> },
+    'Date Dépôt': { cls: 'px-3 py-3 text-xs text-slate-400 whitespace-nowrap', rendu: (s) => s.dateDepo || '—' },
+    'Date Mise en Service': { cls: 'px-3 py-3 text-xs text-slate-400 whitespace-nowrap', rendu: (s) => s.dateClt || '—' },
+    'Motif équipe': {
+      cls: 'px-3 py-3 text-xs max-w-48 truncate',
+      rendu: (s) =>
+        motifEquipe(s) ? (
+          <span
+            className={s.status === 'non_ok' ? 'text-red-600 font-medium' : 'text-slate-600'}
+            title={[motifEquipe(s), s.comment && s.comment !== motifEquipe(s) ? s.comment : ''].filter(Boolean).join(' — ')}
+          >
+            {motifEquipe(s)}
+          </span>
+        ) : (
+          <span className="text-slate-300">—</span>
+        ),
+    },
+    Poteau: {
+      cls: 'px-3 py-3 text-xs text-center',
+      rendu: (s) => {
+        const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
+        return nb > 0 ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{nb}</span> : '—';
+      },
+    },
+    Équipe: { rendu: (s) => <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} /> },
+    Délai: {
+      cls: 'px-3 py-3 text-xs text-center',
+      rendu: (s) => (s.status === 'non_ok' && MERGED_TYPES.includes(s.type) ? '—' : s.dateDepo || s.dateMessage ? `${calcDelai(s)}j` : '—'),
+    },
+    Conformité: {
+      cls: 'px-3 py-3 text-xs text-center',
+      rendu: (s) =>
+        s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
+          <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+            {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
+          </span>
+        ) : (
+          <span className="text-slate-300" title={s.status === 'non_ok' ? 'NON OK — hors délai/dans délai non applicable' : undefined}>
+            --
+          </span>
+        ),
+    },
+    Réseau: {
+      cls: 'px-3 py-3 text-xs text-center',
+      rendu: (_s, sc) => {
+        if (!sc) return <span className="text-slate-300">—</span>;
+        if (sc.result !== 'SCANNE') return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">Non scanné</span>;
+        const rx = sc.rxPower;
+        const quality = rx == null ? null : rx >= -22 ? 'Excellent' : rx >= -25 ? 'Moyen' : 'Dégradé';
+        const color = quality === 'Excellent' ? 'bg-green-100 text-green-700' : quality === 'Moyen' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+        return (
+          <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${color}`} title={rx != null ? `${rx} dBm` : ''}>
+            {quality ?? 'Scanné'}
+          </span>
+        );
+      },
+    },
+    'ONU Install Time': { cls: 'px-3 py-3 text-xs text-slate-400 whitespace-nowrap', rendu: (_s, sc) => sc?.timeAddedToNms || '—' },
+    'Port ID': { cls: 'px-3 py-3 text-xs text-center', rendu: (_s, sc) => sc?.portId ?? '—' },
+    'ONU ID': { cls: 'px-3 py-3 text-xs text-center', rendu: (_s, sc) => sc?.onuId ?? '—' },
+    'SN/MAC': { cls: 'px-3 py-3 text-xs text-slate-400', rendu: (_s, sc) => sc?.snMac || '—' },
+    'Rx (dBm)': { cls: 'px-3 py-3 text-xs text-center', rendu: (_s, sc) => (sc?.rxPower != null ? sc.rxPower : '—') },
+    'Ranging (m)': { cls: 'px-3 py-3 text-xs text-center', rendu: (_s, sc) => (sc?.ranging != null ? sc.ranging : '—') },
+    Remarque: { cls: 'px-3 py-3 text-xs text-slate-400 max-w-32 truncate', rendu: (_s, sc) => sc?.remarque || '—' },
+    'Clôturé par': { cls: 'px-3 py-3 text-xs text-slate-500', rendu: (s) => s.closedBy || '—' },
+    Historique: { cls: 'px-3 py-3 text-xs', rendu: (s) => boutonHistorique(s) },
+    Statut: { cls: 'px-3 py-3 whitespace-nowrap', rendu: (s) => <StatusBadge status={s.status} /> },
+    Actions: { rendu: (s) => actions(s, true) },
+  };
+
   const conformite = (s: (typeof situations)[number]) =>
     s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
       <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
@@ -680,6 +884,16 @@ export default function SituationsPage() {
               <option value="Équipe|asc">Équipe</option>
               <option value="Statut|asc">Statut</option>
             </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden md:inline-flex"
+              icon={<Columns3 className="w-4 h-4" />}
+              onClick={() => setColonnesOpen(true)}
+              title="Choisir et déplacer les colonnes"
+            >
+              Colonnes ({colonnesVisibles.length}/{reglageVue.ordre.length})
+            </Button>
           </div>
         </CardHeader>
 
@@ -744,6 +958,7 @@ export default function SituationsPage() {
                           {motif}
                         </p>
                       )}
+                      {(historiques.get(s.id)?.length ?? 0) > 0 && <div>{boutonHistorique(s)}</div>}
                       <div className="pt-0.5">{actions(s)}</div>
                     </div>
                   </div>
@@ -760,37 +975,28 @@ export default function SituationsPage() {
                       <input type="checkbox" checked={allPageSelected} onChange={toggleSelectPage} title="Tout sélectionner (page)" />
                     </th>
                   )}
-                  {(isEnCoursView
-                    ? ['FGP', 'Type', 'Date Message', 'Zone', 'Statut', 'Actions']
-                    : [
-                      'FGP',
-                      'Type',
-                      'Date Message',
-                      'Service Dest.',
-                      'Zone',
-                      'Date Dépôt',
-                      'Date Mise en Service',
-                      'Motif équipe',
-                      'Poteau',
-                      'Équipe',
-                      'Délai',
-                      'Conformité',
-                      'Réseau',
-                      'ONU Install Time',
-                      'Port ID',
-                      'ONU ID',
-                      'SN/MAC',
-                      'Rx (dBm)',
-                      'Ranging (m)',
-                      'Remarque',
-                      'Clôturé par',
-                      'Statut',
-                      'Actions',
-                    ]
-                  ).map((h) => {
+                  {colonnesVisibles.map((h) => {
                     const sortable = h !== 'Actions';
                     return (
-                      <th key={h} className="text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap">
+                      <th
+                        key={h}
+                        draggable
+                        onDragStart={(e) => {
+                          setGlisse(h);
+                          e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragOver={(e) => glisse && e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          if (glisse) deplacerColonne(glisse, h);
+                          setGlisse(null);
+                        }}
+                        onDragEnd={() => setGlisse(null)}
+                        title="Glisser pour déplacer la colonne"
+                        className={`text-left px-3 py-3 text-xs font-bold text-slate-400 uppercase tracking-wide whitespace-nowrap cursor-move ${
+                          glisse === h ? 'opacity-40' : ''
+                        } ${glisse && glisse !== h ? 'hover:bg-blue-50' : ''}`}
+                      >
                         {sortable ? (
                           <button
                             onClick={() => toggleSort(h)}
@@ -821,129 +1027,11 @@ export default function SituationsPage() {
                           <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggleSelectOne(s.id)} />
                         </td>
                       )}
-                      <td className="px-3 py-3 font-bold text-slate-800">
-                        {s.fgp}
-                        {s.isUrgent && <span className="ml-1 text-orange-500 text-xs"></span>}
-                      </td>
-                      <td className="px-3 py-3">
-                        <TypeBadge type={s.type} />
-                      </td>
-                      <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateMessage || '—'}</td>
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-400">{s.serviceDestination || '—'}</td>
-                      )}
-                      <td className="px-3 py-3">
-                        <ZoneChip zone={s.zone} />
-                      </td>
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateDepo || '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{s.dateClt || '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs max-w-48 truncate" title={[motifEquipe(s), s.comment && s.comment !== motifEquipe(s) ? s.comment : ''].filter(Boolean).join(' — ')}>
-                          {motifEquipe(s) ? (
-                            <span className={s.status === 'non_ok' ? 'text-red-600 font-medium' : 'text-slate-600'}>{motifEquipe(s)}</span>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
+                      {colonnesVisibles.map((c) => (
+                        <td key={c} className={CELLULES[c]?.cls ?? 'px-3 py-3'}>
+                          {CELLULES[c]?.rendu(s, sc)}
                         </td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">
-                          {(() => {
-                            const nb = s.poteau && s.poteau > 0 ? s.poteau : countPoteaux(s.motif);
-                            return nb > 0 ? (
-                              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700">{nb}</span>
-                            ) : (
-                              '—'
-                            );
-                          })()}
-                        </td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3">
-                          <EquipeTag name={s.equipe || '—'} color={getEquipeColor(s.equipe, equipes)} />
-                        </td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">
-                          {s.status === 'non_ok' && MERGED_TYPES.includes(s.type)
-                            ? '—'
-                            : s.dateDepo || s.dateMessage
-                              ? `${calcDelai(s)}j`
-                              : '—'}
-                        </td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">
-                          {s.status !== 'non_ok' && (s.dateDepo || s.dateMessage) ? (
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${isHorsDelai(s) ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
-                            >
-                              {isHorsDelai(s) ? 'HorsDélais' : 'TLID'}
-                            </span>
-                          ) : (
-                            <span className="text-slate-300" title={s.status === 'non_ok' ? 'NON OK — hors délai/dans délai non applicable' : undefined}>
-                              --
-                            </span>
-                          )}
-                        </td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">
-                          {(() => {
-                            if (!sc) return <span className="text-slate-300">—</span>;
-                            if (sc.result !== 'SCANNE') {
-                              return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">Non scanné</span>;
-                            }
-                            const rx = sc.rxPower;
-                            const quality = rx == null ? null : rx >= -22 ? 'Excellent' : rx >= -25 ? 'Moyen' : 'Dégradé';
-                            const color =
-                              quality === 'Excellent'
-                                ? 'bg-green-100 text-green-700'
-                                : quality === 'Moyen'
-                                  ? 'bg-yellow-100 text-yellow-700'
-                                  : 'bg-red-100 text-red-700';
-                            return (
-                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${color}`} title={rx != null ? `${rx} dBm` : ''}>
-                                {quality ?? 'Scanné'}
-                              </span>
-                            );
-                          })()}
-                        </td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-400 whitespace-nowrap">{sc?.timeAddedToNms || '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">{sc?.portId ?? '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">{sc?.onuId ?? '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-400">{sc?.snMac || '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">{sc?.rxPower != null ? sc.rxPower : '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-center">{sc?.ranging != null ? sc.ranging : '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-400 max-w-32 truncate">{sc?.remarque || '—'}</td>
-                      )}
-                      {!isEnCoursView && (
-                        <td className="px-3 py-3 text-xs text-slate-500">{s.closedBy || '—'}</td>
-                      )}
-                      <td className="px-3 py-3 whitespace-nowrap">
-                        <StatusBadge status={s.status} />
-                      </td>
-                      <td className="px-3 py-3">
-                        {actions(s, true)}
-                      </td>
+                      ))}
                     </tr>
                   );
                 })}
@@ -972,6 +1060,175 @@ export default function SituationsPage() {
           </div>
         )}
       </Card>
+
+      {/* ─── Historique d'une fiche : clôtures passées et renvois */}
+      <Modal open={!!histoId} onClose={() => setHistoId(null)} title="Historique de la fiche" size="lg">
+        {(() => {
+          const fiche = situations.find((x) => x.id === histoId);
+          const liste = (histoId && historiques.get(histoId)) || [];
+          const dt = (v?: string | null) =>
+            v ? new Date(v).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+          return (
+            <div className="space-y-3">
+              {fiche && (
+                <p className="text-sm text-slate-600">
+                  <b className="text-slate-900">{fiche.fgp}</b> · {fiche.type} · reçue (date message) le <b>{fiche.dateMessage || '—'}</b>
+                </p>
+              )}
+              <ol className="relative border-l-2 border-slate-200 ml-2 space-y-3">
+                {liste.map((h, i) => (
+                  <li key={h.id} className="ml-4">
+                    <span className="absolute -left-[7px] mt-1 w-3 h-3 rounded-full bg-red-400 border-2 border-white" />
+                    <div className="text-xs text-slate-400">
+                      {i + 1}. {dt(h.traiteLe)}
+                      {h.traiteParNom ? ` · par ${h.traiteParNom}` : ''}
+                    </div>
+                    <div className="text-sm">
+                      <b className="text-slate-800">{h.equipe || '—'}</b> :{' '}
+                      <span className={h.statut === 'non_ok' ? 'text-red-600 font-semibold' : 'text-green-700 font-semibold'}>
+                        {h.statut === 'non_ok' ? 'non faite' : 'faite'}
+                      </span>
+                      {h.motif && <span className="text-slate-700"> · {h.motif}</span>}
+                    </div>
+                    {h.commentaire && <p className="text-xs text-slate-500 whitespace-pre-line">{h.commentaire}</p>}
+                    <div className="text-xs text-violet-700 mt-0.5">
+                      ↻ renvoyée le {dt(h.renvoyeLe)}
+                      {h.renvoyeParNom ? ` par ${h.renvoyeParNom}` : ''}
+                    </div>
+                  </li>
+                ))}
+                {fiche && (
+                  <li className="ml-4">
+                    <span className="absolute -left-[7px] mt-1 w-3 h-3 rounded-full bg-blue-500 border-2 border-white" />
+                    <div className="text-xs text-slate-400">Actuellement{fiche.dateClt ? ` · mise en service ${fiche.dateClt}` : ''}</div>
+                    <div className="text-sm flex items-center gap-2 flex-wrap">
+                      <b className="text-slate-800">{fiche.equipe || '—'}</b>
+                      <StatusBadge status={fiche.status} />
+                      {motifEquipe(fiche) && <span className="text-slate-700">· {motifEquipe(fiche)}</span>}
+                      {fiche.closedBy && <span className="text-xs text-slate-400">par {fiche.closedBy}</span>}
+                    </div>
+                  </li>
+                )}
+              </ol>
+              {fiche &&
+                (() => {
+                  const passages = passagesDelai(fiche);
+                  if (!passages) return null;
+                  const total = passages.reduce((a, p) => a + p.jours, 0);
+                  const jj = (iso: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : 'en cours');
+                  return (
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <p className="px-3 py-2 text-xs font-bold text-slate-600 bg-slate-50">
+                        Délai officiel, passage par passage (l’attente entre un « non fait » et le renvoi ne compte pas)
+                      </p>
+                      <div className="divide-y divide-slate-100 text-xs">
+                        {passages.map((p, i) => (
+                          <div key={i} className="px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="font-semibold text-slate-700">{p.equipe || '—'}</span>
+                            <span className="text-slate-500 whitespace-nowrap">
+                              {jj(p.debut)} → {jj(p.fin)}
+                            </span>
+                            {p.motif && <span className="text-slate-500 basis-full sm:basis-auto sm:flex-1 min-w-0 break-words">{p.motif}</span>}
+                            <span className="ml-auto flex items-center gap-2 whitespace-nowrap">
+                              <span className="text-slate-600">
+                                {p.jours} j / {p.seuil} j
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${p.hors ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}
+                              >
+                                {p.hors ? 'Hors délai' : 'Dans délai'}
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                        <div className="px-3 py-2 flex items-center gap-3 bg-slate-50 font-bold">
+                          <span>Total chez nous</span>
+                          <span className="ml-auto">{total} j</span>
+                          {fiche.status === 'non_ok' ? (
+                            <span className="text-slate-400">—</span>
+                          ) : isHorsDelai(fiche) ? (
+                            <span className="text-red-700">Hors délai</span>
+                          ) : (
+                            <span className="text-green-700">Dans délai</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              <div className="flex justify-end">
+                <Button size="sm" className="w-full sm:w-auto" onClick={() => setHistoId(null)}>
+                  Fermer
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* ─── Choix et ordre des colonnes */}
+      <Modal open={colonnesOpen} onClose={() => setColonnesOpen(false)} title={`Colonnes : ${isEnCoursView ? 'vue « en cours »' : 'toutes les situations'}`}>
+        <p className="text-xs text-slate-500 mb-3">
+          Cochez les colonnes à afficher. Glissez une ligne (ou utilisez les flèches) pour changer l’ordre ; vous pouvez aussi glisser les en-têtes du
+          tableau. Le choix est retenu dans ce navigateur.
+        </p>
+        <div className="border border-slate-100 rounded-lg divide-y divide-slate-100 max-h-[55vh] overflow-y-auto">
+          {reglageVue.ordre.map((c, i) => {
+            const fixe = c === 'FGP';
+            return (
+              <div
+                key={c}
+                draggable
+                onDragStart={(e) => {
+                  setGlisse(c);
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragOver={(e) => glisse && e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (glisse) deplacerColonne(glisse, c);
+                  setGlisse(null);
+                }}
+                onDragEnd={() => setGlisse(null)}
+                className={`flex items-center gap-2 px-3 py-1.5 text-sm bg-white ${glisse === c ? 'opacity-40' : ''} ${glisse && glisse !== c ? 'hover:bg-blue-50' : ''}`}
+              >
+                <GripVertical className="w-4 h-4 text-slate-300 cursor-move shrink-0" />
+                <label className="flex items-center gap-2 flex-1 cursor-pointer">
+                  <input type="checkbox" checked={!reglageVue.masquees.includes(c)} disabled={fixe} onChange={() => basculerColonne(c)} />
+                  <span className={reglageVue.masquees.includes(c) ? 'text-slate-400' : 'text-slate-800'}>{c}</span>
+                  {fixe && <span className="text-[10px] text-slate-400">(toujours affichée)</span>}
+                </label>
+                <button
+                  type="button"
+                  aria-label={`Monter ${c}`}
+                  disabled={i === 0}
+                  onClick={() => decalerColonne(c, -1)}
+                  className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30"
+                >
+                  <ArrowUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Descendre ${c}`}
+                  disabled={i === reglageVue.ordre.length - 1}
+                  onClick={() => decalerColonne(c, 1)}
+                  className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30"
+                >
+                  <ArrowDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex justify-between gap-2 mt-4">
+          <Button variant="ghost" size="sm" icon={<RotateCcw className="w-3.5 h-3.5" />} onClick={() => changerColonnes(DEFAUT_COLONNES[vue])}>
+            Par défaut
+          </Button>
+          <Button size="sm" onClick={() => setColonnesOpen(false)}>
+            Fermer
+          </Button>
+        </div>
+      </Modal>
 
       {/* ─── Créer un FGP Modal */}
       <Modal open={fgpOpen} onClose={() => setFgpOpen(false)} title="Créer un FGP">

@@ -8,7 +8,8 @@ export function DonutChart({ data, size = 160 }: { data: { label: string; value:
   const stroke = size * 0.22;
   const r = radius - stroke / 2;
   const circumference = 2 * Math.PI * r;
-  let offset = 0;
+  // début de chaque arc : somme des arcs précédents (calculée avant le rendu)
+  const debuts = data.map((_, i) => data.slice(0, i).reduce((a, d) => a + (d.value / total) * circumference, 0));
 
   return (
     <div className="flex items-center gap-5 flex-wrap">
@@ -27,11 +28,10 @@ export function DonutChart({ data, size = 160 }: { data: { label: string; value:
                 stroke={d.color}
                 strokeWidth={stroke}
                 strokeDasharray={`${dash} ${circumference - dash}`}
-                strokeDashoffset={-offset}
+                strokeDashoffset={-debuts[i]}
                 strokeLinecap="butt"
               />
             );
-            offset += dash;
             return el;
           })}
         </g>
