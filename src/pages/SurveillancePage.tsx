@@ -14,13 +14,14 @@ import {
   type ReclamationFauxOk,
   fetchHistoriquePeriode,
   fetchFichesParIds,
+  fetchPhotosProgramme,
   reassign,
   redistribuer,
   type ClotureArchivee,
 } from '@/lib/programmeService';
 import { ProgrammeJourEquipes } from '@/components/programme/ProgrammeJourEquipes';
 import { ReclamationsPanel } from '@/components/programme/Reclamation';
-import { ETAT_DELAI, POINTS, delaiOT, fmtPts, fmtPtsSigne, jourCourt, jourOuvreSuivant } from '@/utils/points';
+import { ETAT_DELAI, POINTS, delaiOT, doublonsCable, estPourPlusTard, fmtPts, fmtPtsSigne, jourCourt, jourOuvreSuivant } from '@/utils/points';
 import { MOTIF_PENALITE, NATURE_CLASS, NATURE_LABEL, libelleFauxOk, ligneLabel, peutSignalerFauxOk, type MotifFauxOk } from '@/utils/programme';
 import {
   NB_PERIODES,
@@ -281,112 +282,277 @@ export default function SurveillancePage() {
     [noms, colonnes, parEquipe],
   );
 
-  /** PDF du soir : statistiques par équipe (chef, installations / dérangements, faites, délai) */
+  /**
+   * PDF du soir : en-tête GSS (comme le tableau de bord), chiffres clés, classement des équipes
+   * (sans le détail des fiches) et, en bas, les règles des points.
+   */
   const exporterPdf = async () => {
+    const ots0 = ots;
+    const enCours0 = enCours;
     try {
-      const [{ jsPDF }, modTable] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
-      // selon le bundler, la fonction est l'export par défaut ou « autoTable »
-      const mt = modTable as unknown as { default?: unknown; autoTable?: unknown };
-      const autoTable = (typeof mt.default === 'function' ? mt.default : (mt.autoTable ?? (mt.default as { default?: unknown })?.default)) as typeof import('jspdf-autotable').default;
-      const pdfTxt = (s: string) => s.replace(/\u2212/g, '-').replace(/[\u2019]/g, "'");
-      const stats = statsEquipes(ots, debut, fin, enCours);
+      const { outilsPdf, entete, piedDePage, sousTitre, reglesPoints, finY, t, STYLE, VERT, ROUGE } = await import('@/utils/rapportPdf');
+      const { jsPDF, autoTable } = await outilsPdf();
+      // période passée : ce qui était en cours vient de la photo du programme du dernier jour
+      // photographié de la période (supabase_photo_programme.sql)
+      let ots = ots0;
+      let enCours = enCours0;
+      let finPhotoMs = Date.now();
+      let jourPhoto = '';
+      if (!enCours0) {
+        const photos = await fetchPhotosProgramme(debut, fin);
+        jourPhoto = photos.reduce((m, p) => (p.jour > m ? p.jour : m), '');
+        if (jourPhoto) {
+          const villeDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.ville ?? '';
+          const ouvertes = photos
+            .filter((p) => p.jour === jourPhoto)
+            .map((p) => ({ ...p.ot, id: `p:${p.ot.id}`, statut: 'a_faire' as const }))
+            .filter(
+              (o) =>
+                ficheOk(o) &&
+                !estPourPlusTard(o, jourPhoto) &&
+                (!fEquipe || o.equipe === fEquipe) &&
+                (!fZone || (o.zone ?? '').trim() === fZone) &&
+                (!fVille || villeDe(o.equipe) === fVille) &&
+                typeOk(o, fType),
+            );
+          ots = [...ots0.filter((o) => o.statut !== 'a_faire'), ...ouvertes];
+          enCours = true;
+          finPhotoMs = Date.parse(`${jourPhoto}T23:59:59Z`);
+        }
+      }
+      const stats = statsEquipes(ots, debut, fin, enCours, jourPhoto ? finPhotoMs : undefined);
       const chefDe = (eq: string) => equipes.find((e) => e.name.toLowerCase() === eq.toLowerCase())?.leader || '-';
       const pts = (eq: string, base: number) => {
         const b = parEquipe.get(eq)?.get(cle);
         return b ? b.points : base;
       };
+      const taux = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)} %` : '-');
       const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-      doc.setFontSize(15);
-      doc.text(pdfTxt(`Surveillance des équipes - ${libellePeriode(debut, g, true)}`), 14, 15);
-      doc.setFontSize(9);
-      doc.setTextColor(100);
-      const filtres = [fVille && `ville ${fVille}`, fEquipe && `équipe ${fEquipe}`, fZone && `zone ${fZone}`, fType && `type ${TYPE_LABEL[fType] ?? fType}`].filter(Boolean).join(' · ');
-      doc.text(
-        pdfTxt(`Édité le ${new Date().toLocaleString('fr-FR')} par ${user.name}${filtres ? ` · ${filtres}` : ''} · une fiche compte le jour de sa clôture`),
-        14,
-        21,
-      );
-      const total = stats.reduce(
-        (t, s) => ({
-          installations: t.installations + s.installations,
-          installationsFaites: t.installationsFaites + s.installationsFaites,
-          derangements: t.derangements + s.derangements,
-          derangementsFaits: t.derangementsFaits + s.derangementsFaits,
-          faites: t.faites + s.faites,
-          nonFaites: t.nonFaites + s.nonFaites,
-          dansDelai: t.dansDelai + s.dansDelai,
-          horsDelai: t.horsDelai + s.horsDelai,
-          enCours: t.enCours + s.enCours,
-          points: t.points + pts(s.equipe, s.points),
+      const filtres = [fVille && `Ville : ${fVille}`, fEquipe && `Équipe : ${fEquipe}`, fZone && `Zone : ${fZone}`, fType && `Type : ${TYPE_LABEL[fType] ?? fType}`].filter(Boolean).join(' - ');
+      let y = entete(doc, `Surveillance des équipes - ${libellePeriode(debut, g, true)}`, [
+        ...(filtres ? [filtres] : []),
+        'Une fiche compte le jour de sa clôture. Points = points des fiches + pénalités.',
+        ...(jourPhoto ? [`En cours : fiches encore ouvertes à la fin du ${jourPhoto.split('-').reverse().join('/')} (programme enregistré ce jour-là).`] : []),
+        `Édité le ${new Date().toLocaleString('fr-FR')} par ${user.name}`,
+      ]);
+
+      const tot = stats.reduce(
+        (a, s) => ({
+          installations: a.installations + s.installations,
+          installationsFaites: a.installationsFaites + s.installationsFaites,
+          derangements: a.derangements + s.derangements,
+          derangementsFaits: a.derangementsFaits + s.derangementsFaits,
+          faites: a.faites + s.faites,
+          nonFaites: a.nonFaites + s.nonFaites,
+          dansDelai: a.dansDelai + s.dansDelai,
+          horsDelai: a.horsDelai + s.horsDelai,
+          enCours: a.enCours + s.enCours,
+          points: a.points + pts(s.equipe, s.points),
         }),
         { installations: 0, installationsFaites: 0, derangements: 0, derangementsFaits: 0, faites: 0, nonFaites: 0, dansDelai: 0, horsDelai: 0, enCours: 0, points: 0 },
       );
-      const taux = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)} %` : '-');
-      autoTable(doc, {
-        startY: 26,
-        head: [['Équipe', "Chef d'équipe", 'Installations', 'dont faites', 'Dérangements', 'dont faits', 'Faites', 'Non faites', 'Dans le délai', 'Hors délai', ...(enCours ? ['En cours'] : []), 'Points']].map(
-          (r) => r.map(pdfTxt),
-        ),
-        body: stats.map((s) =>
-          [
-            s.equipe,
-            chefDe(s.equipe),
-            s.installations,
-            s.installationsFaites,
-            s.derangements,
-            s.derangementsFaits,
-            s.faites,
-            s.nonFaites,
-            `${s.dansDelai} (${taux(s.dansDelai, s.faites)})`,
-            s.horsDelai,
-            ...(enCours ? [s.enCours] : []),
-            fmtPts(pts(s.equipe, s.points)),
-          ].map((v) => pdfTxt(String(v))),
-        ),
-        foot: [
-          [
-            'Total',
-            '',
-            total.installations,
-            total.installationsFaites,
-            total.derangements,
-            total.derangementsFaits,
-            total.faites,
-            total.nonFaites,
-            `${total.dansDelai} (${taux(total.dansDelai, total.faites)})`,
-            total.horsDelai,
-            ...(enCours ? [total.enCours] : []),
-            fmtPts(total.points),
-          ].map((v) => pdfTxt(String(v))),
-        ],
-        styles: { fontSize: 9, cellPadding: 1.8 },
-        headStyles: { fillColor: [30, 41, 59] },
-        footStyles: { fillColor: [226, 232, 240], textColor: 20, fontStyle: 'bold' },
-        columnStyles: { 0: { fontStyle: 'bold' } },
+      const cloturees = tot.faites + tot.nonFaites;
+
+      // 1. Chiffres clés : une ligne de cases lisibles d'un coup d'œil
+      y = sousTitre(doc, y, 'Chiffres clés');
+      const cases: [string, string, [number, number, number]][] = [
+        ['Fiches traitées', String(cloturees), [15, 23, 42]],
+        ['Faites', `${tot.faites} (${taux(tot.faites, cloturees)})`, VERT],
+        ['Non faites', `${tot.nonFaites} (${taux(tot.nonFaites, cloturees)})`, ROUGE],
+        ['Dans le délai', `${tot.dansDelai} (${taux(tot.dansDelai, tot.faites)})`, VERT],
+        ['Hors délai', String(tot.horsDelai), ROUGE],
+        ['En cours', String(tot.enCours), [21, 101, 192]],
+        ['Points', fmtPts(tot.points), tot.points < 0 ? ROUGE : VERT],
+      ];
+      const largeur = (doc.internal.pageSize.getWidth() - 24 - (cases.length - 1) * 3) / cases.length;
+      y += 2;
+      cases.forEach(([lib, val, c], i) => {
+        const x = 12 + i * (largeur + 3);
+        doc.setDrawColor(203, 213, 225);
+        doc.setFillColor(248, 250, 252);
+        doc.roundedRect(x, y, largeur, 17, 2, 2, 'FD');
+        doc.setFontSize(8);
+        doc.setTextColor(90, 100, 115);
+        doc.text(t(lib), x + largeur / 2, y + 5.5, { align: 'center' });
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.setTextColor(...c);
+        doc.text(t(val), x + largeur / 2, y + 13, { align: 'center' });
+        doc.setFont('helvetica', 'normal');
       });
-      // détail de chaque équipe : FGP, nature, état, motif
-      if (g === 'jour') {
-        for (const s of stats) {
-          const fiches = ots
-            .filter((o) => o.equipe === s.equipe)
-            .filter((o) => (o.statut === 'a_faire' ? enCours : !!o.traiteLe && isoJour(new Date(o.traiteLe)) === debut));
-          if (!fiches.length) continue;
-          autoTable(doc, {
-            head: [[`${s.equipe}${chefDe(s.equipe) !== '-' ? ` - chef : ${chefDe(s.equipe)}` : ''}`, 'Type', 'Zone', 'État', 'Motif'].map(pdfTxt)],
-            body: fiches
-              .sort((a, b) => (a.zone ?? '').localeCompare(b.zone ?? '') || a.statut.localeCompare(b.statut))
-              .map((o) => {
-                const d = delaiOT(o);
-                const etat = o.statut === 'fait' ? (d.etat === 'dans' ? 'Fait (dans le délai)' : 'Fait (hors délai)') : o.statut === 'non_fait' ? 'Non fait' : d.etat === 'retard' ? 'En retard' : 'En cours';
-                return [ligneLabel(o), (o.typeOt || (o.nature === 'derangement' ? 'DRG' : 'Installation')).toUpperCase(), o.zone ?? '', etat, o.statut === 'a_faire' ? '' : o.motif].map((v) => pdfTxt(String(v ?? '')));
-              }),
-            startY: (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6,
-            styles: { fontSize: 8, cellPadding: 1.2 },
-            headStyles: { fillColor: [71, 85, 105] },
-            margin: { top: 12 },
-          });
+      doc.setTextColor(15, 23, 42);
+      y += 25;
+
+      // 2. Installations et dérangements séparés : faites, non faites, délai, en cours
+      const statsIns = statsEquipes(ots.filter((o) => o.nature !== 'derangement'), debut, fin, enCours);
+      const statsDrg = statsEquipes(ots.filter((o) => o.nature === 'derangement'), debut, fin, enCours);
+      const vide = { faites: 0, nonFaites: 0, dansDelai: 0, horsDelai: 0, enCours: 0 };
+      const cumul = (l: typeof stats) =>
+        l.reduce(
+          (a, s) => ({ faites: a.faites + s.faites, nonFaites: a.nonFaites + s.nonFaites, dansDelai: a.dansDelai + s.dansDelai, horsDelai: a.horsDelai + s.horsDelai, enCours: a.enCours + s.enCours }),
+          vide,
+        );
+      const totIns = cumul(statsIns);
+      const totDrg = cumul(statsDrg);
+      const cinq = (c: typeof vide) => [c.faites, c.nonFaites, `${c.dansDelai} (${taux(c.dansDelai, c.faites)})`, c.horsDelai, c.enCours];
+      // couleurs des colonnes de nature : faites / dans le délai en vert, non faites / hors délai en rouge, en cours en bleu
+      const couleurNature = (debutCol: number) => (d: { section: string; column: { index: number }; cell: { raw?: unknown; styles: { textColor: unknown; fontStyle?: unknown } } }) => {
+        if (d.section !== 'body' || d.column.index < debutCol) return;
+        const k = (d.column.index - debutCol) % 5;
+        const v = String(d.cell.raw ?? '');
+        if (v === '0' || v.startsWith('0 ')) d.cell.styles.textColor = [170, 178, 189];
+        else d.cell.styles.textColor = k === 0 || k === 2 ? VERT : k === 4 ? [21, 101, 192] : ROUGE;
+      };
+      y = sousTitre(doc, y, 'Installations et dérangements');
+      autoTable(doc, {
+        ...STYLE,
+        startY: y,
+        head: [['Nature', 'Faites', 'Non faites', 'Dans le délai', 'Hors délai', 'En cours', 'Taux de réalisation'].map(t)],
+        body: [
+          ['Installations', ...cinq(totIns), taux(totIns.faites, totIns.faites + totIns.nonFaites)],
+          ['Dérangements', ...cinq(totDrg), taux(totDrg.faites, totDrg.faites + totDrg.nonFaites)],
+        ].map((r) => r.map(t)),
+        foot: [['Total', ...cinq(cumul([...statsIns, ...statsDrg])), taux(tot.faites, cloturees)].map(t)],
+        columnStyles: { 0: { halign: 'left', fontStyle: 'bold', cellWidth: 60 }, 6: { fontStyle: 'bold' } },
+        didParseCell: (d) => {
+          if (d.column.index <= 5) couleurNature(1)(d);
+        },
+      });
+      y = finY(doc) + 9;
+
+      // 3. Classement des équipes (le plus de points en premier), installations et dérangements à part
+      const parNom = (l: typeof stats) => new Map(l.map((s) => [s.equipe, s]));
+      const ins = parNom(statsIns);
+      const drg = parNom(statsDrg);
+      const classees = [...stats].sort((a, b) => pts(b.equipe, b.points) - pts(a.equipe, a.points) || b.faites - a.faites || a.equipe.localeCompare(b.equipe));
+      const cols = ['Faites', 'Non faites', 'Dans le délai', 'Hors délai', 'En cours'];
+      y = sousTitre(doc, y, 'Classement des équipes');
+      autoTable(doc, {
+        ...STYLE,
+        startY: y,
+        pageBreak: 'auto',
+        styles: { ...STYLE.styles, fontSize: 8, cellPadding: 1.5 },
+        headStyles: { ...STYLE.headStyles, fontSize: 8 },
+        head: [
+          [
+            ...['Rang', 'Équipe', "Chef d'équipe", 'Points'].map((x) => ({ content: t(x), rowSpan: 2 })),
+            { content: 'Installations', colSpan: 5 },
+            { content: t('Dérangements'), colSpan: 5 },
+          ],
+          [...cols, ...cols].map(t),
+        ],
+        body: classees.map((s, i) =>
+          [i + 1, s.equipe, chefDe(s.equipe), fmtPts(pts(s.equipe, s.points)), ...cinq(ins.get(s.equipe) ?? vide), ...cinq(drg.get(s.equipe) ?? vide)].map(t),
+        ),
+        foot: [['', 'Total', '', fmtPts(tot.points), ...cinq(totIns), ...cinq(totDrg)].map(t)],
+        columnStyles: { 0: { halign: 'center', fontStyle: 'bold', cellWidth: 11 }, 1: { halign: 'left', fontStyle: 'bold' }, 2: { halign: 'left' }, 3: { fontStyle: 'bold' } },
+        didParseCell: (d) => {
+          if (d.section === 'body' && d.column.index === 3) d.cell.styles.textColor = String(d.cell.raw ?? '').startsWith('-') ? ROUGE : VERT;
+          couleurNature(4)(d);
+        },
+      });
+      y = finY(doc) + 10;
+
+      // 4. Détail par équipe : chaque fiche avec son FGP, son type, son motif, son délai et ses points
+      const doublons = doublonsCable(ots);
+      const hautPage = doc.internal.pageSize.getHeight();
+      const largeurPage = doc.internal.pageSize.getWidth();
+      doc.addPage();
+      y = sousTitre(doc, 16, 'Détail des fiches par équipe');
+      doc.setFontSize(8);
+      doc.setTextColor(90, 100, 115);
+      doc.text(t('Chaque fiche avec ses points selon le barème (voir les règles des points à la fin). Les pénalités de la période sont ajoutées sous les fiches.'), 12, y + 2);
+      doc.setTextColor(15, 23, 42);
+      y += 8;
+      for (const s of classees) {
+        const fiches = ots
+          .filter((o) => o.equipe === s.equipe)
+          .filter((o) => {
+            if (o.statut === 'a_faire') return enCours && !estPourPlusTard(o, fin);
+            const j = o.traiteLe ? isoJour(new Date(o.traiteLe)) : '';
+            return j >= debut && j <= fin;
+          })
+          .map((o) => ({ o, d: delaiOT({ ...o, doublonCable: doublons.has(o.id) }, o.statut === 'a_faire' && jourPhoto ? finPhotoMs : undefined) }))
+          .sort(
+            (a, b) =>
+              Number(a.o.nature === 'derangement') - Number(b.o.nature === 'derangement') ||
+              ['fait', 'non_fait', 'a_faire'].indexOf(a.o.statut) - ['fait', 'non_fait', 'a_faire'].indexOf(b.o.statut) ||
+              (a.o.zone ?? '').localeCompare(b.o.zone ?? ''),
+          );
+        const pens = penalitesFiltrees.filter((x) => x.equipe === s.equipe && x.jour >= debut && x.jour <= fin);
+        if (!fiches.length && !pens.length) continue;
+        if (y > hautPage - 45) {
+          doc.addPage();
+          y = 16;
         }
+        // bandeau de l'équipe
+        const ptsFiches = fiches.reduce((a, f) => a + (f.o.statut === 'a_faire' ? 0 : f.d.points), 0);
+        const ptsPen = pens.reduce((a, x) => a + x.points, 0);
+        doc.setFillColor(30, 41, 59);
+        doc.rect(12, y, largeurPage - 24, 8, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.setTextColor(255, 255, 255);
+        doc.text(t(`${s.equipe}${chefDe(s.equipe) !== '-' ? `  -  chef : ${chefDe(s.equipe)}` : ''}`), 15, y + 5.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.text(
+          t(`${fiches.length} fiche${fiches.length > 1 ? 's' : ''}  -  fiches ${fmtPts(ptsFiches)}  -  pénalités ${fmtPts(ptsPen)}  -  total ${fmtPts(ptsFiches + ptsPen)} pts`),
+          largeurPage - 15,
+          y + 5.5,
+          { align: 'right' },
+        );
+        doc.setTextColor(15, 23, 42);
+        const typeFiche = (o: ProgrammeOT) => (o.nature === 'derangement' ? 'DRG' : `INS - ${(o.typeOt || '').toUpperCase() || 'INST'}`);
+        const etatFiche = (o: ProgrammeOT, d: ReturnType<typeof delaiOT>) =>
+          o.statut === 'fait' ? (d.etat === 'dans' ? 'Dans le délai' : 'Hors délai') : o.statut === 'non_fait' ? 'Non fait' : d.etat === 'retard' ? 'En cours (en retard)' : 'En cours';
+        autoTable(doc, {
+          ...STYLE,
+          startY: y + 8,
+          pageBreak: 'auto',
+          styles: { ...STYLE.styles, fontSize: 8, cellPadding: 1.3 },
+          headStyles: { ...STYLE.headStyles, fontSize: 8 },
+          head: [['N°', 'FGP', 'N° OT', 'Type', 'Zone', 'Motif', 'Délai', 'Points'].map(t)],
+          body: [
+            ...fiches.map(({ o, d }, i) =>
+              [i + 1, ligneLabel(o), o.numeroOt || '-', typeFiche(o), o.zone || '-', o.statut === 'a_faire' ? '-' : o.motif || '-', etatFiche(o, d), o.statut === 'a_faire' ? '-' : fmtPtsSigne(d.points)].map(t),
+            ),
+            ...pens.map((x) =>
+              ['', ligneLabel(x), x.numeroOt || '-', x.nature === 'derangement' ? 'DRG' : 'INS', '-', `Pénalité : ${MOTIF_PENALITE[x.motif]}${x.note ? ` (${x.note})` : ''}`, jourCourt(x.jour), fmtPtsSigne(x.points)].map(t),
+            ),
+          ],
+          foot: [['', '', '', '', '', '', 'Total', fmtPts(ptsFiches + ptsPen)].map(t)],
+          columnStyles: {
+            0: { halign: 'center', cellWidth: 9, fontStyle: 'normal' },
+            1: { halign: 'left', fontStyle: 'bold', cellWidth: 38 },
+            2: { cellWidth: 30 },
+            3: { cellWidth: 24 },
+            4: { cellWidth: 28 },
+            5: { halign: 'left' },
+            6: { cellWidth: 34 },
+            7: { cellWidth: 18, fontStyle: 'bold' },
+          },
+          didParseCell: (d) => {
+            if (d.section !== 'body') return;
+            const v = String(d.cell.raw ?? '');
+            if (d.row.index >= fiches.length) {
+              d.cell.styles.fillColor = [254, 242, 242];
+              if (d.column.index === 5 || d.column.index === 7) d.cell.styles.textColor = ROUGE;
+              return;
+            }
+            if (d.column.index === 6) d.cell.styles.textColor = v === 'Dans le délai' ? VERT : v.startsWith('En cours') ? [21, 101, 192] : ROUGE;
+            if (d.column.index === 7) d.cell.styles.textColor = v.startsWith('+') ? VERT : v.startsWith('-') && v !== '-' ? ROUGE : [90, 100, 115];
+          },
+        });
+        y = finY(doc) + 8;
       }
+
+      // 5. Règles des points (barème en vigueur), à la fin du document
+      doc.addPage();
+      y = 16;
+
+      reglesPoints(doc, autoTable, y);
+      piedDePage(doc);
       doc.save(`surveillance_${g}_${debut}.pdf`);
     } catch (e) {
       showToast(errMsg(e), 'error');

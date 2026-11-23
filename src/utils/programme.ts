@@ -102,12 +102,30 @@ const normal = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
-const MOTIFS_LEGERS = new Set([...MOTIFS_FAIT.filter((m) => m.leger).map((m) => normal(m.label)), normal('Problème électricité')]);
-const MOTIFS_SANS_POINT = new Set([
-  ...MOTIFS_FAIT.filter((m) => m.sansPoint).map((m) => normal(m.label)),
-  normal('Confirmé par le client'),
-  normal("Installé par quelqu'un"),
-]);
+const MOTIFS_LEGERS = new Set<string>();
+const MOTIFS_SANS_POINT = new Set<string>();
+/** Recalcule les motifs « sans intervention » et « sans point » après un changement de liste */
+function indexerMotifs() {
+  MOTIFS_LEGERS.clear();
+  MOTIFS_SANS_POINT.clear();
+  [...MOTIFS_FAIT.filter((m) => m.leger).map((m) => m.label), 'Problème électricité'].forEach((l) => MOTIFS_LEGERS.add(normal(l)));
+  [...MOTIFS_FAIT.filter((m) => m.sansPoint).map((m) => m.label), 'Confirmé par le client', "Installé par quelqu'un"].forEach((l) => MOTIFS_SANS_POINT.add(normal(l)));
+}
+indexerMotifs();
+
+/** Listes livrées avec l'application (bouton « Valeurs par défaut » de la page Paramètres) */
+export const MOTIFS_NON_FAIT_DEFAUT: MotifDef[] = MOTIFS_NON_FAIT.map((m) => ({ ...m }));
+export const MOTIFS_FAIT_DEFAUT: MotifDef[] = MOTIFS_FAIT.map((m) => ({ ...m }));
+
+/**
+ * Motifs modifiés par l'administrateur (page Paramètres, enregistrés dans la base) : remplacent
+ * le contenu des listes, lues à chaque affichage de la clôture et dans le calcul des points.
+ */
+export function appliquerMotifs(nonFait: MotifDef[], fait: MotifDef[]) {
+  MOTIFS_NON_FAIT.splice(0, MOTIFS_NON_FAIT.length, ...nonFait.map((m) => ({ ...m })));
+  MOTIFS_FAIT.splice(0, MOTIFS_FAIT.length, ...fait.map((m) => ({ ...m })));
+  indexerMotifs();
+}
 
 // ─── CST (changement de constitution) écrit dans le motif ─────────────────────
 // « Modem défectueux + CST CA1Z042611/1-4 », ou « CST CA1Z042611/1-4 » seul

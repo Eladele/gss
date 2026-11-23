@@ -101,7 +101,10 @@ const rouge = (v: Cell) => <span className="text-red-700">{v}</span>;
 const bleu = (v: Cell) => <span className="text-blue-600">{v}</span>;
 
 export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode, nature, period, equipes, villeDe }: Props) {
-  const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
+  // délais : seulement les fiches faites (OK) — une fiche en cours ou non faite n'est ni dans ni hors délai
+  const faites = useMemo(() => scoped.filter((s) => s.status === 'ok'), [scoped]);
+  const faitesAll = useMemo(() => scopedAll.filter((s) => s.status === 'ok'), [scopedAll]);
+  const byVille = useMemo(() => statsByVille(faites, equipes), [faites, equipes]);
   const poteauxParVille = useMemo(() => {
     // datés par la mise à jour de la fiche (updated_at)
     const m = new Map<string, number>();
@@ -122,11 +125,11 @@ export default function RapportsDetailles({ scoped, scopedAll, scopedSansPeriode
   };
   const ENTETES_MOTIFS = ['Motif', 'Fiches', '%', 'Faites', 'Non faites', 'Équipes'];
   const typesInstall = useMemo(() => MERGED_TYPES.filter((t) => !['CST', 'RLR', 'ANS'].includes(t)), []);
-  const installDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, typesInstall), [scopedAll, equipes, typesInstall]);
-  const cstDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['CST']), [scopedAll, equipes]);
-  const rlrDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['RLR']), [scopedAll, equipes]);
-  const ansDetail = useMemo(() => statsDelaiDetailleParVilleEtType(scopedAll, equipes, ['ANS']), [scopedAll, equipes]);
-  const drgVilleDetail = useMemo(() => statsByVille(scopedAll.filter((s) => s.type === 'DRG'), equipes), [scopedAll, equipes]);
+  const installDetail = useMemo(() => statsDelaiDetailleParVilleEtType(faitesAll, equipes, typesInstall), [faitesAll, equipes, typesInstall]);
+  const cstDetail = useMemo(() => statsDelaiDetailleParVilleEtType(faitesAll, equipes, ['CST']), [faitesAll, equipes]);
+  const rlrDetail = useMemo(() => statsDelaiDetailleParVilleEtType(faitesAll, equipes, ['RLR']), [faitesAll, equipes]);
+  const ansDetail = useMemo(() => statsDelaiDetailleParVilleEtType(faitesAll, equipes, ['ANS']), [faitesAll, equipes]);
+  const drgVilleDetail = useMemo(() => statsByVille(faitesAll.filter((s) => s.type === 'DRG'), equipes), [faitesAll, equipes]);
   const backlogRows = useMemo(() => statsBacklogParAnciennete(scopedSansPeriode), [scopedSansPeriode]);
   const nonOkDetail = useMemo(() => statsNonOk(scopedAll, equipes), [scopedAll, equipes]);
 

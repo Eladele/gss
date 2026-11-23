@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, EquipeTag, ZoneChip, TypeBadge, EmptyState
 import { DonutChart, TrendArea, WeekdayBars, RankedBars, Leaderboard } from '@/components/charts';
 import type { Equipe, Situation } from '@/types';
 import { fmtPts } from '@/utils/points';
-import { bilanProgramme, dateRef, matchesNature, poteauxDansPeriode, poteauxDe, presetToRange, todayStr, VILLE_COLORS, type NatureFilter } from './commun';
+import { bilanProgramme, dansPeriodeClassement, dateRef, matchesNature, poteauxDansPeriode, poteauxDe, presetToRange, todayStr, VILLE_COLORS, type NatureFilter } from './commun';
 
 const WEEKDAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
 
@@ -26,16 +26,31 @@ interface Props {
   nbVilles: number;
 }
 
+type Detail = 'dans' | 'hors' | 'nonFaites' | 'enCours' | 'retard';
+const TITRE_DETAIL: Record<Detail, string> = {
+  dans: 'Fiches faites dans le délai',
+  hors: 'Fiches faites hors délai',
+  nonFaites: 'Fiches non faites',
+  enCours: 'Fiches en cours (encore dans le délai)',
+  retard: 'Fiches en cours en retard',
+};
+
 export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, nature, period, jourProgramme, equipes, villeDe, nbVilles }: Props) {
-  const [delaiDetail, setDelaiDetail] = useState<'dans' | 'hors' | null>(null);
+  const [delaiDetail, setDelaiDetail] = useState<Detail | null>(null);
   const [repeatsOpen, setRepeatsOpen] = useState(false);
   const [poteauxOpen, setPoteauxOpen] = useState(false);
   const programme = useMemo(() => (jourProgramme ? bilanProgramme(scoped) : null), [jourProgramme, scoped]);
   const couleur = nature === 'derangement' ? '#E65100' : nature === 'all' ? '#6A1B9A' : '#1565C0';
 
-  const byEquipe = useMemo(() => statsByEquipe(scoped, equipes), [scoped, equipes]);
+  // délais et conformité : seulement les fiches faites (OK). Une fiche en cours n'est ni dans ni
+  // hors délai tant qu'elle n'est pas faite (« en retard » à part) ; une non faite est comptée à part.
+  const faites = useMemo(() => scoped.filter((s) => s.status === 'ok'), [scoped]);
+  const nonFaites = useMemo(() => scoped.filter((s) => s.status === 'non_ok'), [scoped]);
+  const ouvertes = useMemo(() => scoped.filter((s) => s.status !== 'ok' && s.status !== 'non_ok'), [scoped]);
+  const enRetard = useMemo(() => ouvertes.filter(isHorsDelai), [ouvertes]);
+  const byEquipe = useMemo(() => statsByEquipe(faites, equipes), [faites, equipes]);
   const byVille = useMemo(() => statsByVille(scoped, equipes), [scoped, equipes]);
-  const byType = useMemo(() => statsByType(scoped), [scoped]);
+  const byType = useMemo(() => statsByType(faites), [faites]);
   const repeats = useMemo(() => repeatDerangementByClient(scopedAll), [scopedAll]);
 
   const total = scoped.length;
@@ -49,19 +64,24 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
     [scopedSansPeriode, period, nature],
   );
   const totalPoteaux = fichesPoteaux.reduce((sum, x) => sum + x.n, 0);
-  const horsDelai = byEquipe.reduce((a, e) => a + e.horsDelai, 0);
-  const dansDelai = total - horsDelai;
-  const pctConf = total ? Math.round((dansDelai / total) * 1000) / 10 : 0;
+  const horsDelai = faites.filter(isHorsDelai).length;
+  const dansDelai = faites.length - horsDelai;
+  const pctConf = faites.length ? Math.round((dansDelai / faites.length) * 1000) / 10 : 0;
   const today = todayStr();
-  const totalAujourdhui = scoped.filter((s) => dateRef(s) === today || s.status === 'pending' || s.status === 'in_progress').length;
+  // même règle que la période choisie : les fiches encore ouvertes comptent aujourd'hui
+  const totalAujourdhui = scoped.filter((s) => dansPeriodeClassement(s, { from: today, to: today })).length;
   const weekStart = presetToRange('semaine').from!;
-  const totalSemaine = scoped.filter((s) => dateRef(s) >= weekStart).length;
+  const totalSemaine = scoped.filter((s) => dansPeriodeClassement(s, { from: weekStart, to: today })).length;
   const villesActives = new Set(scoped.map((s) => villeDe(s.equipe))).size;
 
   const delaiDetailRows = useMemo(() => {
     if (!delaiDetail) return [];
-    return scoped.filter((s) => (delaiDetail === 'hors' ? isHorsDelai(s) : !isHorsDelai(s)));
-  }, [scoped, delaiDetail]);
+    if (delaiDetail === 'nonFaites') return nonFaites;
+    if (delaiDetail === 'retard') return enRetard;
+    if (delaiDetail === 'enCours') return ouvertes.filter((s) => !isHorsDelai(s));
+    return faites.filter((s) => (delaiDetail === 'hors' ? isHorsDelai(s) : !isHorsDelai(s)));
+  }, [faites, nonFaites, ouvertes, enRetard, delaiDetail]);
+  const basculer = (d: Detail) => setDelaiDetail(delaiDetail === d ? null : d);
 
   // Tendance : 30 jours qui finissent à la fin de la période
   const trendPoints = useMemo(() => {
@@ -171,20 +191,26 @@ export default function VueEnsemble({ scoped, scopedAll, scopedSansPeriode, natu
         <StatCard value={totalAujourdhui} label="Aujourd'hui" icon="" accent="#00838F" />
         <StatCard value={total} label="Total période" icon="" accent="#E65100" />
       </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <StatCard value={faites.length} label="Faites" icon="" accent="#2E7D32" />
+        <StatCard value={nonFaites.length} label="Non faites" icon="" accent="#C62828" active={delaiDetail === 'nonFaites'} onClick={() => basculer('nonFaites')} />
+        <StatCard value={ouvertes.length - enRetard.length} label="En cours" icon="" accent="#0277BD" active={delaiDetail === 'enCours'} onClick={() => basculer('enCours')} />
+        <StatCard value={enRetard.length} label="En cours en retard" icon="" accent="#BF360C" active={delaiDetail === 'retard'} onClick={() => basculer('retard')} />
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-        <StatCard value={`${pctConf}%`} label="Conformité" icon="" accent="#2E7D32" />
-        <StatCard value={dansDelai} label="Dans délai" icon="" accent="#1565C0" active={delaiDetail === 'dans'} onClick={() => setDelaiDetail(delaiDetail === 'dans' ? null : 'dans')} />
-        <StatCard value={horsDelai} label="Hors délai" icon="" accent="#C62828" active={delaiDetail === 'hors'} onClick={() => setDelaiDetail(delaiDetail === 'hors' ? null : 'hors')} />
+        <StatCard value={`${pctConf}%`} label="Conformité (fiches faites)" icon="" accent="#2E7D32" />
+        <StatCard value={dansDelai} label="Faites dans délai" icon="" accent="#1565C0" active={delaiDetail === 'dans'} onClick={() => basculer('dans')} />
+        <StatCard value={horsDelai} label="Faites hors délai" icon="" accent="#C62828" active={delaiDetail === 'hors'} onClick={() => basculer('hors')} />
         <StatCard value={repeats.length} label="DRG répétés" icon="" accent="#8E24AA" active={repeatsOpen} onClick={() => setRepeatsOpen(!repeatsOpen)} />
         <StatCard value={totalPoteaux} label="Poteaux posés" icon="" accent="#6D4C41" active={poteauxOpen} onClick={() => setPoteauxOpen(!poteauxOpen)} />
       </div>
 
       {delaiDetail && (
-        <Card className={delaiDetail === 'hors' ? 'border-red-200 bg-red-50/30' : 'border-blue-200 bg-blue-50/30'}>
+        <Card className={delaiDetail === 'hors' || delaiDetail === 'retard' || delaiDetail === 'nonFaites' ? 'border-red-200 bg-red-50/30' : 'border-blue-200 bg-blue-50/30'}>
           <CardHeader>
             <div className="flex items-center justify-between w-full gap-2">
               <CardTitle>
-                {delaiDetail === 'hors' ? 'Situations hors délai' : 'Situations dans les délais'} ({delaiDetailRows.length})
+                {TITRE_DETAIL[delaiDetail]} ({delaiDetailRows.length})
               </CardTitle>
               <button onClick={() => setDelaiDetail(null)} className="text-xs font-semibold text-slate-500 hover:text-slate-700 shrink-0">
                 Fermer ✕

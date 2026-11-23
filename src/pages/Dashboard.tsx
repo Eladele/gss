@@ -12,7 +12,6 @@ import {
   statsByVille,
   statsByType,
   repeatDerangementByClient,
-  inPeriod,
   exportStatsToExcel,
   MERGED_TYPES,
   statsDelaiDetailleParVilleEtType,
@@ -31,7 +30,6 @@ import {
   ANNEES_SELECT,
   MOIS_FR,
   dansPeriodeClassement,
-  dateRef,
   estDuProgramme,
   firstOfMonthStr,
   matchesNature,
@@ -115,9 +113,11 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (p: 'import-exc
       }),
     [situations, fEquipe, fVille, villeDe],
   );
-  // « Choisir une date » : seulement le programme de ce jour (fiches distribuées pour cette date)
+  // « Choisir une date » : seulement le programme de ce jour (fiches distribuées pour cette date).
+  // Sinon, comme la surveillance : faite au jour de sa clôture, non faite au jour où elle l'a été,
+  // encore ouverte (à faire, en cours, urgente) dans toute période qui contient aujourd'hui
   const scopedAll = useMemo(
-    () => scopedSansPeriode.filter((s) => (preset === 'date' ? estDuProgramme(s, jourChoisi) : inPeriod(dateRef(s), period))),
+    () => scopedSansPeriode.filter((s) => (preset === 'date' ? estDuProgramme(s, jourChoisi) : dansPeriodeClassement(s, period))),
     [scopedSansPeriode, period, preset, jourChoisi],
   );
   const scoped = useMemo(() => scopedAll.filter((s) => matchesNature(s, nature)), [scopedAll, nature]);

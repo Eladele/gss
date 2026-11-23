@@ -12,7 +12,7 @@
 import type { Equipe, Situation } from '@/types';
 import { GSS_LOGO_BASE64 } from '@/assets/logoBase64';
 import { isHorsDelai } from '@/utils/stats';
-import { delaiOT, doublonsCable } from '@/utils/points';
+import { BAREME_OT, POINTS, delaiOT, doublonsCable } from '@/utils/points';
 import { poteauxDe } from '@/components/dashboard/commun';
 
 export const fr = (s: string) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}` : '');
@@ -26,7 +26,7 @@ export const CATEGORIES = [
 ] as const;
 
 // jsPDF n'a que les polices standard : quelques caractères à remplacer
-const t = (v: unknown) =>
+export const t = (v: unknown) =>
   String(v ?? '')
     .replace(/\u2212/g, '-')
     .replace(/[\u2018\u2019]/g, "'")
@@ -34,22 +34,22 @@ const t = (v: unknown) =>
     .replace(/\u2026/g, '...')
     .replace(/[\u00a0\u202f]/g, ' ');
 
-async function outilsPdf() {
+export async function outilsPdf() {
   const [{ jsPDF }, modTable] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   // selon le bundler, la fonction est l'export par défaut ou « autoTable »
   const mt = modTable as unknown as { default?: unknown; autoTable?: unknown };
   const autoTable = (typeof mt.default === 'function' ? mt.default : (mt.autoTable ?? (mt.default as { default?: unknown })?.default)) as typeof import('jspdf-autotable').default;
   return { jsPDF, autoTable };
 }
-type Doc = InstanceType<Awaited<ReturnType<typeof outilsPdf>>['jsPDF']>;
-const finY = (doc: Doc) => (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 40;
+export type Doc = InstanceType<Awaited<ReturnType<typeof outilsPdf>>['jsPDF']>;
+export const finY = (doc: Doc) => (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 40;
 
-const BLEU: [number, number, number] = [21, 101, 192];
-const VERT: [number, number, number] = [46, 125, 50];
-const ROUGE: [number, number, number] = [198, 40, 40];
+export const BLEU: [number, number, number] = [21, 101, 192];
+export const VERT: [number, number, number] = [46, 125, 50];
+export const ROUGE: [number, number, number] = [198, 40, 40];
 
 /** En-tête : logo GSS à gauche, titre et sous-titres à droite ; renvoie la position suivante */
-function entete(doc: Doc, titre: string, lignes: string[]) {
+export function entete(doc: Doc, titre: string, lignes: string[]) {
   const w = doc.internal.pageSize.getWidth();
   try {
     doc.addImage(GSS_LOGO_BASE64, 'PNG', 12, 8, 32, 19.6); // 228 × 140 px
@@ -72,7 +72,7 @@ function entete(doc: Doc, titre: string, lignes: string[]) {
   return bas + 7;
 }
 
-function piedDePage(doc: Doc) {
+export function piedDePage(doc: Doc) {
   const n = doc.getNumberOfPages();
   const w = doc.internal.pageSize.getWidth();
   const h = doc.internal.pageSize.getHeight();
@@ -84,7 +84,7 @@ function piedDePage(doc: Doc) {
   }
 }
 
-function sousTitre(doc: Doc, y: number, texte: string) {
+export function sousTitre(doc: Doc, y: number, texte: string) {
   if (y > doc.internal.pageSize.getHeight() - 30) {
     doc.addPage();
     y = 16;
@@ -98,7 +98,7 @@ function sousTitre(doc: Doc, y: number, texte: string) {
   return y + 3;
 }
 
-const STYLE = {
+export const STYLE = {
   theme: 'grid' as const,
   styles: { fontSize: 9, cellPadding: 1.8, halign: 'center' as const, valign: 'middle' as const },
   headStyles: { fillColor: BLEU, textColor: 255, fontStyle: 'bold' as const, halign: 'center' as const },
@@ -110,6 +110,70 @@ const STYLE = {
   showFoot: 'lastPage' as const,
 };
 
+const p = (n: number) => (Math.round(n * 100) / 100 || 0).toLocaleString('fr-FR');
+const ps = (n: number) => (n > 0 ? `+${p(n)}` : p(n));
+
+/**
+ * Règles des points en vigueur (barème de la page Paramètres), en bas d'un rapport :
+ * un tableau « Situation / Points » facile à lire ; renvoie la position suivante.
+ */
+export function reglesPoints(doc: Doc, autoTable: Awaited<ReturnType<typeof outilsPdf>>['autoTable'], y: number) {
+  const b = BAREME_OT;
+  const pen = POINTS.penalites;
+  if (y > doc.internal.pageSize.getHeight() - 70) {
+    doc.addPage();
+    y = 16;
+  }
+  y = sousTitre(doc, y, 'Règles des points');
+  const regles: [string, string][] = [
+    ['Installation faite en 24 h', ps(b.inst24h)],
+    ['Installation faite en 48 h', ps(b.inst48h)],
+    ['Installation faite en 48 h avec poteau', ps(b.inst48hPoteau)],
+    ['Plantation de poteau (24 h ou en retard)', ps(b.plantationPoteau)],
+    ['Installation en retard (1er jour de retard)', ps(b.instRetard)],
+    ['Dérangement fait dans le délai', ps(b.drg)],
+    ['Chaque jour de retard en plus (installation ou dérangement)', ps(b.retardParJour)],
+    ['Câble distribution réparé (une seule fiche par panne)', ps(b.cableDistribution)],
+    ['Câble MPO réparé (une seule fiche par panne)', ps(b.cableMpo)],
+    ['Autre panne réseau (câble transport, HUB-BOX, SUB-BOX)', `points x ${p(POINTS.coefReseau)}`],
+    [
+      'Modem défectueux, problème électricité',
+      `au plus ${p(POINTS.sansIntervention)} (+${p(POINTS.bonusDecharge)} décharge, +${p(POINTS.bonusScan)} scanné)`,
+    ],
+    ["Installé par quelqu'un, confirmé par client, erreur de signalisation", p(POINTS.faitSansPoint)],
+    ['Fiche « non faite »', p(POINTS.nonFait)],
+    ['Pénalité : fiche ni faite ni « non faite » au contrôle de 22 h', p(pen.non_traitee)],
+    ['Pénalité : fiche ouverte retardée', p(pen.retardee)],
+    ['Pénalité : faux OK (la fiche perd ses points et est rouverte)', p(pen.faux_ok)],
+  ];
+  autoTable(doc, {
+    ...STYLE,
+    startY: y,
+    pageBreak: 'auto',
+    head: [['Situation', 'Points'].map(t)],
+    body: regles.map((r) => r.map(t)),
+    styles: { ...STYLE.styles, fontSize: 8.5, cellPadding: 1.4 },
+    columnStyles: { 0: { halign: 'left', cellWidth: 150 }, 1: { halign: 'center', fontStyle: 'bold' } },
+    didParseCell: (d) => {
+      if (d.section !== 'body' || d.column.index !== 1) return;
+      const v = String(d.cell.raw ?? '');
+      d.cell.styles.textColor = v.startsWith('-') ? ROUGE : v.startsWith('+') ? VERT : [71, 85, 105];
+    },
+  });
+  y = finY(doc) + 5;
+  doc.setFontSize(8);
+  doc.setTextColor(90, 100, 115);
+  const notes = doc.splitTextToSize(
+    t(
+      'Délais comptés depuis « OT reçu le » en jours ouvrés (dimanches et jours fériés non comptés). Fiche reçue déjà hors délai et faite avant 22 h : barème « dans le délai ». Réaffecter une fiche avant son échéance ne pénalise pas.',
+    ),
+    doc.internal.pageSize.getWidth() - 24,
+  );
+  doc.text(notes, 12, y);
+  doc.setTextColor(15, 23, 42);
+  return y + notes.length * 3.6 + 4;
+}
+
 interface Delais {
   dans: number;
   hors: number;
@@ -117,7 +181,8 @@ interface Delais {
 function delais(l: Situation[], types: readonly string[]): Delais {
   const d = { dans: 0, hors: 0 };
   for (const s of l) {
-    if (s.status === 'non_ok' || !types.includes(s.type)) continue;
+    // seulement les fiches faites : une fiche en cours ou non faite n'est ni dans ni hors délai
+    if (s.status !== 'ok' || !types.includes(s.type)) continue;
     if (isHorsDelai(s)) d.hors++;
     else d.dans++;
   }

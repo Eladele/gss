@@ -5,6 +5,7 @@
 // Barème et en-tête : écriture par la fonction modifier_parametre (réservée à l'admin, valeurs
 // contrôlées, historique). Réglages généraux : écrits directement dans app_settings.
 import { supabase } from '@/lib/supabase';
+import { MOTIFS_FAIT_DEFAUT, MOTIFS_NON_FAIT_DEFAUT, type MotifDef } from '@/utils/programme';
 
 export interface Bareme {
   faitDansDelai: number; // fiche faite avant son échéance
@@ -179,11 +180,59 @@ export function reglagesVersBase(r: Reglages): Record<string, unknown> {
   };
 }
 
+// ─── Motifs de clôture du programme (app_settings « motifs_programme ») ────────
+export interface MotifsProgramme {
+  nonFait: MotifDef[];
+  fait: MotifDef[];
+}
+export const MOTIFS_DEFAUT: MotifsProgramme = { nonFait: MOTIFS_NON_FAIT_DEFAUT, fait: MOTIFS_FAIT_DEFAUT };
+
+function listeMotifs(v: unknown, defaut: MotifDef[], champs: (keyof MotifDef)[]): MotifDef[] {
+  if (!Array.isArray(v)) return defaut.map((m) => ({ ...m }));
+  const vus = new Set<string>();
+  const out: MotifDef[] = [];
+  for (const x of v as unknown[]) {
+    const o = objet(x);
+    const label = typeof o.label === 'string' ? o.label.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+    if (!label || vus.has(label.toLowerCase())) continue;
+    vus.add(label.toLowerCase());
+    const m: MotifDef = { label };
+    for (const c of champs) {
+      if (c === 'poteaux') {
+        const n = Math.round(Number(o.poteaux) || 0);
+        if (n > 0) m.poteaux = Math.min(5, n);
+      } else if (o[c] === true) (m as unknown as Record<string, boolean>)[c] = true;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
+export function motifsDepuisBase(v: unknown): MotifsProgramme {
+  const o = objet(v);
+  return {
+    nonFait: listeMotifs(o.non_fait, MOTIFS_NON_FAIT_DEFAUT, ['installation', 'poteaux']),
+    fait: listeMotifs(o.fait, MOTIFS_FAIT_DEFAUT, ['reseau', 'leger', 'sansPoint']),
+  };
+}
+
+/** Motifs : écrits dans app_settings « motifs_programme » (comme les réglages généraux) */
+export async function enregistrerMotifs(m: MotifsProgramme): Promise<MotifsProgramme> {
+  const propre = motifsDepuisBase({ non_fait: m.nonFait, fait: m.fait });
+  if (!propre.nonFait.length || !propre.fait.length) throw new Error('Il faut au moins un motif « fait » et un motif « non fait »');
+  const { error } = await supabase
+    .from('app_settings')
+    .upsert({ key: 'motifs_programme', value: JSON.stringify({ non_fait: propre.nonFait, fait: propre.fait }) }, { onConflict: 'key' });
+  if (error) throw new Error(error.message || 'Enregistrement impossible');
+  return propre;
+}
+
 export interface Parametres {
   bareme: Bareme;
   baremeOt: BaremeOT;
   entete: EnteteVirement;
   reglages: Reglages;
+  motifs: MotifsProgramme;
 }
 
 export interface ModifParametre {
@@ -259,10 +308,10 @@ export function enteteDepuisBase(v: unknown): EnteteVirement {
 
 /** Paramètres enregistrés (valeurs par défaut pour ce qui manque, ou si le module n'est pas installé) */
 export async function fetchParametres(): Promise<Parametres> {
-  const { data, error } = await supabase.from('app_settings').select('key, value').in('key', ['bareme_points', 'bareme_ot', 'entete_virement', 'parametres_generaux']);
+  const { data, error } = await supabase.from('app_settings').select('key, value').in('key', ['bareme_points', 'bareme_ot', 'entete_virement', 'parametres_generaux', 'motifs_programme']);
   if (error) {
     console.error('fetchParametres:', error);
-    return { bareme: { ...BAREME_DEFAUT }, baremeOt: { ...BAREME_OT_DEFAUT }, entete: { ...ENTETE_DEFAUT, banques: {} }, reglages: reglagesDepuisBase({}) };
+    return { bareme: { ...BAREME_DEFAUT }, baremeOt: { ...BAREME_OT_DEFAUT }, entete: { ...ENTETE_DEFAUT, banques: {} }, reglages: reglagesDepuisBase({}), motifs: motifsDepuisBase({}) };
   }
   const val = (k: string) => lireJson((data ?? []).find((r) => r.key === k)?.value);
   return {
@@ -270,6 +319,7 @@ export async function fetchParametres(): Promise<Parametres> {
     baremeOt: baremeOtDepuisBase(val('bareme_ot')),
     entete: enteteDepuisBase(val('entete_virement')),
     reglages: reglagesDepuisBase(val('parametres_generaux')),
+    motifs: motifsDepuisBase(val('motifs_programme')),
   };
 }
 

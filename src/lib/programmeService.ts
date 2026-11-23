@@ -1018,7 +1018,22 @@ export async function annulerPenalite(id: string): Promise<void> {
 /** Contrôle les jours ouvrés passés qui ne l'ont pas été (si la tâche de 22 h n'a pas tourné) */
 export async function rattraperControles(): Promise<number> {
   const { data, error } = await supabase.rpc('rattraper_controles');
+  // photo du programme du jour (fiches en cours par équipe) : sans effet si le SQL n'est pas installé
+  await supabase.rpc('photographier_programme').then(
+    () => undefined,
+    () => undefined,
+  );
   return error ? 0 : Number(data) || 0;
+}
+
+/**
+ * Photos du programme entre from et to (supabase_photo_programme.sql) : pour chaque jour, les
+ * fiches encore en cours de chaque équipe en fin de journée. Vide si la table n'existe pas.
+ */
+export async function fetchPhotosProgramme(from: string, to: string): Promise<{ jour: string; ot: ProgrammeOT }[]> {
+  const { data, error } = await supabase.from('programme_photo').select('jour, donnees').gte('jour', from).lte('jour', to).limit(20000);
+  if (error) return [];
+  return (data ?? []).map((r) => ({ jour: String(r.jour).slice(0, 10), ot: mapOt(r.donnees) }));
 }
 
 /** Dernier contrôle de 22 h effectué */

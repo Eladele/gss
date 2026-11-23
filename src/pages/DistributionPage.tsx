@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CalendarClock, CalendarDays, ChevronDown, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, RotateCcw, Search, Send, Trash2, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
-import { Button, Card, Select, useToast } from '@/components/ui';
+import { Button, Card, Modal, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
 import { parseOtPdf, programmeWhatsApp, type ParsedOT } from '@/utils/otPdf';
 import {
@@ -400,7 +400,19 @@ export default function DistributionPage() {
   const [histDate, setHistDate] = useState(() => (new Date().getUTCHours() >= 22 ? jourOuvreSuivant(todayISO()) : todayISO()));
   const [hist, setHist] = useState<ProgrammeOT[]>([]);
   const [histError, setHistError] = useState('');
-  const [armed, setArmed] = useState<string | null>(null);
+  // confirmation avant de supprimer ou de réaffecter une fiche à faire
+  const [confirmation, setConfirmation] = useState<{ titre: string; texte: string; bouton: string; danger?: boolean; action: () => Promise<void> } | null>(null);
+  const [confirmEnCours, setConfirmEnCours] = useState(false);
+  const confirmer = async () => {
+    if (!confirmation) return;
+    setConfirmEnCours(true);
+    try {
+      await confirmation.action();
+    } finally {
+      setConfirmEnCours(false);
+      setConfirmation(null);
+    }
+  };
   // toutes les fiches en cours (ouvertes), épinglées en haut du suivi quel que soit le jour choisi
   const [ouvertes, setOuvertes] = useState<ProgrammeOT[]>([]);
   const [penaliser, setPenaliser] = useState(true);
@@ -895,7 +907,16 @@ export default function DistributionPage() {
             >
               <Flame className="w-3.5 h-3.5" />
             </button>
-            <Select aria-label="Réaffecter" className="!py-1 !text-xs" value={o.equipe} onChange={(e) => doReassign(o, e.target.value)}>
+            <Select aria-label="Réaffecter" className="!py-1 !text-xs" value={o.equipe} onChange={(e) => {
+                const equipe = e.target.value;
+                if (equipe === o.equipe) return;
+                setConfirmation({
+                  titre: 'Réaffecter la fiche ?',
+                  texte: `${ligneLabel(o)}${o.numeroOt ? ` (OT ${o.numeroOt})` : ''} : de ${o.equipe || '—'} vers ${equipe}.`,
+                  bouton: `Réaffecter à ${equipe}`,
+                  action: () => doReassign(o, equipe),
+                });
+              }}>
               {!equipeNames.includes(o.equipe) && <option value={o.equipe}>{o.equipe || '—'}</option>}
               {equipeNames.map((nm) => (
                 <option key={nm} value={nm}>
@@ -916,21 +937,27 @@ export default function DistributionPage() {
             </button>
             <button
               aria-label="Retirer du programme"
-              title={armed === o.id ? 'Cliquer encore pour confirmer' : 'Retirer du programme'}
-              onClick={async () => {
-                if (armed !== o.id) return setArmed(o.id);
-                try {
-                  modifierLocal([o.id], () => null);
-                  await deleteOts([o.id]);
-                  setArmed(null);
-                  rafraichir();
-                  showToast('Fiche retirée du programme', 'info');
-                } catch (err) {
-                  rafraichir();
-                  showToast(errMsg(err), 'error');
-                }
-              }}
-              className={`p-1.5 rounded-md ${armed === o.id ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-red-700 hover:bg-red-50'}`}
+              title="Retirer du programme"
+              onClick={() =>
+                setConfirmation({
+                  titre: 'Supprimer la fiche du programme ?',
+                  texte: `${ligneLabel(o)}${o.numeroOt ? ` (OT ${o.numeroOt})` : ''} de ${o.equipe || '—'} sera retirée du programme.`,
+                  bouton: 'Supprimer',
+                  danger: true,
+                  action: async () => {
+                    try {
+                      modifierLocal([o.id], () => null);
+                      await deleteOts([o.id]);
+                      rafraichir();
+                      showToast('Fiche retirée du programme', 'info');
+                    } catch (err) {
+                      rafraichir();
+                      showToast(errMsg(err), 'error');
+                    }
+                  },
+                })
+              }
+              className="p-1.5 rounded-md text-slate-400 hover:text-red-700 hover:bg-red-50"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -1385,7 +1412,16 @@ export default function DistributionPage() {
                           aria-label={`Tout réaffecter (${equipe})`}
                           className="!py-1 !text-xs"
                           value=""
-                          onChange={(e) => e.target.value && toutReaffecter(list, e.target.value)}
+                          onChange={(e) => {
+                            const vers = e.target.value;
+                            if (!vers) return;
+                            setConfirmation({
+                              titre: 'Réaffecter toutes les fiches ?',
+                              texte: `${list.length} fiche${list.length > 1 ? 's' : ''} de ${equipe} vers ${vers}.`,
+                              bouton: `Tout réaffecter à ${vers}`,
+                              action: () => toutReaffecter(list, vers),
+                            });
+                          }}
                         >
                           <option value="">Tout réaffecter à…</option>
                           {equipeNames
@@ -1551,6 +1587,23 @@ export default function DistributionPage() {
           </Card>
         )}
       </div>
+
+      <Modal open={!!confirmation} onClose={() => !confirmEnCours && setConfirmation(null)} title={confirmation?.titre ?? ''}>
+        <p className="text-sm text-slate-600 mb-5">{confirmation?.texte}</p>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setConfirmation(null)} disabled={confirmEnCours}>
+            Annuler
+          </Button>
+          <Button
+            onClick={confirmer}
+            disabled={confirmEnCours}
+            variant={confirmation?.danger ? 'danger' : 'primary'}
+            icon={confirmation?.danger ? <Trash2 className="w-4 h-4" /> : undefined}
+          >
+            {confirmEnCours ? '…' : confirmation?.bouton}
+          </Button>
+        </div>
+      </Modal>
 
       {urgentModalOpen && (
         <AffecterUrgentModal
