@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier, NoeudReseau } from '@/types';
+import type { User, Situation, Notification, ImportRecord, Equipe, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, LoanPayment, SalaryMonth, Chantier, NoeudReseau } from '@/types';
 import type { ScanImportSnapshot } from '@/lib/supabaseService';
 import { SAMPLE_NOTIFICATIONS, ZONE_EQUIPE_MAP } from '@/data';
 import { errMsg } from '@/utils';
@@ -49,6 +49,12 @@ import {
   updateLoan,
   deleteLoan,
   recordLoanPayment as recordLoanPaymentService,
+  fetchLoanPayments,
+  fetchSalaryMonths,
+  saveDateDistribution,
+  validerDistribution as validerDistributionService,
+  annulerDistribution as annulerDistributionService,
+  solderPretExceptionnel,
   fetchChantiers,
   createChantier,
   updateChantier,
@@ -70,6 +76,8 @@ interface AppState {
   directorSignature: string | null; // ← nouveau
   leaves: LeaveRecord[];
   loans: Loan[];
+  loanPayments: LoanPayment[];
+  salaryMonths: SalaryMonth[];
   chantiers: Chantier[];
   reseauNoeuds: NoeudReseau[];
   vehicles: Vehicle[];
@@ -147,6 +155,7 @@ interface AppState {
     dateDebut: string;
     dureeMois?: number;
     banqueCaisse?: string;
+    moisPremierPrelevement?: string;
   }) => Promise<void>;
   editLoan: (
     id: string,
@@ -156,10 +165,23 @@ interface AppState {
       dateDebut: string;
       dureeMois?: number;
       banqueCaisse?: string;
+      moisPremierPrelevement: string;
     }>,
   ) => Promise<void>;
   removeLoan: (id: string) => Promise<void>;
   recordLoanPayment: (loanId: string, month: string) => Promise<void>;
+  /** recharge prêts + prélèvements + mois de paie (après une distribution) */
+  loadPaie: () => Promise<void>;
+  setDateDistribution: (mois: string, date: string) => Promise<void>;
+  validerDistribution: (params: {
+    mois: string;
+    date: string;
+    totalNet: number;
+    prelevements: { loanId: string; montant: number }[];
+  }) => Promise<void>;
+  annulerDistribution: (mois: string) => Promise<void>;
+  /** cas exceptionnel : le prêt se termine sans prélèvement sur le salaire */
+  solderPret: (loanId: string, motif: string) => Promise<void>;
   loadChantiers: () => Promise<void>;
   addChantier: (c: Partial<Chantier>) => Promise<void>;
   editChantier: (id: string, c: Partial<Chantier>) => Promise<void>;
@@ -213,6 +235,8 @@ export const useAppStore = create<AppState>()(
       leaves: [],
       directorSignature: null, 
       loans: [],
+      loanPayments: [],
+      salaryMonths: [],
       chantiers: [],
       reseauNoeuds: [],
       vehicles: [],
@@ -238,6 +262,8 @@ export const useAppStore = create<AppState>()(
           employees: [],
           leaves: [],
           loans: [],
+          loanPayments: [],
+          salaryMonths: [],
           chantiers: [],
           reseauNoeuds: [],
           vehicles: [],
@@ -521,8 +547,14 @@ export const useAppStore = create<AppState>()(
 
       // ─── Employés, congés & prêts ─────────────────────────────────────────
       loadEmployees: async () => {
-        const [employees, leaves, loans] = await Promise.all([fetchEmployees(), fetchLeaves(), fetchLoans()]);
-        set({ employees, leaves, loans });
+        const [employees, leaves, loans, loanPayments, salaryMonths] = await Promise.all([
+          fetchEmployees(),
+          fetchLeaves(),
+          fetchLoans(),
+          fetchLoanPayments(),
+          fetchSalaryMonths(),
+        ]);
+        set({ employees, leaves, loans, loanPayments, salaryMonths });
       },
 // ← nouveau
 loadDirectorSignature: async () => {
@@ -601,7 +633,9 @@ setDirectorSignature: async (base64) => {
         if (!previous) return;
         set((s) => ({ loans: s.loans.map((l) => (l.id === id ? { ...l, ...loan } : l)) }));
         try {
-          await updateLoan(id, loan);
+          // la base recalcule reste / statut / durée / fin prévue
+          const maj = await updateLoan(id, loan);
+          if (maj) set((s) => ({ loans: s.loans.map((l) => (l.id === id ? maj : l)) }));
         } catch (err: unknown) {
           set((s) => ({ loans: s.loans.map((l) => (l.id === id ? previous : l)) }));
           throw err;
@@ -623,17 +657,47 @@ setDirectorSignature: async (base64) => {
         const loan = get().loans.find((l) => l.id === loanId);
         if (!loan) return;
         const montant = Math.min(loan.mensualite, loan.reste);
-        const newReste = Math.max(0, loan.reste - loan.mensualite);
         try {
-          await recordLoanPaymentService(loanId, month, montant, newReste);
-          set((s) => ({
-            loans: s.loans.map((l) => (l.id === loanId ? { ...l, reste: newReste, statut: newReste <= 0 ? 'solde' : 'actif' } : l)),
-          }));
-          get().addNotification('Mensualité prélevée', `${montant} MRU déduits — reste ${newReste} MRU.`, 'ok');
+          const maj = await recordLoanPaymentService(loanId, month, montant);
+          const loanPayments = await fetchLoanPayments();
+          set((s) => ({ loanPayments, loans: maj ? s.loans.map((l) => (l.id === loanId ? maj : l)) : s.loans }));
+          get().addNotification('Mensualité prélevée', `${montant} MRU déduits — reste ${maj?.reste ?? loan.reste - montant} MRU.`, 'ok');
         } catch (err: unknown) {
           get().addNotification('Échec', errMsg(err) || 'Mensualité déjà enregistrée pour ce mois ?', 'nok');
           throw err;
         }
+      },
+
+      loadPaie: async () => {
+        const [loans, loanPayments, salaryMonths] = await Promise.all([fetchLoans(), fetchLoanPayments(), fetchSalaryMonths()]);
+        set({ loans, loanPayments, salaryMonths });
+      },
+
+      setDateDistribution: async (mois, date) => {
+        const sm = await saveDateDistribution(mois, date);
+        set((s) => ({ salaryMonths: [sm, ...s.salaryMonths.filter((x) => x.mois !== mois)] }));
+      },
+
+      validerDistribution: async ({ mois, date, totalNet, prelevements }) => {
+        await validerDistributionService({ mois, date, totalNet, prelevements, par: get().user?.name || 'Inconnu' });
+        await get().loadPaie();
+        const total = prelevements.reduce((a, p) => a + p.montant, 0);
+        get().addNotification(
+          'Salaires distribués',
+          `Distribution de ${mois} validée — ${prelevements.length} mensualité(s) prélevée(s) (${total.toLocaleString('fr-FR')} MRU).`,
+          'ok',
+        );
+      },
+
+      annulerDistribution: async (mois) => {
+        await annulerDistributionService(mois);
+        await get().loadPaie();
+      },
+
+      solderPret: async (loanId, motif) => {
+        await solderPretExceptionnel(loanId, motif);
+        await get().loadPaie();
+        get().addNotification('Prêt soldé', 'Prêt soldé sans prélèvement (cas exceptionnel).', 'ok');
       },
 
       // ─── Chantiers de déploiement ──────────────────────────────────────────

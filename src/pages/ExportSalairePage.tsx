@@ -25,6 +25,14 @@ import { DEFAULT_SIGNATURE } from '@/utils/signature';
 import type { Loan } from '@/types';
 import { BadgeSuspendu, BoutonSuspension } from '@/components/SuspensionSalaire';
 import {
+  retenuesDuMois,
+  moisPaieCourant,
+  dernierMoisDistribue,
+  dateDistributionProposee,
+  libelleMois,
+  type LigneRetenue,
+} from '@/utils/prets';
+import {
   FileSpreadsheet,
   Download,
   Eye,
@@ -36,6 +44,8 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
+  CheckCircle2,
+  Undo2,
 } from 'lucide-react';
 
 const FEUILLES_DISPO = ['BPM', 'Caisse', 'BII', 'Récap'];
@@ -52,6 +62,12 @@ function initials(name: string) {
 function fmt(val?: number) {
   return (val ?? 0).toLocaleString('fr-FR');
 }
+function detailRetenues(lignes: LigneRetenue[]): string | undefined {
+  if (!lignes.length) return undefined;
+  return lignes
+    .map((l) => `Prêt ${fmt(l.loan.montantTotal)} : ${fmt(l.montant)} / ${fmt(l.prevu)} MRU${l.dejaPreleve ? ' (prélevé)' : ''}`)
+    .join('\n');
+}
 function formatRib(rib?: string) {
   if (!rib) return '—';
   const digits = rib.replace(/\s+/g, '');
@@ -63,6 +79,14 @@ export default function ExportSalairePage() {
   const employees = useAppStore((s) => s.employees);
   const leaves = useAppStore((s) => s.leaves);
   const loans = useAppStore((s) => s.loans);
+  const loanPayments = useAppStore((s) => s.loanPayments);
+  const salaryMonths = useAppStore((s) => s.salaryMonths);
+  const setDateDistribution = useAppStore((s) => s.setDateDistribution);
+  const validerDistribution = useAppStore((s) => s.validerDistribution);
+  const annulerDistribution = useAppStore((s) => s.annulerDistribution);
+  const role = useAppStore((s) => s.user?.role);
+  const superadmin = useAppStore((s) => s.user?.superadmin);
+  const peutDistribuer = !!superadmin || role === 'admin' || role === 'directeur';
   const loadEmployees = useAppStore((s) => s.loadEmployees);
   const directorSignature = useAppStore((s) => s.directorSignature);
   const setDirectorSignature = useAppStore((s) => s.setDirectorSignature);
@@ -72,8 +96,12 @@ export default function ExportSalairePage() {
     loadEmployees();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const ctxPaie = useMemo(() => ({ payments: loanPayments, salaryMonths }), [loanPayments, salaryMonths]);
+
   // ── Paramètres d'export ───────────────────────────────────────────────────
-  const [exportMonth, setExportMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  // mois choisi par l'utilisateur ; sinon le mois de paie à distribuer (celui qui suit la dernière distribution)
+  const [moisManuel, setMoisManuel] = useState<string | null>(null);
+  const exportMonth = moisManuel ?? moisPaieCourant(ctxPaie);
   const [exportOrdre, setExportOrdre] = useState(() => `020/DG/GSS/${new Date().getFullYear()}`);
   const [feuilles, setFeuilles] = useState<string[]>(FEUILLES_DISPO);
   const [sigModal, setSigModal] = useState(false);
@@ -88,7 +116,7 @@ export default function ExportSalairePage() {
   // Mois navigation
   const handleMonthChange = (val: string) => {
     if (!val) return;
-    setExportMonth(val);
+    setMoisManuel(val);
     const yr = val.split('-')[0];
     if (yr) {
       setExportOrdre((prev) => prev.replace(/\/\d{4}$/, `/${yr}`));
@@ -120,14 +148,12 @@ export default function ExportSalairePage() {
     const onLeaveIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === exportMonth).map((l) => l.employeeId));
     const doublingIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === nextMonth).map((l) => l.employeeId));
 
-    // Prêts actifs
-    const activeLoansByEmployee = new Map<string, Loan[]>();
+    // Prêts par employé (1er prélèvement le mois du prêt, mois distribués figés)
+    const loansByEmployee = new Map<string, Loan[]>();
     loans.forEach((l) => {
-      if (l.statut === 'actif' && l.reste > 0) {
-        const list = activeLoansByEmployee.get(l.employeeId) || [];
-        list.push(l);
-        activeLoansByEmployee.set(l.employeeId, list);
-      }
+      const list = loansByEmployee.get(l.employeeId) || [];
+      list.push(l);
+      loansByEmployee.set(l.employeeId, list);
     });
 
     const rows = employees
@@ -137,10 +163,14 @@ export default function ExportSalairePage() {
         const suspendu = !!e.salaireSuspendu;
         const enConge = suspendu || onLeaveIds.has(e.id);
         const congeDouble = !enConge && doublingIds.has(e.id);
-        const empLoans = activeLoansByEmployee.get(e.id) || [];
         const base = e.montant ?? 0;
         const brut = congeDouble ? base * 2 : base;
-        const pretDeduit = enConge ? 0 : empLoans.reduce((sum, l) => sum + Math.min(l.mensualite, l.reste), 0);
+        // congé / suspendu : pas de salaire → pas de retenue, le prêt est repoussé d'un mois
+        const { total: pretDeduit, lignes: retenues } = retenuesDuMois(loansByEmployee.get(e.id) || [], exportMonth, ctxPaie, {
+          exclu: enConge,
+          brut,
+        });
+        const pretReporte = retenues.some((l) => l.montant < l.prevu);
         const net = enConge ? 0 : Math.max(0, brut - pretDeduit);
 
         return {
@@ -148,7 +178,8 @@ export default function ExportSalairePage() {
           suspendu,
           enConge,
           congeDouble,
-          empLoans,
+          retenues,
+          pretReporte,
           base,
           brut,
           pretDeduit,
@@ -163,6 +194,10 @@ export default function ExportSalairePage() {
     const totalDouble = rows.filter((r) => r.congeDouble).length;
     const totalPretsRetenus = presentsRows.reduce((acc, r) => acc + r.pretDeduit, 0);
     const totalNetMRU = presentsRows.reduce((acc, r) => acc + r.net, 0);
+    const prelevements = rows
+      .flatMap((r) => r.retenues)
+      .filter((l) => l.montant > 0)
+      .map((l) => ({ loanId: l.loan.id, montant: l.montant }));
 
     // Par banque
     const parBanque: Record<string, { count: number; total: number }> = {};
@@ -182,8 +217,67 @@ export default function ExportSalairePage() {
       totalPretsRetenus,
       totalNetMRU,
       parBanque,
+      prelevements,
     };
-  }, [employees, leaves, loans, exportMonth]);
+  }, [employees, leaves, loans, exportMonth, ctxPaie]);
+
+  // ── Distribution du mois (date libre, validation = prélèvement des prêts) ──
+  const moisPaie = salaryMonths.find((s) => s.mois === exportMonth);
+  const distribue = moisPaie?.statut === 'distribue';
+  const dernierDistribue = dernierMoisDistribue(ctxPaie);
+  // date saisie pour un mois ; sinon la date enregistrée, sinon une date proposée
+  const [dateSaisie, setDateSaisie] = useState<{ mois: string; date: string } | null>(null);
+  const dateDist =
+    dateSaisie?.mois === exportMonth
+      ? dateSaisie.date
+      : (moisPaie?.dateDistribution ?? dateDistributionProposee(exportMonth, ctxPaie));
+  const setDateDist = (date: string) => setDateSaisie({ mois: exportMonth, date });
+  const [busyDist, setBusyDist] = useState(false);
+  const [confirmDist, setConfirmDist] = useState(false);
+
+  const enregistrerDate = async () => {
+    if (!dateDist) return;
+    try {
+      setBusyDist(true);
+      await setDateDistribution(exportMonth, dateDist);
+      showToast(`Distribution de ${libelleMois(exportMonth)} prévue le ${new Date(dateDist).toLocaleDateString('fr-FR')}`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusyDist(false);
+    }
+  };
+
+  const handleValiderDistribution = async () => {
+    try {
+      setBusyDist(true);
+      await validerDistribution({
+        mois: exportMonth,
+        date: dateDist,
+        totalNet: monthData.totalNetMRU,
+        prelevements: monthData.prelevements,
+      });
+      setConfirmDist(false);
+      showToast(`Salaires de ${libelleMois(exportMonth)} distribués — mensualités prélevées ✅`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusyDist(false);
+    }
+  };
+
+  const handleAnnulerDistribution = async () => {
+    if (!confirm(`Annuler la distribution de ${libelleMois(exportMonth)} ?\n\nLes mensualités prélevées par cette distribution seront remises sur les prêts.`)) return;
+    try {
+      setBusyDist(true);
+      await annulerDistribution(exportMonth);
+      showToast('Distribution annulée', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusyDist(false);
+    }
+  };
 
   // Options pour l'export Excel
   const exportOpts = () => ({
@@ -191,6 +285,8 @@ export default function ExportSalairePage() {
     employees,
     leaves,
     loans,
+    loanPayments,
+    salaryMonths,
     ordreBase: exportOrdre,
     feuilles,
     signatureBase64: directorSignature,
@@ -433,6 +529,58 @@ export default function ExportSalairePage() {
         </div>
       </Card>
 
+      {/* ── Distribution du mois : date libre + validation ── */}
+      <Card>
+        <div className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className={`p-2.5 rounded-xl border ${distribue ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+              {distribue ? <CheckCircle2 className="w-5 h-5" /> : <Calendar className="w-5 h-5" />}
+            </div>
+            <div>
+              <p className="font-bold text-slate-800 text-sm">
+                Distribution des salaires — <span className="capitalize">{monthLabel}</span>
+              </p>
+              {distribue && moisPaie ? (
+                <p className="text-xs text-emerald-700">
+                  Distribués le {new Date(moisPaie.dateDistribution).toLocaleDateString('fr-FR')}
+                  {moisPaie.distribuePar ? ` par ${moisPaie.distribuePar}` : ''} — mensualités prélevées, prêts mis à jour.
+                </p>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  Choisissez le jour de distribution de ce mois, puis validez : les mensualités de prêts du mois seront prélevées (
+                  {monthData.prelevements.length} mensualité(s), {fmt(monthData.prelevements.reduce((a, p) => a + p.montant, 0))} MRU).
+                  {dernierDistribue && ` Dernier mois distribué : ${libelleMois(dernierDistribue)}.`}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input
+              type="date"
+              value={dateDist}
+              onChange={(e) => setDateDist(e.target.value)}
+              disabled={distribue || !peutDistribuer}
+              style={{ width: 'auto' }}
+            />
+            {!distribue && peutDistribuer && (
+              <>
+                <Button variant="outline" onClick={enregistrerDate} disabled={busyDist || !dateDist}>
+                  Enregistrer la date
+                </Button>
+                <Button onClick={() => setConfirmDist(true)} disabled={busyDist || !dateDist} icon={<CheckCircle2 className="w-4 h-4" />}>
+                  Valider la distribution
+                </Button>
+              </>
+            )}
+            {distribue && peutDistribuer && dernierDistribue === exportMonth && (
+              <Button variant="outline" onClick={handleAnnulerDistribution} disabled={busyDist} icon={<Undo2 className="w-4 h-4" />}>
+                Annuler la distribution
+              </Button>
+            )}
+          </div>
+        </div>
+      </Card>
+
       {/* ── KPIs du mois sélectionné ── */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <StatCard
@@ -616,13 +764,18 @@ export default function ExportSalairePage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-right" title={detailRetenues(r.retenues)}>
                         {r.pretDeduit > 0 ? (
                           <span className="font-semibold text-red-600">
                             -{fmt(r.pretDeduit)} MRU
                           </span>
                         ) : (
-                          <span className="text-slate-300">—</span>
+                          !r.pretReporte && <span className="text-slate-300">—</span>
+                        )}
+                        {r.pretReporte && (
+                          <p className="text-[10px] font-semibold text-amber-600 whitespace-nowrap">
+                            {r.enConge ? 'Prêt reporté (+1 mois)' : 'Retenue partielle (salaire insuffisant)'}
+                          </p>
                         )}
                       </td>
                       <td className="px-3 py-2 text-right font-bold text-slate-900 text-sm">
@@ -673,6 +826,38 @@ export default function ExportSalairePage() {
           }}
           onClear={() => setDirectorSignature(null)}
         />
+      </Modal>
+
+      {/* ── Confirmation de la distribution ── */}
+      <Modal open={confirmDist} onClose={() => setConfirmDist(false)} title={`Valider la distribution — ${monthLabel}`}>
+        <div className="space-y-3 text-sm text-slate-700">
+          <p>
+            Date de distribution : <strong>{dateDist ? new Date(dateDist).toLocaleDateString('fr-FR') : '—'}</strong>
+          </p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li>
+              {monthData.totalPresents} employé(s) payé(s) — total net <strong>{fmt(monthData.totalNetMRU)} MRU</strong>
+            </li>
+            <li>
+              {monthData.prelevements.length} mensualité(s) de prêt prélevée(s) —{' '}
+              <strong>{fmt(monthData.prelevements.reduce((a, p) => a + p.montant, 0))} MRU</strong>
+            </li>
+            <li>Les prêts des employés en congé ou suspendus ne sont pas prélevés : leur fin est repoussée d'un mois.</li>
+          </ul>
+          {dernierDistribue && exportMonth < dernierDistribue && (
+            <p className="text-xs text-red-600 font-semibold">
+              Attention : ce mois est antérieur au dernier mois distribué ({libelleMois(dernierDistribue)}).
+            </p>
+          )}
+          <div className="flex gap-3 justify-end pt-2">
+            <Button variant="outline" onClick={() => setConfirmDist(false)}>
+              Annuler
+            </Button>
+            <Button onClick={handleValiderDistribution} disabled={busyDist}>
+              {busyDist ? 'Validation...' : 'Confirmer la distribution'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* ── Modal Aperçu Export ── */}

@@ -8,6 +8,7 @@ import { useMarqueStore } from '@/store/useMarqueStore';
 export default function AuthPage() {
   const login = useAppStore((s) => s.login);
   const marque = useMarqueStore((s) => s.affichee);
+  const suspendu = useMarqueStore((s) => s.abonnement.statut === 'suspendu');
   const [name, setName] = useState('');
   const [pass, setPass] = useState('');
   const [error, setError] = useState('');
@@ -48,6 +49,11 @@ export default function AuthPage() {
             <LogoMarque taille="lg" />
           </div>
           <h1 className="text-xl font-bold text-slate-900">Connexion</h1>
+          {suspendu && (
+            <p className="mt-3 px-3 py-2 rounded-lg text-xs font-semibold bg-red-50 text-red-700 border border-red-200">
+              Accès suspendu pour cette entreprise — seul le super-administrateur peut se connecter.
+            </p>
+          )}
           {marque.slogan && <p className="text-slate-400 text-sm mt-1">{marque.slogan}</p>}
           {marque.specialites.length > 0 && (
             <div className="flex flex-wrap justify-center gap-1.5 mt-3">

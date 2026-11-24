@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { invalidateTeams, normNom, teamIdFor, teamIdsFor, upsertLignes } from './refs';
-import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, Chantier, NoeudReseau } from '@/types';
+import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, LoanPayment, SalaryMonth, Chantier, NoeudReseau } from '@/types';
 
 // ─── RÉFÉRENCES ──────────────────────────────────────────────────────────────
 // La base relie chaque enregistrement à son équipe (team_id) et à la personne qui a agi
@@ -647,8 +647,19 @@ function mapLoan(row: any): Loan {
     reste: Number(row.reste),
     banqueCaisse: row.banque_caisse ?? undefined,
     statut: row.statut,
+    moisPremierPrelevement: row.mois_premier_prelevement ?? undefined,
+    moisFinPrevue: row.mois_fin_prevue ?? undefined,
+    dejaRembourse: row.deja_rembourse != null ? Number(row.deja_rembourse) : undefined,
+    motifSolde: row.motif_solde ?? undefined,
+    soldeHorsSalaireLe: row.solde_hors_salaire_le ?? undefined,
     createdAt: row.created_at,
   };
+}
+
+const MSG_MIGRATION_PRETS = 'Exécuter supabase_prets_distribution.sql dans Supabase (prêts / distribution des salaires).';
+function erreurPrets(error: { message: string; code?: string }): Error {
+  const manque = /mois_premier_prelevement|deja_rembourse|salary_months|source|valider_distribution|annuler_distribution/.test(error.message);
+  return new Error(manque ? MSG_MIGRATION_PRETS : error.message);
 }
 
 export async function fetchLoans(): Promise<Loan[]> {
@@ -667,6 +678,7 @@ export async function createLoan(loan: {
   dateDebut: string;
   dureeMois?: number;
   banqueCaisse?: string;
+  moisPremierPrelevement?: string;
 }): Promise<Loan | null> {
   const { data, error } = await supabase
     .from('loans')
@@ -679,12 +691,14 @@ export async function createLoan(loan: {
       reste: loan.montantTotal,
       banque_caisse: loan.banqueCaisse ?? null,
       statut: 'actif',
+      // vide → la base calcule le mois du prêt (ou le suivant s'il est déjà distribué)
+      mois_premier_prelevement: loan.moisPremierPrelevement || null,
     })
     .select()
     .single();
   if (error) {
     console.error('createLoan:', error);
-    return null;
+    throw erreurPrets(error);
   }
   return mapLoan(data);
 }
@@ -699,8 +713,9 @@ export async function updateLoan(
     banqueCaisse?: string;
     reste: number;
     statut: 'actif' | 'solde';
+    moisPremierPrelevement: string;
   }>,
-): Promise<void> {
+): Promise<Loan | null> {
   const payload: Record<string, any> = {};
   if (patch.montantTotal !== undefined) payload.montant_total = patch.montantTotal;
   if (patch.mensualite !== undefined) payload.mensualite = patch.mensualite;
@@ -709,11 +724,23 @@ export async function updateLoan(
   if (patch.banqueCaisse !== undefined) payload.banque_caisse = patch.banqueCaisse ?? null;
   if (patch.reste !== undefined) payload.reste = patch.reste;
   if (patch.statut !== undefined) payload.statut = patch.statut;
-  const { error } = await supabase.from('loans').update(payload).eq('id', id);
+  if (patch.moisPremierPrelevement !== undefined) payload.mois_premier_prelevement = patch.moisPremierPrelevement || null;
+  // reste / statut / durée / fin prévue sont recalculés par la base (trigger calcul_pret)
+  const { data, error } = await supabase.from('loans').update(payload).eq('id', id).select().maybeSingle();
   if (error) {
     console.error('updateLoan:', error);
-    throw new Error(error.message);
+    throw erreurPrets(error);
   }
+  return data ? mapLoan(data) : null;
+}
+
+export async function fetchLoan(id: string): Promise<Loan | null> {
+  const { data, error } = await supabase.from('loans').select('*').eq('id', id).maybeSingle();
+  if (error) {
+    console.error('fetchLoan:', error);
+    return null;
+  }
+  return data ? mapLoan(data) : null;
 }
 
 export async function deleteLoan(id: string): Promise<void> {
@@ -726,31 +753,105 @@ export async function deleteLoan(id: string): Promise<void> {
 }
 
 // Enregistre la mensualité du mois (idempotent — la contrainte UNIQUE(loan_id, month)
-// empêche de déduire deux fois la même mensualité si on clique par erreur deux fois),
-// puis met à jour le reste dû (et passe le prêt en "solde" s'il atteint 0).
-export async function recordLoanPayment(loanId: string, month: string, montant: number, newReste: number): Promise<void> {
-  const { error: payErr } = await supabase.from('loan_payments').insert({ loan_id: loanId, month, montant });
+// empêche de déduire deux fois la même mensualité si on clique par erreur deux fois).
+// Le reste dû / statut / fin prévue sont recalculés par la base (trigger sur loan_payments).
+export async function recordLoanPayment(loanId: string, month: string, montant: number): Promise<Loan | null> {
+  const { error: payErr } = await supabase.from('loan_payments').insert({ loan_id: loanId, month, montant, source: 'manuel' });
   if (payErr) {
     console.error('recordLoanPayment (insert):', payErr);
-    throw new Error(payErr.message);
+    throw erreurPrets(payErr);
   }
-  const { error: updErr } = await supabase
-    .from('loans')
-    .update({ reste: newReste, statut: newReste <= 0 ? 'solde' : 'actif' })
-    .eq('id', loanId);
-  if (updErr) {
-    console.error('recordLoanPayment (update reste):', updErr);
-    throw new Error(updErr.message);
-  }
+  return fetchLoan(loanId);
 }
 
-export async function fetchLoanPayments(): Promise<{ id: string; loanId: string; month: string; montant: number }[]> {
+export async function fetchLoanPayments(): Promise<LoanPayment[]> {
   const { data, error } = await supabase.from('loan_payments').select('*');
   if (error) {
     console.error('fetchLoanPayments:', error);
     return [];
   }
-  return (data ?? []).map((r: any) => ({ id: r.id, loanId: r.loan_id, month: r.month, montant: Number(r.montant) }));
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    loanId: r.loan_id,
+    month: r.month,
+    montant: Number(r.montant),
+    source: r.source ?? 'manuel',
+  }));
+}
+
+// ─── MOIS DE PAIE (date de distribution libre) ────────────────────────────────
+
+function mapSalaryMonth(r: any): SalaryMonth {
+  return {
+    mois: r.mois,
+    dateDistribution: r.date_distribution,
+    statut: r.statut,
+    distribueLe: r.distribue_le ?? undefined,
+    distribuePar: r.distribue_par ?? undefined,
+    totalNet: r.total_net != null ? Number(r.total_net) : undefined,
+  };
+}
+
+export async function fetchSalaryMonths(): Promise<SalaryMonth[]> {
+  const { data, error } = await supabase.from('salary_months').select('*').order('mois', { ascending: false });
+  if (error) {
+    // table absente tant que la migration n'est pas exécutée : pas bloquant
+    console.warn('fetchSalaryMonths:', error.message);
+    return [];
+  }
+  return (data ?? []).map(mapSalaryMonth);
+}
+
+/** Fixe (ou change) la date de distribution prévue d'un mois pas encore distribué */
+export async function saveDateDistribution(mois: string, date: string): Promise<SalaryMonth> {
+  const { data, error } = await supabase
+    .from('salary_months')
+    .upsert({ mois, date_distribution: date }, { onConflict: 'mois' })
+    .select()
+    .single();
+  if (error) {
+    console.error('saveDateDistribution:', error);
+    throw erreurPrets(error);
+  }
+  return mapSalaryMonth(data);
+}
+
+/** Valide la distribution du mois : enregistre les prélèvements de prêts calculés par l'application */
+export async function validerDistribution(params: {
+  mois: string;
+  date: string;
+  par: string;
+  totalNet: number;
+  prelevements: { loanId: string; montant: number }[];
+}): Promise<void> {
+  const { error } = await supabase.rpc('valider_distribution_salaire', {
+    p_mois: params.mois,
+    p_date: params.date,
+    p_par: params.par,
+    p_total: params.totalNet,
+    p_prelevements: params.prelevements.map((p) => ({ loan_id: p.loanId, montant: p.montant })),
+  });
+  if (error) {
+    console.error('validerDistribution:', error);
+    throw erreurPrets(error);
+  }
+}
+
+/** Solde un prêt sans prélèvement (cas exceptionnel) : retire les prélèvements des mois pas encore distribués */
+export async function solderPretExceptionnel(loanId: string, motif: string): Promise<void> {
+  const { error } = await supabase.rpc('solder_pret_exceptionnel', { p_loan: loanId, p_motif: motif });
+  if (error) {
+    console.error('solderPretExceptionnel:', error);
+    throw new Error(/solder_pret_exceptionnel|motif_solde/.test(error.message) ? 'Exécuter supabase_solde_exceptionnel.sql dans Supabase.' : error.message);
+  }
+}
+
+export async function annulerDistribution(mois: string): Promise<void> {
+  const { error } = await supabase.rpc('annuler_distribution_salaire', { p_mois: mois });
+  if (error) {
+    console.error('annulerDistribution:', error);
+    throw erreurPrets(error);
+  }
 }
 
 // ─── CHANTIERS (déploiement) ───────────────────────────────────────────────────

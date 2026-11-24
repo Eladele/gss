@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
-import type { Employee, LeaveRecord, Loan } from '@/types';
+import type { Employee, LeaveRecord, Loan, LoanPayment, SalaryMonth } from '@/types';
+import { retenuesDuMois } from '@/utils/prets';
 import { numberToFrenchWords } from './numberToWordsFr';
 import { logoExport } from '@/lib/marque';
 
@@ -79,6 +80,9 @@ export interface ExportPresentsOpts {
   employees: Employee[];
   leaves: LeaveRecord[];
   loans?: Loan[];
+  /** prélèvements déjà faits + mois distribués (règle « 1er prélèvement le mois du prêt ») */
+  loanPayments?: LoanPayment[];
+  salaryMonths?: SalaryMonth[];
   ordreBase?: string;
   dateStr?: string;
   fileName?: string;
@@ -486,10 +490,13 @@ function computePresentEmployees(opts: {
   employees: Employee[];
   leaves: LeaveRecord[];
   loans?: Loan[];
+  loanPayments?: LoanPayment[];
+  salaryMonths?: SalaryMonth[];
   ordreBase?: string;
   dateStr?: string;
 }) {
   const { month, employees, leaves, loans = [] } = opts;
+  const ctxPaie = { payments: opts.loanPayments ?? [], salaryMonths: opts.salaryMonths ?? [] };
   const [y, m] = month.split('-').map(Number);
 
   // On se base sur le MOIS DE DÉBUT du congé (un congé "du 3 juin au 3
@@ -506,16 +513,14 @@ function computePresentEmployees(opts: {
   const onLeaveIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === month).map((l) => l.employeeId));
   const doublingIds = new Set(leaves.filter((l) => monthOf(l.dateDebut) === nextMonth).map((l) => l.employeeId));
 
-  // Prêts actifs (reste dû > 0) par employé — pour chaque prêt actif, la mensualité
-  // (plafonnée à son reste dû) est déduite du salaire ce mois-ci.
+  // Prêts par employé — la mensualité (plafonnée au reste dû) est déduite à partir du MOIS
+  // DU PRÊT ; un mois déjà distribué reprend le montant réellement prélevé.
   // Un employé peut avoir plusieurs prêts simultanés : toutes les mensualités se cumulent.
   const activeLoansByEmployee = new Map<string, Loan[]>();
   loans.forEach((l) => {
-    if (l.statut === 'actif' && l.reste > 0) {
-      const list = activeLoansByEmployee.get(l.employeeId) || [];
-      list.push(l);
-      activeLoansByEmployee.set(l.employeeId, list);
-    }
+    const list = activeLoansByEmployee.get(l.employeeId) || [];
+    list.push(l);
+    activeLoansByEmployee.set(l.employeeId, list);
   });
 
   const present = employees
@@ -523,13 +528,16 @@ function computePresentEmployees(opts: {
     .map((e) => {
       const conge_double = doublingIds.has(e.id);
       const baseMontant = conge_double ? (e.montant ?? 0) * 2 : (e.montant ?? 0);
-      const empLoans = activeLoansByEmployee.get(e.id) || [];
-      const pret_deduit = empLoans.reduce((sum, l) => sum + Math.min(l.mensualite, l.reste), 0);
-      const totalReste = empLoans.reduce((sum, l) => sum + l.reste, 0);
-      const pret_reste_apres = empLoans.length > 0 ? Math.max(0, totalReste - pret_deduit) : undefined;
-      const prets_count = empLoans.length;
-      const prets_details = empLoans.length > 1
-        ? empLoans.map((l, idx) => `P${idx + 1}: ${Math.min(l.mensualite, l.reste).toLocaleString('fr-FR')}`).join(' + ')
+      const { total: pret_deduit, lignes } = retenuesDuMois(activeLoansByEmployee.get(e.id) || [], month, ctxPaie, {
+        exclu: false,
+        brut: baseMontant,
+      });
+      // reste après ce mois (si le mois est déjà distribué, le reste en base l'inclut déjà)
+      const totalReste = lignes.reduce((sum, l) => sum + l.loan.reste + (l.dejaPreleve ? 0 : -l.montant), 0);
+      const pret_reste_apres = lignes.length > 0 ? Math.max(0, totalReste) : undefined;
+      const prets_count = lignes.length;
+      const prets_details = lignes.length > 1
+        ? lignes.map((l, idx) => `P${idx + 1}: ${l.montant.toLocaleString('fr-FR')}`).join(' + ')
         : undefined;
 
       const finalMontant = Math.max(0, baseMontant - pret_deduit);

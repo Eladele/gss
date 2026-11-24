@@ -115,6 +115,8 @@ export default function CongesPage() {
     const employees = useAppStore((s) => s.employees);
     const leaves = useAppStore((s) => s.leaves);
     const loans = useAppStore((s) => s.loans);
+    const loanPayments = useAppStore((s) => s.loanPayments);
+    const salaryMonths = useAppStore((s) => s.salaryMonths);
     const loadEmployees = useAppStore((s) => s.loadEmployees);
     const addLeave = useAppStore((s) => s.addLeave);
     const editLeave = useAppStore((s) => s.editLeave);
@@ -260,7 +262,7 @@ export default function CongesPage() {
             setExportOrdre(prev => prev.replace(/\/\d{4}$/, `/${yr}`));
         }
     };
-    const exportOpts = () => ({ month: exportMonth, employees, leaves, loans, ordreBase: exportOrdre, feuilles, signatureBase64: directorSignature });
+    const exportOpts = () => ({ month: exportMonth, employees, leaves, loans, loanPayments, salaryMonths, ordreBase: exportOrdre, feuilles, signatureBase64: directorSignature });
     const handlePreview = () => {
         if (!feuilles.length) { showToast('Sélectionnez au moins une feuille', 'error'); return; }
         setPreview(buildExportPreview(exportOpts()));

@@ -128,11 +128,40 @@ export interface Loan {
   montantTotal: number;
   mensualite: number;
   dateDebut: string;
+  /** durée réelle en mois (calculée : échéances + mois non prélevés) */
   dureeMois?: number;
   reste: number;
   banqueCaisse?: string;
   statut: 'actif' | 'solde';
+  /** 'YYYY-MM' : 1er mois prélevé (par défaut le mois du prêt) */
+  moisPremierPrelevement?: string;
+  /** 'YYYY-MM' : dernier mois de prélèvement prévu (calculé par la base) */
+  moisFinPrevue?: string;
+  /** remboursé avant l'application (reprise des données) */
+  dejaRembourse?: number;
+  /** soldé sans prélèvement (cas exceptionnel) */
+  motifSolde?: string;
+  soldeHorsSalaireLe?: string;
   createdAt?: string;
+}
+
+/** Prélèvement d'une mensualité sur le salaire d'un mois */
+export interface LoanPayment {
+  id: string;
+  loanId: string;
+  month: string; // 'YYYY-MM'
+  montant: number;
+  source?: 'manuel' | 'distribution';
+}
+
+/** Mois de paie : la date de distribution des salaires est choisie chaque mois */
+export interface SalaryMonth {
+  mois: string; // 'YYYY-MM'
+  dateDistribution: string; // 'YYYY-MM-DD'
+  statut: 'prevu' | 'distribue';
+  distribueLe?: string;
+  distribuePar?: string;
+  totalNet?: number;
 }
 
 export interface Chantier {
