@@ -65,10 +65,10 @@ type Item = ParsedOT & {
   key: string;
   equipe: string;
   sourceFichier: string;
-  deja?: { equipe: string; date: string };
+  deja?: { equipe: string; date: string; dis: string };
   existante?: { equipe: string; type: string }; // situation Excel ouverte que l'OT va compléter
   /** OT déjà distribué et rendu « non fait » (RV demain…) : renvoyé, son motif passé est gardé */
-  renvoi?: { id: string; equipe: string; motif: string; traiteLe: string | null };
+  renvoi?: { id: string; equipe: string; motif: string; commentaire: string; traiteLe: string | null };
   /** fiches déjà clôturées de la même ligne (dérangements, installation…) : leurs motifs */
   precedents?: MotifPrecedent[];
   /** commentaire du superviseur pour le chef, enregistré avec la distribution */
@@ -314,8 +314,8 @@ export default function DistributionPage() {
         if (prec?.length) p.precedents = prec;
         const d = deja.get(p.numeroOt);
         // déjà « non faite » (RV demain, local fermé…) : on peut la renvoyer, son motif reste dans l'historique
-        if (d && d.status === 'non_ok') Object.assign(p, { renvoi: { id: d.id, equipe: d.equipe, motif: d.motif, traiteLe: d.traiteLe }, equipe: p.equipe || d.equipe, include: true });
-        else if (d) Object.assign(p, { deja: { equipe: d.equipe, date: d.date }, include: false });
+        if (d && d.status === 'non_ok') Object.assign(p, { renvoi: { id: d.id, equipe: d.equipe, motif: d.motif, commentaire: d.commentaire, traiteLe: d.traiteLe }, equipe: p.equipe || d.equipe, include: true });
+        else if (d) Object.assign(p, { deja: { equipe: d.equipe, date: d.date, dis: d.dis }, include: false });
         const ex = ouvertes.get(`${p.fgp}|${p.nature}`);
         if (ex && !d) Object.assign(p, { existante: { equipe: ex.equipe ?? '', type: ex.type }, equipe: p.equipe || ex.equipe || '' });
       });
@@ -328,6 +328,18 @@ export default function DistributionPage() {
     } finally {
       setReading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  // fiche déjà distribuée dont la ligne a un autre DIS (ex. CST appliquée au renvoi) : on prend celui de l'OT
+  const prendreDisOt = async (i: Item) => {
+    try {
+      const dis = normDis(i.dis);
+      await modifierZoneDis(i.fgp, { dis, zone: zoneDuDis(dis) ?? undefined });
+      setItems((cur) => cur.map((x) => (x.fgp === i.fgp && x.deja ? { ...x, deja: { ...x.deja, dis } } : x)));
+      showToast(`${i.fgp} : DIS ${dis} enregistré (l’ancien reste dans l’historique)`, 'success');
+    } catch (e) {
+      showToast(errMsg(e), 'error');
     }
   };
 
@@ -373,6 +385,8 @@ export default function DistributionPage() {
           dateProgramme,
           user,
           datesOt,
+          // DIS lu sur le nouvel OT (déjà mis sur la ligne) : il remplace celui de la CST du motif
+          { disOt: aRenvoyer.filter((i) => i.dis?.trim()).map((i) => i.renvoi!.id) },
         );
       const n = crees + completees + renvoyees;
       showToast(
@@ -940,8 +954,8 @@ export default function DistributionPage() {
               title="Retirer du programme"
               onClick={() =>
                 setConfirmation({
-                  titre: 'Supprimer la fiche du programme ?',
-                  texte: `${ligneLabel(o)}${o.numeroOt ? ` (OT ${o.numeroOt})` : ''} de ${o.equipe || '—'} sera retirée du programme.`,
+                  titre: 'Retirer la fiche du programme ?',
+                  texte: `${ligneLabel(o)}${o.numeroOt ? ` (OT ${o.numeroOt})` : ''} de ${o.equipe || '—'} sera retirée du programme. Son historique (motif, commentaire « non fait ») est gardé.`,
                   bouton: 'Supprimer',
                   danger: true,
                   action: async () => {
@@ -1137,9 +1151,41 @@ export default function DistributionPage() {
                       <RowCells o={i} prioritaire={!!i.dateRecu && estPrioritaire(i.dateRecu, i.nature, jourRemise(null, dateProgramme))} />
                       <MotifsPrecedents liste={i.precedents} />
                       {(() => {
-                        // renvoi d'une fiche « non faite » avec CST : son nouveau DIS remplace celui de l'OT
-                        const cst = i.renvoi ? disDuMotifCst(i.renvoi.motif) : null;
-                        return cst && cst !== normDis(i.dis) ? (
+                        // CST dans l'historique (fiche à renvoyer ou déjà renvoyée) : le DIS de l'OT (avec son
+                        // port) fait foi, la CST reste dans l'historique ; OT sans DIS : la CST est appliquée
+                        // la CST peut être écrite dans le motif ou dans le commentaire du chef
+                        const cstDe = (motif?: string, commentaire?: string) => disDuMotifCst(motif) || disDuMotifCst(commentaire);
+                        const cst =
+                          (i.renvoi && cstDe(i.renvoi.motif, i.renvoi.commentaire)) ||
+                          i.precedents?.map((h) => (h.statut === 'non_fait' ? cstDe(h.motif, h.commentaire) : null)).find(Boolean) ||
+                          null;
+                        // fiche déjà distribuée (ex. renvoyée avant avec la CST) : la ligne a encore un autre DIS
+                        if (i.deja && i.dis && i.deja.dis && normDis(i.deja.dis) !== normDis(i.dis))
+                          return (
+                            <div className="mt-1 text-[11px] text-amber-800 flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span>
+                                {cst && <>Historique : non fait avec CST <span className="font-mono">{cst}</span> · </>}
+                                DIS actuel de la ligne <span className="font-mono">{i.deja.dis}</span> ≠ DIS de l’OT <b className="font-mono">{i.dis}</b>
+                              </span>
+                              {peutZoneDis && (
+                                <button
+                                  type="button"
+                                  onClick={() => prendreDisOt(i)}
+                                  className="font-semibold text-blue-700 hover:bg-blue-50 rounded px-1.5 py-0.5 border border-blue-200"
+                                >
+                                  Prendre le DIS de l’OT
+                                </button>
+                              )}
+                            </div>
+                          );
+                        if (cst && i.dis && cst !== normDis(i.dis))
+                          return (
+                            <p className="mt-1 text-[11px] text-slate-600">
+                              Historique : non fait avec CST <span className="font-mono">{cst}</span> — la fiche part avec le DIS de l’OT{' '}
+                              <b className="font-mono">{i.dis}</b>
+                            </p>
+                          );
+                        return i.renvoi && cst && cst !== normDis(i.dis) ? (
                           <p className="mt-1 text-[11px] text-emerald-800">
                             CST : la fiche part avec le DIS <b className="font-mono">{cst}</b>
                             {i.dis && (
@@ -1179,7 +1225,8 @@ export default function DistributionPage() {
                         >
                           Déjà non fait{i.renvoi.traiteLe ? ` le ${jourCourt(i.renvoi.traiteLe.slice(0, 10))}` : ''}
                           {i.renvoi.equipe ? ` (${i.renvoi.equipe})` : ''}
-                          {i.renvoi.motif ? ` : ${i.renvoi.motif}` : ''} — renvoyée
+                          {i.renvoi.motif ? ` : ${i.renvoi.motif}` : ''}
+                          {i.renvoi.commentaire ? ` — « ${i.renvoi.commentaire} »` : ''} · renvoyée
                         </span>
                       )}
                       {i.existante && !i.deja && (

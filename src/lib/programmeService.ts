@@ -142,14 +142,17 @@ export interface OtExistant {
   /** « non_ok » : fiche déjà « non faite », qu'on peut renvoyer en gardant son motif */
   status: string;
   motif: string;
+  commentaire: string;
   traiteLe: string | null;
+  /** DIS actuel de la ligne */
+  dis: string;
 }
 export async function existingNumeros(numeros: string[]): Promise<Map<string, OtExistant>> {
   const out = new Map<string, OtExistant>();
   for (let i = 0; i < numeros.length; i += 200) {
     const { data, error } = await supabase
       .from(VUE)
-      .select('id, numero_ot, equipe, date_programme, status, motif_cloture, traite_le')
+      .select('id, numero_ot, equipe, date_programme, status, motif_cloture, comment, traite_le, dis')
       .in('numero_ot', numeros.slice(i, i + 200));
     if (error) throw dbError(error, 'Vérification des doublons impossible');
     (data ?? []).forEach((r) =>
@@ -159,7 +162,9 @@ export async function existingNumeros(numeros: string[]): Promise<Map<string, Ot
         date: (r.date_programme as string) ?? '',
         status: (r.status as string) ?? '',
         motif: (r.motif_cloture as string) ?? '',
+        commentaire: (r.comment as string) ?? '',
         traiteLe: (r.traite_le as string) ?? null,
+        dis: (r.dis as string) ?? '',
       }),
     );
   }
@@ -559,6 +564,13 @@ export async function affecterUrgent(
 
   // fiche « non faite » renvoyée en urgence : « OT reçu le » = jour du renvoi
   await redaterRenvoi([id], dateProg, {});
+  // et son motif + commentaire « non fait » passent dans l'historique (comme un renvoi normal),
+  // pour que l'équipe les voie sur son programme
+  const { data: avant } = await supabase.from(TABLE).select('status').eq('id', id).maybeSingle();
+  if (avant?.status === 'non_ok') {
+    const { error: eR } = await supabase.rpc('redistribuer_fiches', { p_ids: [id], p_team: teamId, p_date: dateProg, p_par: opts.par?.id ?? null });
+    if (eR) console.warn('Historique du « non fait » non archivé', eR.message);
+  }
   const { error } = await supabase.from(TABLE).update(patch).eq('id', id);
   if (error) throw dbError(error, 'Affectation urgente impossible');
 
@@ -1050,17 +1062,42 @@ export async function attribuerZone(zone: string, equipe: string): Promise<void>
   if (error) throw dbError(error, 'Enregistrement de la zone impossible');
 }
 
-/** Retire des fiches du programme : une situation créée par l'OT est supprimée ; une
- *  situation Excel complétée par l'OT est seulement détachée du programme (elle reste). */
+/**
+ * Retire des fiches du programme du jour, sans perdre leur historique :
+ *  - fiche déjà clôturée (fait / non fait) : seulement retirée du programme, elle garde son n° d'OT,
+ *    son motif, son commentaire et son historique (un réimport de l'OT la retrouve et la renvoie) ;
+ *  - fiche ouverte avec un historique (déjà renvoyée) ou venue de l'Excel : retirée du programme, la
+ *    situation reste (un réimport de l'OT la complète) ;
+ *  - fiche créée par l'OT, jamais clôturée, sans historique (import par erreur) : supprimée.
+ */
 export async function deleteOts(ids: string[]): Promise<void> {
-  const del = await supabase.from(TABLE).delete().in('id', ids).eq('cree_par_ot', true);
-  if (del.error) throw dbError(del.error, 'Suppression impossible');
-  const det = await supabase
-    .from(TABLE)
-    .update({ numero_ot: null, date_programme: null, distribue_par: null, assigne_le: null })
-    .in('id', ids)
-    .eq('cree_par_ot', false);
-  if (det.error) throw dbError(det.error, 'Suppression impossible');
+  if (!ids.length) return;
+  const { data, error } = await supabase.from(TABLE).select('id, status, cree_par_ot').in('id', ids);
+  if (error) throw dbError(error, 'Suppression impossible');
+  const { data: hist } = await supabase.from('historique_clotures').select('situation_id').in('situation_id', ids);
+  const avecHisto = new Set((hist ?? []).map((h) => h.situation_id as string));
+  const closes: string[] = [];
+  const detacher: string[] = [];
+  const supprimer: string[] = [];
+  for (const r of data ?? []) {
+    const id = r.id as string;
+    if (r.status === 'ok' || r.status === 'non_ok') closes.push(id);
+    else if (!r.cree_par_ot || avecHisto.has(id)) detacher.push(id);
+    else supprimer.push(id);
+  }
+  const hors = { date_programme: null, distribue_par: null, assigne_le: null };
+  if (closes.length) {
+    const { error: e } = await supabase.from(TABLE).update(hors).in('id', closes);
+    if (e) throw dbError(e, 'Retrait du programme impossible');
+  }
+  if (detacher.length) {
+    const { error: e } = await supabase.from(TABLE).update({ ...hors, numero_ot: null }).in('id', detacher);
+    if (e) throw dbError(e, 'Retrait du programme impossible');
+  }
+  if (supprimer.length) {
+    const { error: e } = await supabase.from(TABLE).delete().in('id', supprimer);
+    if (e) throw dbError(e, 'Suppression impossible');
+  }
 }
 
 /** Rafraîchit la page dès qu'une situation change (distribution, statut, réaffectation) */
@@ -1240,11 +1277,15 @@ export async function redistribuer(
   par: Par,
   /** date « OT reçu le » lue sur l'OT réimporté, par id de fiche */
   datesOt: Record<string, string | null | undefined> = {},
-  opts: { cst?: boolean } = {},
+  /** cst: false → aucun DIS de CST appliqué ; disOt : fiches dont l'OT réimporté porte déjà un DIS
+   *  (avec son port) — le DIS de l'OT fait foi, la CST du motif n'est pas appliquée */
+  opts: { cst?: boolean; disOt?: string[] } = {},
 ): Promise<number> {
   const teamId = equipe ? await teamIdFor(equipe) : null;
   if (equipe && !teamId) throw new Error(`Équipe « ${equipe} » introuvable`);
-  if (opts.cst !== false) await appliquerCstRenvoi(ids);
+  const disOt = new Set(opts.disOt ?? []);
+  const avecCst = ids.filter((id) => !disOt.has(id));
+  if (opts.cst !== false && avecCst.length) await appliquerCstRenvoi(avecCst);
   // avant le renvoi : l'échéance et la priorité calculées par la base partent de la nouvelle date
   await redaterRenvoi(ids, date, datesOt);
   const { data, error } = await supabase.rpc('redistribuer_fiches', { p_ids: ids, p_team: teamId, p_date: date, p_par: par.id });

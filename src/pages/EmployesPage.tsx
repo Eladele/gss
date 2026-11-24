@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, Button, Modal, Select, Input, EmptyState, 
 import { BANQUES } from '@/data';
 import { exportEmployesListExcel } from '@/utils/leaves';
 import type { Employee } from '@/types';
+import { BadgeSuspendu, BoutonSuspension } from '@/components/SuspensionSalaire';
 
 const SOLDE_ANNUEL = 22; // jours de congé annuel de référence / an
 
@@ -342,9 +343,15 @@ export default function EmployesPage() {
                         >
                           {e.actif ? 'Actif' : 'Inactif'}
                         </span>
+                        {e.salaireSuspendu && (
+                          <div className="mt-1">
+                            <BadgeSuspendu e={e} />
+                          </div>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        <div className="flex gap-1.5 justify-end">
+                        <div className="flex gap-1.5 justify-end items-center">
+                          <BoutonSuspension e={e} />
                           <BtnEdit onClick={() => openEdit(e)} />
                           <BtnDelete
                             onClick={() => {

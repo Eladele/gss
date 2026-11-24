@@ -115,6 +115,10 @@ export interface Employee {
   equipeNom?: string; // équipe RH d'appartenance (ex: ARAFAT, CENTRE VILLE, TVZ, Déploiement...)
   dateEmbauche?: string;
   actif: boolean;
+  /** salaire suspendu (admin / directeur) : exclu des ordres de virement et de la caisse */
+  salaireSuspendu?: boolean;
+  motifSuspension?: string;
+  suspenduLe?: string;
   createdAt?: string;
 }
 

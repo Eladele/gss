@@ -519,7 +519,7 @@ function computePresentEmployees(opts: {
   });
 
   const present = employees
-    .filter((e) => e.actif !== false && !onLeaveIds.has(e.id))
+    .filter((e) => e.actif !== false && !e.salaireSuspendu && !onLeaveIds.has(e.id))
     .map((e) => {
       const conge_double = doublingIds.has(e.id);
       const baseMontant = conge_double ? (e.montant ?? 0) * 2 : (e.montant ?? 0);

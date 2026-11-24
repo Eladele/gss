@@ -260,10 +260,12 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
   'rh-group': Briefcase,
 };
 
-// Pages du super-administrateur (en plus de celles de l'administrateur)
+// Super-administrateur : seulement ses pages (pas celles de l'administrateur)
 const SUPERADMIN_ITEMS: NavLeaf[] = [
   { id: 'personnalisation', label: 'Personnalisation' },
   { id: 'entreprises', label: 'Entreprises' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'profil', label: 'Profil' },
 ];
 
 /**
@@ -271,7 +273,7 @@ const SUPERADMIN_ITEMS: NavLeaf[] = [
  * pages et rubriques renommées, rubriques vides supprimées.
  */
 function menuPour(user: Utilisateur, m: Marque): NavItem[] {
-  const base: NavItem[] = user.superadmin ? [...NAV[user.role], ...SUPERADMIN_ITEMS] : NAV[user.role];
+  const base: NavItem[] = user.superadmin ? SUPERADMIN_ITEMS : NAV[user.role];
   const out: NavItem[] = [];
   for (const item of base) {
     if (isGroup(item)) {

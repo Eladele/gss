@@ -23,6 +23,7 @@ import { exporterSalairesPdf, exporterSalairesPdfSepares } from '@/utils/salaire
 import { SignaturePad } from '@/components/signaturePad';
 import { DEFAULT_SIGNATURE } from '@/utils/signature';
 import type { Loan } from '@/types';
+import { BadgeSuspendu, BoutonSuspension } from '@/components/SuspensionSalaire';
 import {
   FileSpreadsheet,
   Download,
@@ -82,7 +83,7 @@ export default function ExportSalairePage() {
   // ── Filtres de la table ───────────────────────────────────────────────────
   const [search, setSearch] = useState('');
   const [filterBanque, setFilterBanque] = useState('');
-  const [filterStatut, setFilterStatut] = useState<'tous' | 'presents' | 'conge' | 'double' | 'pret'>('tous');
+  const [filterStatut, setFilterStatut] = useState<'tous' | 'presents' | 'conge' | 'double' | 'pret' | 'suspendu'>('tous');
 
   // Mois navigation
   const handleMonthChange = (val: string) => {
@@ -132,7 +133,9 @@ export default function ExportSalairePage() {
     const rows = employees
       .filter((e) => e.actif !== false)
       .map((e) => {
-        const enConge = onLeaveIds.has(e.id);
+        // salaire suspendu : traité comme non payé (pas de virement, pas de retenue de prêt)
+        const suspendu = !!e.salaireSuspendu;
+        const enConge = suspendu || onLeaveIds.has(e.id);
         const congeDouble = !enConge && doublingIds.has(e.id);
         const empLoans = activeLoansByEmployee.get(e.id) || [];
         const base = e.montant ?? 0;
@@ -142,6 +145,7 @@ export default function ExportSalairePage() {
 
         return {
           employee: e,
+          suspendu,
           enConge,
           congeDouble,
           empLoans,
@@ -155,7 +159,7 @@ export default function ExportSalairePage() {
 
     const presentsRows = rows.filter((r) => !r.enConge);
     const totalPresents = presentsRows.length;
-    const totalEnConge = rows.filter((r) => r.enConge).length;
+    const totalEnConge = rows.filter((r) => r.enConge && !r.suspendu).length;
     const totalDouble = rows.filter((r) => r.congeDouble).length;
     const totalPretsRetenus = presentsRows.reduce((acc, r) => acc + r.pretDeduit, 0);
     const totalNetMRU = presentsRows.reduce((acc, r) => acc + r.net, 0);
@@ -265,7 +269,8 @@ export default function ExportSalairePage() {
     return monthData.rows.filter((r) => {
       if (filterBanque && r.banque !== filterBanque) return false;
       if (filterStatut === 'presents' && r.enConge) return false;
-      if (filterStatut === 'conge' && !r.enConge) return false;
+      if (filterStatut === 'conge' && (!r.enConge || r.suspendu)) return false;
+      if (filterStatut === 'suspendu' && !r.suspendu) return false;
       if (filterStatut === 'double' && !r.congeDouble) return false;
       if (filterStatut === 'pret' && r.pretDeduit === 0) return false;
 
@@ -536,6 +541,7 @@ export default function ExportSalairePage() {
                 <option value="conge">En congé (exclus)</option>
                 <option value="double">Salaire doublé x2</option>
                 <option value="pret">Prêt déduit</option>
+                <option value="suspendu">Salaire suspendu</option>
               </Select>
             </div>
           </div>
@@ -556,6 +562,7 @@ export default function ExportSalairePage() {
                   <th className="px-3 py-2.5 text-center">Statut Congé</th>
                   <th className="px-3 py-2.5 text-right">Retenue Prêt</th>
                   <th className="px-3 py-2.5 text-right font-bold text-slate-900">Net à payer</th>
+                  <th className="px-3 py-2.5 text-right" aria-label="Suspension" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -564,7 +571,7 @@ export default function ExportSalairePage() {
                   return (
                     <tr
                       key={e.id}
-                      className={`hover:bg-slate-50 transition-colors ${r.enConge ? 'bg-orange-50/30 text-slate-400' : ''}`}
+                      className={`hover:bg-slate-50 transition-colors ${r.suspendu ? 'bg-red-50/40 text-slate-400' : r.enConge ? 'bg-orange-50/30 text-slate-400' : ''}`}
                     >
                       <td className="px-3 py-2 text-slate-400 font-mono text-[11px]">{idx + 1}</td>
                       <td className="px-3 py-2">
@@ -593,7 +600,9 @@ export default function ExportSalairePage() {
                         {fmt(r.base)} MRU
                       </td>
                       <td className="px-3 py-2 text-center">
-                        {r.enConge ? (
+                        {r.suspendu ? (
+                          <BadgeSuspendu e={e} />
+                        ) : r.enConge ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700">
                             🌴 En congé (exclu)
                           </span>
@@ -623,6 +632,9 @@ export default function ExportSalairePage() {
                           <span className="text-blue-700 font-black">{fmt(r.net)} MRU</span>
                         )}
                       </td>
+                      <td className="px-3 py-2 text-right">
+                        <BoutonSuspension e={e} />
+                      </td>
                     </tr>
                   );
                 })}
@@ -642,6 +654,7 @@ export default function ExportSalairePage() {
                   <td className="px-3 py-2.5 text-right text-base text-blue-700 font-black">
                     {fmt(filteredRows.filter((r) => !r.enConge).reduce((a, r) => a + r.net, 0))} MRU
                   </td>
+                  <td></td>
                 </tr>
               </tfoot>
             </table>

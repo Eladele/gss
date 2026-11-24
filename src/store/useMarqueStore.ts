@@ -58,3 +58,7 @@ export const useMarqueStore = create<MarqueState>((set, get) => ({
     set({ affichee: get().marque });
   },
 }));
+
+// Au démarrage : la marque enregistrée dans la base (logo, couleurs…) remplace celle gardée sur
+// l'appareil — sinon un autre navigateur garde l'ancien logo, à l'écran comme dans les exports.
+void useMarqueStore.getState().charger();

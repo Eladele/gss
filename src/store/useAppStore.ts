@@ -20,6 +20,7 @@ import {
   fetchEmployees,
   createEmployee,
   updateEmployee,
+  suspendreSalaire as suspendreSalaireService,
   deleteEmployee,
   fetchLeaves,
   createLeave,
@@ -134,6 +135,7 @@ interface AppState {
   setDirectorSignature: (base64: string | null) => Promise<void>;
   addEmployee: (emp: Partial<Employee>) => Promise<void>;
   editEmployee: (id: string, emp: Partial<Employee>) => Promise<void>;
+  suspendreSalaire: (id: string, suspendu: boolean, motif?: string) => Promise<void>;
   removeEmployee: (id: string) => Promise<void>;
   addLeave: (leave: Partial<LeaveRecord>) => Promise<void>;
   editLeave: (id: string, leave: Partial<LeaveRecord>) => Promise<void>;
@@ -551,6 +553,12 @@ setDirectorSignature: async (base64) => {
       editEmployee: async (id, emp) => {
         await updateEmployee(id, emp);
         set((s) => ({ employees: s.employees.map((e) => (e.id === id ? { ...e, ...emp } : e)) }));
+      },
+
+      suspendreSalaire: async (id, suspendu, motif = '') => {
+        await suspendreSalaireService(id, suspendu, motif);
+        const patch = { salaireSuspendu: suspendu, motifSuspension: suspendu ? motif.trim() : '', suspenduLe: suspendu ? new Date().toISOString() : undefined };
+        set((s) => ({ employees: s.employees.map((e) => (e.id === id ? { ...e, ...patch } : e)) }));
       },
 
       removeEmployee: async (id) => {

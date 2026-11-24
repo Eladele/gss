@@ -438,6 +438,9 @@ function mapEmployee(row: any): Employee {
     equipeNom: row.team?.name ?? '',
     dateEmbauche: row.date_embauche ?? '',
     actif: row.actif ?? true,
+    salaireSuspendu: !!row.salaire_suspendu,
+    motifSuspension: row.motif_suspension ?? '',
+    suspenduLe: row.suspendu_le ?? undefined,
     createdAt: row.created_at,
   };
 }
@@ -611,6 +614,19 @@ export async function updateEmployee(id: string, emp: Partial<Employee>): Promis
     })
     .eq('id', id);
   if (error) console.error('updateEmployee:', error);
+}
+
+/** Suspend (ou rétablit) le salaire d'un employé : il n'est plus dans les exports de salaire */
+export async function suspendreSalaire(id: string, suspendu: boolean, motif = ''): Promise<void> {
+  const { error } = await supabase
+    .from('employees')
+    .update({ salaire_suspendu: suspendu, motif_suspension: suspendu ? motif.trim() : '', suspendu_le: suspendu ? new Date().toISOString() : null })
+    .eq('id', id);
+  if (error) {
+    if (error.code === '42703' || error.code === 'PGRST204' || /salaire_suspendu|motif_suspension|suspendu_le/.test(error.message))
+      throw new Error('La suspension de salaire n’est pas encore installée (exécuter supabase_suspension_salaire.sql).');
+    throw new Error(error.message);
+  }
 }
 
 export async function deleteEmployee(id: string): Promise<void> {
@@ -1331,6 +1347,9 @@ export async function loginWithCredentials(name: string, password: string): Prom
 }
 /** Compte super-administrateur ? (colonne profiles.est_superadmin ; absente → non) */
 export async function estSuperadmin(userId: string): Promise<boolean> {
+  // la table profiles n'est pas lisible par l'application : fonction de la base (supabase_superadmin_lecture.sql)
+  const rpc = await supabase.rpc('est_superadmin', { p_user: userId });
+  if (!rpc.error) return rpc.data === true;
   const { data, error } = await supabase.from('profiles').select('est_superadmin').eq('id', userId).maybeSingle();
   if (error || !data) return false;
   return (data as { est_superadmin?: boolean }).est_superadmin === true;
