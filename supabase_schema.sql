@@ -1,6 +1,9 @@
 -- ============================================================================
 -- GSS APP — SCHÉMA DE BASE DE DONNÉES COMPLET (FICHIER UNIQUE)
--- Note : Ce fichier contient l'intégralité du schéma, identique à supabase_schema_complet.sql.
+-- Fichier unique : toute la structure de la base (tables, fonctions, déclencheurs, accès).
+-- Réexécutable (chaque instruction vérifie ce qui existe déjà). Attention sur la base en
+-- production : la section 6 remet les droits d'accès ouverts sur les tables listées.
+-- Les corrections de données ponctuelles n'y sont pas : elles s'exécutent à part, une fois.
 -- ============================================================================
 
 -- ============================================================================
@@ -136,6 +139,12 @@ CREATE TABLE IF NOT EXISTS public.loans (
     reste         NUMERIC NOT NULL,
     banque_caisse TEXT,
     statut        TEXT NOT NULL DEFAULT 'actif' CHECK (statut IN ('actif', 'solde')),
+    -- calculés par le trigger calcul_pret (section 5.P) : reste, statut, duree_mois, mois_fin_prevue
+    mois_premier_prelevement TEXT,            -- 'YYYY-MM' : mois du prêt (ou 1er mois pas encore distribué)
+    mois_fin_prevue          TEXT,            -- 'YYYY-MM'
+    deja_rembourse           NUMERIC NOT NULL DEFAULT 0, -- réglé hors salaire (avant l'application, solde exceptionnel)
+    motif_solde              TEXT,            -- soldé sans prélèvement (cas exceptionnel)
+    solde_hors_salaire_le    TIMESTAMPTZ,
     created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -143,8 +152,9 @@ CREATE TABLE IF NOT EXISTS public.loans (
 CREATE TABLE IF NOT EXISTS public.loan_payments (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     loan_id    UUID NOT NULL REFERENCES public.loans(id) ON DELETE CASCADE,
-    month      TEXT NOT NULL,
+    month      TEXT NOT NULL, -- 'YYYY-MM' : salaire sur lequel la mensualité est retenue
     montant    NUMERIC NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'manuel', -- manuel | distribution | reprise
     created_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT loan_payments_loan_month_uniq UNIQUE (loan_id, month)
 );
@@ -389,6 +399,18 @@ CREATE TABLE IF NOT EXISTS public.programme_ot (
     updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ─── 2.21 Mois de paie (date de distribution des salaires libre) ─────────────
+-- Valider la distribution d'un mois enregistre les prélèvements de prêts du mois.
+CREATE TABLE IF NOT EXISTS public.salary_months (
+    mois              TEXT PRIMARY KEY CHECK (mois ~ '^\d{4}-\d{2}$'), -- 'YYYY-MM'
+    date_distribution DATE NOT NULL,
+    statut            TEXT NOT NULL DEFAULT 'prevu' CHECK (statut IN ('prevu', 'distribue')),
+    distribue_le      TIMESTAMPTZ,
+    distribue_par     TEXT,
+    total_net         NUMERIC,
+    created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
 
 -- ============================================================================
 -- 3. RÉTROCOMPATIBILITÉ
@@ -405,6 +427,26 @@ ALTER TABLE public.situations ADD COLUMN IF NOT EXISTS date_message DATE;
 ALTER TABLE public.situations ADD COLUMN IF NOT EXISTS service_destination TEXT;
 
 ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS equipe_nom TEXT;
+
+-- salaire suspendu (admin / directeur) : exclu des ordres de virement, caisse et récap.
+-- Le contrôle du rôle est fait par l'application (pas de Supabase Auth : auth.uid() vide).
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS salaire_suspendu BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS motif_suspension TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.employees ADD COLUMN IF NOT EXISTS suspendu_le TIMESTAMPTZ;
+
+-- super-administrateur (lu par la fonction est_superadmin, la table profiles reste protégée)
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS est_superadmin BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- commentaire du superviseur pour le chef d'équipe, sur une fiche OT
+ALTER TABLE public.situations ADD COLUMN IF NOT EXISTS note_chef TEXT NOT NULL DEFAULT '';
+
+-- prêts : 1er prélèvement, fin prévue, remboursé hors salaire, solde exceptionnel
+ALTER TABLE public.loans ADD COLUMN IF NOT EXISTS mois_premier_prelevement TEXT;
+ALTER TABLE public.loans ADD COLUMN IF NOT EXISTS mois_fin_prevue TEXT;
+ALTER TABLE public.loans ADD COLUMN IF NOT EXISTS deja_rembourse NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE public.loans ADD COLUMN IF NOT EXISTS motif_solde TEXT;
+ALTER TABLE public.loans ADD COLUMN IF NOT EXISTS solde_hors_salaire_le TIMESTAMPTZ;
+ALTER TABLE public.loan_payments ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manuel';
 ALTER TABLE public.vehicles ADD COLUMN IF NOT EXISTS statut_depuis TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.materiels ADD COLUMN IF NOT EXISTS code TEXT;
 
@@ -442,6 +484,8 @@ CREATE INDEX IF NOT EXISTS idx_situations_nature ON public.situations (nature);
 CREATE INDEX IF NOT EXISTS idx_situations_date_depo ON public.situations (date_depo);
 CREATE INDEX IF NOT EXISTS idx_situations_equipe ON public.situations (equipe);
 CREATE INDEX IF NOT EXISTS idx_situations_import_id ON public.situations (import_id);
+-- chargement page par page de situations_detail (curseur created_at DESC, id ASC) : évite l'erreur 500
+CREATE INDEX IF NOT EXISTS situations_created_id_idx ON public.situations (created_at DESC, id ASC);
 
 CREATE INDEX IF NOT EXISTS idx_employee_leaves_employee_id ON public.employee_leaves (employee_id);
 CREATE INDEX IF NOT EXISTS idx_loans_employee_id ON public.loans (employee_id);
@@ -738,6 +782,316 @@ $$;
 
 CREATE INDEX IF NOT EXISTS idx_scan_results_norm_ont ON public.scan_results (import_id, (public.norm_ont(sn_mac)));
 
+-- ─── 5.P Prêts & distribution des salaires ───────────────────────────────────
+-- Règles :
+--  1. 1er prélèvement = le MOIS DU PRÊT ; si les salaires de ce mois sont déjà distribués,
+--     le premier mois pas encore distribué (une avance est soldée en entier sur ce salaire).
+--  2. Jour de distribution libre : chaque mois a sa date (salary_months) ; valider la
+--     distribution enregistre les prélèvements calculés par l'application.
+--  3. Durée automatique : échéances = montant ÷ mensualité (arrondi au-dessus) ; un mois
+--     distribué sans prélèvement (congé, salaire suspendu, salaire insuffisant) repousse la fin.
+--     reste / statut / durée / fin prévue sont recalculés à chaque prélèvement ou distribution.
+--  4. Solde exceptionnel : le prêt se termine sans prélèvement (le reste passe en deja_rembourse).
+-- Supabase refuse un UPDATE sans WHERE venant de l'application : toujours mettre un WHERE.
+
+CREATE OR REPLACE FUNCTION public.mois_plus(p_mois TEXT, p_n INT)
+RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+  SELECT to_char(to_date(p_mois || '-01', 'YYYY-MM-DD') + make_interval(months => p_n), 'YYYY-MM');
+$$;
+
+-- nombre de mois de a vers b (b - a)
+CREATE OR REPLACE FUNCTION public.mois_ecart(a TEXT, b TEXT)
+RETURNS INT LANGUAGE sql IMMUTABLE AS $$
+  SELECT (split_part(b, '-', 1)::int * 12 + split_part(b, '-', 2)::int)
+       - (split_part(a, '-', 1)::int * 12 + split_part(a, '-', 2)::int);
+$$;
+
+-- 1er prélèvement automatique : mois du prêt, ou le premier mois pas encore distribué
+CREATE OR REPLACE FUNCTION public.mois_premier_auto(p_date DATE)
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  v TEXT := to_char(p_date, 'YYYY-MM');
+BEGIN
+  WHILE EXISTS (SELECT 1 FROM public.salary_months s WHERE s.mois = v AND s.statut = 'distribue') LOOP
+    v := public.mois_plus(v, 1);
+  END LOOP;
+  RETURN v;
+END;
+$$;
+
+-- calcul automatique d'un prêt (avant chaque INSERT / UPDATE)
+CREATE OR REPLACE FUNCTION public.calcul_pret()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_paye     NUMERIC;
+  v_dernier  TEXT;
+  v_dist     TEXT;
+  v_proch    TEXT;
+BEGIN
+  IF NEW.mensualite IS NULL OR NEW.mensualite <= 0 THEN
+    RAISE EXCEPTION 'La mensualité doit être supérieure à 0';
+  END IF;
+  NEW.deja_rembourse := COALESCE(NEW.deja_rembourse, 0);
+
+  IF NEW.mois_premier_prelevement IS NULL OR NEW.mois_premier_prelevement = '' THEN
+    NEW.mois_premier_prelevement := public.mois_premier_auto(NEW.date_debut);
+  END IF;
+
+  SELECT COALESCE(SUM(p.montant), 0), MAX(p.month) INTO v_paye, v_dernier
+  FROM public.loan_payments p WHERE p.loan_id = NEW.id;
+
+  NEW.reste  := GREATEST(0, NEW.montant_total - NEW.deja_rembourse - v_paye);
+  NEW.statut := CASE WHEN NEW.reste <= 0 THEN 'solde' ELSE 'actif' END;
+
+  IF NEW.reste <= 0 THEN
+    NEW.mois_fin_prevue := COALESCE(v_dernier,
+      public.mois_plus(NEW.mois_premier_prelevement, GREATEST(1, CEIL(NEW.montant_total / NEW.mensualite)::int) - 1));
+  ELSE
+    -- prochain mois prélevable : après le dernier mois distribué et le dernier prélèvement
+    SELECT MAX(s.mois) INTO v_dist FROM public.salary_months s WHERE s.statut = 'distribue';
+    v_proch := GREATEST(NEW.mois_premier_prelevement,
+                        COALESCE(public.mois_plus(v_dist, 1), ''),
+                        COALESCE(public.mois_plus(v_dernier, 1), ''));
+    NEW.mois_fin_prevue := public.mois_plus(v_proch, CEIL(NEW.reste / NEW.mensualite)::int - 1);
+  END IF;
+
+  -- durée réelle (inclut les mois non prélevés)
+  NEW.duree_mois := GREATEST(1, public.mois_ecart(NEW.mois_premier_prelevement, NEW.mois_fin_prevue) + 1);
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_calcul_pret ON public.loans;
+CREATE TRIGGER trg_calcul_pret BEFORE INSERT OR UPDATE ON public.loans
+FOR EACH ROW EXECUTE FUNCTION public.calcul_pret();
+
+-- un prélèvement ajouté / supprimé → recalcul du prêt
+CREATE OR REPLACE FUNCTION public.recalcul_pret_apres_paiement()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE public.loans SET id = id WHERE id = COALESCE(NEW.loan_id, OLD.loan_id);
+  RETURN NULL;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_recalcul_pret_paiement ON public.loan_payments;
+CREATE TRIGGER trg_recalcul_pret_paiement AFTER INSERT OR UPDATE OR DELETE ON public.loan_payments
+FOR EACH ROW EXECUTE FUNCTION public.recalcul_pret_apres_paiement();
+
+-- une distribution validée / annulée → recalcul des prêts (fin prévue, durée)
+CREATE OR REPLACE FUNCTION public.recalcul_prets_apres_distribution()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE public.loans SET id = id WHERE id IS NOT NULL; -- WHERE obligatoire (Supabase refuse un UPDATE sans WHERE)
+  RETURN NULL;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_recalcul_prets_distribution ON public.salary_months;
+CREATE TRIGGER trg_recalcul_prets_distribution AFTER INSERT OR UPDATE OR DELETE ON public.salary_months
+FOR EACH STATEMENT EXECUTE FUNCTION public.recalcul_prets_apres_distribution();
+
+-- valider la distribution d'un mois
+-- p_prelevements : [{ "loan_id": "...", "montant": 1000 }, ...] calculé par l'application
+-- (congés, salaire suspendu, salaire insuffisant déjà pris en compte).
+CREATE OR REPLACE FUNCTION public.valider_distribution_salaire(
+  p_mois TEXT, p_date DATE, p_par TEXT, p_total NUMERIC, p_prelevements JSONB)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.salary_months WHERE mois = p_mois AND statut = 'distribue') THEN
+    RAISE EXCEPTION 'Les salaires de % sont déjà distribués', p_mois;
+  END IF;
+
+  INSERT INTO public.salary_months (mois, date_distribution, statut, distribue_le, distribue_par, total_net)
+  VALUES (p_mois, p_date, 'distribue', now(), p_par, p_total)
+  ON CONFLICT (mois) DO UPDATE
+    SET date_distribution = EXCLUDED.date_distribution, statut = 'distribue',
+        distribue_le = now(), distribue_par = EXCLUDED.distribue_par, total_net = EXCLUDED.total_net;
+
+  INSERT INTO public.loan_payments (loan_id, month, montant, source)
+  SELECT (x->>'loan_id')::uuid, p_mois, (x->>'montant')::numeric, 'distribution'
+  FROM jsonb_array_elements(COALESCE(p_prelevements, '[]'::jsonb)) x
+  WHERE (x->>'montant')::numeric > 0
+  ON CONFLICT (loan_id, month) DO NOTHING;
+END;
+$$;
+
+-- annuler la distribution : seulement le dernier mois distribué ; supprime les prélèvements
+-- créés par la distribution (les prélèvements manuels restent).
+-- SECURITY DEFINER : la clé de l'application ne peut pas supprimer dans loan_payments.
+CREATE OR REPLACE FUNCTION public.annuler_distribution_salaire(p_mois TEXT)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.salary_months WHERE statut = 'distribue' AND mois > p_mois) THEN
+    RAISE EXCEPTION 'Annulez d''abord les distributions des mois suivants';
+  END IF;
+  DELETE FROM public.loan_payments WHERE month = p_mois AND source = 'distribution';
+  UPDATE public.salary_months
+  SET statut = 'prevu', distribue_le = NULL, distribue_par = NULL, total_net = NULL
+  WHERE mois = p_mois;
+END;
+$$;
+
+-- solder un prêt sans prélèvement (cas exceptionnel) : retire les prélèvements des mois pas
+-- encore distribués, le reste passe en « réglé hors salaire » → reste 0, soldé.
+CREATE OR REPLACE FUNCTION public.solder_pret_exceptionnel(p_loan UUID, p_motif TEXT)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_paye NUMERIC;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.loans WHERE id = p_loan) THEN
+    RAISE EXCEPTION 'Prêt introuvable';
+  END IF;
+
+  DELETE FROM public.loan_payments p
+  WHERE p.loan_id = p_loan
+    AND NOT EXISTS (SELECT 1 FROM public.salary_months s WHERE s.mois = p.month AND s.statut = 'distribue');
+
+  SELECT COALESCE(SUM(montant), 0) INTO v_paye FROM public.loan_payments WHERE loan_id = p_loan;
+
+  UPDATE public.loans
+  SET deja_rembourse = GREATEST(0, montant_total - v_paye),
+      motif_solde = NULLIF(trim(COALESCE(p_motif, '')), ''),
+      solde_hors_salaire_le = now()
+  WHERE id = p_loan; -- le trigger calcul_pret recalcule reste (0), statut (soldé), fin et durée
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.valider_distribution_salaire(TEXT, DATE, TEXT, NUMERIC, JSONB) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.annuler_distribution_salaire(TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.solder_pret_exceptionnel(UUID, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mois_plus(TEXT, INT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mois_ecart(TEXT, TEXT) TO anon, authenticated;
+
+-- ─── 5.Q Salaire suspendu ────────────────────────────────────────────────────
+-- Ancienne version : ce contrôle bloquait tout le monde (auth.uid() toujours vide) → supprimé
+DROP TRIGGER IF EXISTS trg_controle_suspension_salaire ON public.employees;
+DROP FUNCTION IF EXISTS public.controle_suspension_salaire();
+
+-- ─── 5.R Lecture du drapeau super-administrateur ─────────────────────────────
+-- profiles est protégée (mots de passe) : l'application ne la lit pas. Cette fonction renvoie
+-- seulement oui / non pour un compte, sans rien exposer d'autre.
+CREATE OR REPLACE FUNCTION public.est_superadmin(p_user UUID)
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT COALESCE((SELECT p.est_superadmin FROM public.profiles p WHERE p.id = p_user), false);
+$$;
+GRANT EXECUTE ON FUNCTION public.est_superadmin(UUID) TO anon, authenticated;
+
+-- ─── 5.S Historique des « non fait » toujours gardé ──────────────────────────
+-- La base archive elle-même (historique_clotures) le motif et le commentaire « non fait »
+-- d'une fiche dès qu'ils sont remplacés (reclôture, remise « à faire », cas urgent, page
+-- Situations), pas seulement au renvoi normal.
+-- Exception : clic par erreur corrigé (remise « à faire » moins de 30 min après).
+CREATE OR REPLACE FUNCTION public.archiver_non_fait()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF OLD.status = 'non_ok'
+     AND (NEW.status IS DISTINCT FROM 'non_ok' OR NEW.motif_cloture IS DISTINCT FROM OLD.motif_cloture)
+     -- clic par erreur corrigé tout de suite : rien à garder
+     AND NOT (NEW.status IN ('pending', 'urgent') AND OLD.traite_le IS NOT NULL AND now() - OLD.traite_le < interval '30 minutes'
+              AND NEW.date_programme IS NOT DISTINCT FROM OLD.date_programme)
+     -- déjà archivé (renvoi normal)
+     AND NOT EXISTS (
+       SELECT 1 FROM public.historique_clotures h
+       WHERE h.situation_id = OLD.id AND h.traite_le IS NOT DISTINCT FROM OLD.traite_le
+     )
+  THEN
+    INSERT INTO public.historique_clotures
+      (situation_id, team_id, statut, motif_cloture, commentaire, poteau, date_programme, traite_par, traite_le, renvoye_par, renvoye_le)
+    VALUES
+      (OLD.id, OLD.team_id, 'non_ok', COALESCE(OLD.motif_cloture, ''), COALESCE(OLD.comment, ''), COALESCE(OLD.poteau, 0),
+       -- pas de Supabase Auth (auth.uid() vide) : « renvoyé par » = la personne qui a changé la fiche
+       OLD.date_programme, OLD.traite_par, OLD.traite_le, COALESCE(NEW.traite_par, NEW.distribue_par, OLD.traite_par), now());
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- pas de doublon : si le renvoi normal archive la même clôture après le déclencheur, on l'ignore
+CREATE OR REPLACE FUNCTION public.historique_sans_doublon()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.historique_clotures h
+    WHERE h.situation_id = NEW.situation_id AND h.traite_le IS NOT DISTINCT FROM NEW.traite_le
+  ) THEN
+    RETURN NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- déclencheurs posés seulement si historique_clotures et les colonnes de clôture existent
+-- (elles ne sont pas encore décrites dans ce fichier)
+DO $$
+BEGIN
+  IF to_regclass('public.historique_clotures') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'situations' AND column_name = 'motif_cloture') THEN
+    EXECUTE 'DROP TRIGGER IF EXISTS trg_archiver_non_fait ON public.situations';
+    EXECUTE 'CREATE TRIGGER trg_archiver_non_fait AFTER UPDATE OF status, motif_cloture ON public.situations
+             FOR EACH ROW EXECUTE FUNCTION public.archiver_non_fait()';
+    EXECUTE 'DROP TRIGGER IF EXISTS trg_historique_sans_doublon ON public.historique_clotures';
+    EXECUTE 'CREATE TRIGGER trg_historique_sans_doublon BEFORE INSERT ON public.historique_clotures
+             FOR EACH ROW EXECUTE FUNCTION public.historique_sans_doublon()';
+  END IF;
+END $$;
+
+-- ─── 5.T Photo du programme de chaque jour ───────────────────────────────────
+-- programme_photo garde, pour chaque jour, les fiches OT encore ouvertes (à faire / en cours /
+-- urgentes) avec leur équipe, telles qu'en fin de journée : la surveillance s'en sert pour un
+-- jour passé. Refaite à chaque modification de situations et à l'ouverture des pages programme ;
+-- les jours passés ne sont jamais modifiés.
+CREATE TABLE IF NOT EXISTS public.programme_photo (
+    jour         DATE NOT NULL,
+    situation_id TEXT NOT NULL,
+    donnees      JSONB NOT NULL, -- la ligne de situations_detail à ce moment-là
+    pris_le      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (jour, situation_id)
+);
+ALTER TABLE public.programme_photo ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS programme_photo_lecture ON public.programme_photo;
+CREATE POLICY programme_photo_lecture ON public.programme_photo FOR SELECT TO authenticated USING (true);
+-- écriture seulement par la fonction ci-dessous
+
+-- refait la photo du jour (UTC, comme l'application) ; renvoie le nombre de fiches en cours
+CREATE OR REPLACE FUNCTION public.photographier_programme()
+RETURNS INTEGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_jour DATE := (now() AT TIME ZONE 'UTC')::date;
+  n INTEGER;
+BEGIN
+  DELETE FROM public.programme_photo WHERE jour = v_jour;
+  INSERT INTO public.programme_photo (jour, situation_id, donnees)
+  SELECT v_jour, d.id::text, to_jsonb(d)
+  FROM public.situations_detail d
+  WHERE d.numero_ot IS NOT NULL
+    AND d.team_id IS NOT NULL
+    AND d.status IN ('pending', 'in_progress', 'urgent')
+  ON CONFLICT (jour, situation_id) DO UPDATE SET donnees = EXCLUDED.donnees, pris_le = now();
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.photographier_programme() TO authenticated;
+
+-- après chaque modification de situations (une fois par requête) : la photo du jour suit.
+-- Une erreur ici ne bloque jamais la modification elle-même.
+CREATE OR REPLACE FUNCTION public.photo_programme_apres_modif()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  BEGIN
+    PERFORM public.photographier_programme();
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS photo_programme ON public.situations;
+CREATE TRIGGER photo_programme
+AFTER INSERT OR UPDATE OR DELETE ON public.situations
+FOR EACH STATEMENT EXECUTE FUNCTION public.photo_programme_apres_modif();
+
 
 -- ============================================================================
 -- 6. SÉCURITÉ ROW LEVEL SECURITY (RLS) & DROITS D'ACCÈS
@@ -752,7 +1106,7 @@ BEGIN
         WHERE table_schema = 'public'
           AND table_name IN (
             'teams', 'profiles', 'import_history', 'situations', 'programs',
-            'employees', 'employee_leaves', 'loans', 'loan_payments',
+            'employees', 'employee_leaves', 'loans', 'loan_payments', 'salary_months',
             'vehicles', 'materiels', 'chantiers', 'reseau_noeuds',
             'caisses', 'caisse_operations', 'caisse_charges_fixes',
             'app_notifications', 'scan_import_history', 'scan_results', 'programme_ot'
@@ -776,7 +1130,7 @@ BEGIN
     FOR tbl IN
         SELECT unnest(ARRAY[
             'app_notifications', 'caisse_operations', 'caisses', 'caisse_charges_fixes',
-            'programme_ot', 'situations', 'loans', 'vehicles', 'chantiers'
+            'programme_ot', 'situations', 'loans', 'salary_months', 'vehicles', 'chantiers'
         ])
     LOOP
         BEGIN
@@ -857,8 +1211,7 @@ WHERE NOT EXISTS (
     SELECT 1 FROM public.teams t WHERE lower(t.name) = lower(v.name)
 );
 
-`
-` INTO public.profiles (name, role, password_hash)
+INSERT INTO public.profiles (name, role, password_hash)
 SELECT 'eladel', 'admin'::public.app_role, 'gss2026'
 WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE lower(name) = 'eladel');
 
@@ -915,3 +1268,6 @@ WHERE NOT EXISTS (
     SELECT 1 FROM public.caisse_charges_fixes cf
     WHERE cf.caisse_id = cb.id AND cf.libelle = v.libelle
 );
+
+-- recharge le cache de l'API pour que les nouvelles colonnes soient visibles tout de suite
+NOTIFY pgrst, 'reload schema';
