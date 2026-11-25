@@ -50,6 +50,8 @@ import {
 
 const FEUILLES_DISPO = ['BPM', 'Caisse', 'BII', 'Récap'];
 
+type FiltreStatut = 'tous' | 'presents' | 'conge' | 'double' | 'pret' | 'suspendu';
+
 const AVATAR_PALETTE = ['#1565C0', '#2E7D32', '#E9A93B', '#8E24AA', '#00838F', '#C62828', '#546E7A'];
 function colorFor(seed: string) {
   let h = 0;
@@ -86,7 +88,8 @@ export default function ExportSalairePage() {
   const annulerDistribution = useAppStore((s) => s.annulerDistribution);
   const role = useAppStore((s) => s.user?.role);
   const superadmin = useAppStore((s) => s.user?.superadmin);
-  const peutDistribuer = !!superadmin || role === 'admin' || role === 'directeur';
+  // distribution des salaires : admin, directeur, RH (et super-administrateur)
+  const peutDistribuer = !!superadmin || role === 'admin' || role === 'directeur' || role === 'rh';
   const loadEmployees = useAppStore((s) => s.loadEmployees);
   const directorSignature = useAppStore((s) => s.directorSignature);
   const setDirectorSignature = useAppStore((s) => s.setDirectorSignature);
@@ -111,7 +114,7 @@ export default function ExportSalairePage() {
   // ── Filtres de la table ───────────────────────────────────────────────────
   const [search, setSearch] = useState('');
   const [filterBanque, setFilterBanque] = useState('');
-  const [filterStatut, setFilterStatut] = useState<'tous' | 'presents' | 'conge' | 'double' | 'pret' | 'suspendu'>('tous');
+  const [filterStatut, setFilterStatut] = useState<FiltreStatut>('tous');
 
   // Mois navigation
   const handleMonthChange = (val: string) => {
@@ -310,8 +313,8 @@ export default function ExportSalairePage() {
       await exportEmployesPresentsExcel(exportOpts());
       setPreview(null);
       showToast('Fichier Excel Ordre de virement généré avec succès ✅', 'success');
-    } catch (err: any) {
-      showToast(`Erreur lors de la génération Excel: ${err?.message || err}`, 'error');
+    } catch (err) {
+      showToast(`Erreur lors de la génération Excel: ${err instanceof Error ? err.message : String(err)}`, 'error');
     } finally {
       setExporting(false);
     }
@@ -353,8 +356,8 @@ export default function ExportSalairePage() {
       setExporting(true);
       await exportEmployesPresentsExcelSepares(exportOpts());
       showToast('Fichiers Excel séparés par banque téléchargés ✅', 'success');
-    } catch (err: any) {
-      showToast(`Erreur lors de la génération: ${err?.message || err}`, 'error');
+    } catch (err) {
+      showToast(`Erreur lors de la génération: ${err instanceof Error ? err.message : String(err)}`, 'error');
     } finally {
       setExporting(false);
     }
@@ -682,7 +685,7 @@ export default function ExportSalairePage() {
               <Select
                 className="text-xs py-1.5 h-8"
                 value={filterStatut}
-                onChange={(e) => setFilterStatut(e.target.value as any)}
+                onChange={(e) => setFilterStatut(e.target.value as FiltreStatut)}
               >
                 <option value="tous">Tous les statuts</option>
                 <option value="presents">Payés (présents)</option>
