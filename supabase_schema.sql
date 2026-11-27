@@ -22,6 +22,11 @@ EXCEPTION
         END;
 END $$;
 
+-- rôles ajoutés ensuite (consultation, directeur ; technicien : programme de son équipe en lecture seule)
+ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'consultation';
+ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'directeur';
+ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'technicien';
+
 
 -- ============================================================================
 -- 2. CRÉATION DES TABLES
@@ -1093,6 +1098,152 @@ AFTER INSERT OR UPDATE OR DELETE ON public.situations
 FOR EACH STATEMENT EXECUTE FUNCTION public.photo_programme_apres_modif();
 
 
+-- ─── 5.U Notifications push (Firebase Cloud Messaging) ─────────────────────
+--  device_tokens : jetons FCM des téléphones (fermée à la clé anon, RPC ci-dessous) ;
+--  chaque ligne insérée dans app_notifications (web ou mobile) part en push via la
+--  fonction send-push (pg_net). Après déploiement de send-push, remplir push_config (voir fin du bloc).
+CREATE EXTENSION IF NOT EXISTS pg_net;
+
+-- ─── 1. Jetons des téléphones ──────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.device_tokens (
+    token        TEXT PRIMARY KEY,
+    user_id      UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    plateforme   TEXT NOT NULL DEFAULT 'android',
+    app_version  TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS device_tokens_user_idx ON public.device_tokens (user_id);
+
+-- fermée à la clé publique : lecture/écriture seulement par les fonctions ci-dessous
+-- et par la fonction send-push (clé service_role)
+ALTER TABLE public.device_tokens ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.device_tokens FROM anon, authenticated;
+
+-- ─── 2. Fonctions appelées par le mobile ───────────────────────────────────
+CREATE OR REPLACE FUNCTION public.enregistrer_jeton_push(
+    p_token TEXT,
+    p_user UUID,
+    p_plateforme TEXT DEFAULT 'android',
+    p_version TEXT DEFAULT ''
+) RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+    IF COALESCE(trim(p_token), '') = '' THEN
+        RAISE EXCEPTION 'Jeton push vide';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM profiles WHERE id = p_user) THEN
+        RAISE EXCEPTION 'Compte inconnu';
+    END IF;
+    -- un téléphone = un jeton : s'il change de compte, le jeton suit le nouveau compte
+    INSERT INTO device_tokens (token, user_id, plateforme, app_version)
+    VALUES (p_token, p_user, COALESCE(NULLIF(p_plateforme, ''), 'android'), COALESCE(p_version, ''))
+    ON CONFLICT (token) DO UPDATE
+        SET user_id = EXCLUDED.user_id,
+            plateforme = EXCLUDED.plateforme,
+            app_version = EXCLUDED.app_version,
+            updated_at = NOW();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.supprimer_jeton_push(p_token TEXT)
+RETURNS VOID
+LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+    DELETE FROM device_tokens WHERE token = p_token;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.enregistrer_jeton_push(TEXT, UUID, TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.supprimer_jeton_push(TEXT) TO anon, authenticated;
+
+-- ─── 3. Configuration de l'envoi ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.push_config (
+    id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    function_url  TEXT,
+    secret        TEXT,
+    actif         BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE public.push_config ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.push_config FROM anon, authenticated;
+INSERT INTO public.push_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- ─── 4. Envoi à chaque nouvelle notification ───────────────────────────────
+CREATE OR REPLACE FUNCTION public.notifier_push()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    cfg public.push_config%ROWTYPE;
+BEGIN
+    SELECT * INTO cfg FROM push_config WHERE id = 1;
+    IF NOT FOUND OR NOT cfg.actif OR COALESCE(cfg.function_url, '') = '' THEN
+        RETURN NEW;
+    END IF;
+    -- personne à prévenir : pas d'appel inutile
+    IF NOT EXISTS (SELECT 1 FROM device_tokens WHERE user_id = NEW.destinataire_id) THEN
+        RETURN NEW;
+    END IF;
+    -- appel asynchrone (pg_net) : l'insertion de la notification n'attend pas Firebase
+    PERFORM net.http_post(
+        url := cfg.function_url,
+        body := jsonb_build_object('record', to_jsonb(NEW)),
+        headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'x-push-secret', COALESCE(cfg.secret, '')
+        )
+    );
+    RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+    -- jamais bloquer la notification dans l'application à cause du push
+    RAISE WARNING 'notifier_push : %', SQLERRM;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS app_notifications_push ON public.app_notifications;
+CREATE TRIGGER app_notifications_push
+    AFTER INSERT ON public.app_notifications
+    FOR EACH ROW EXECUTE FUNCTION public.notifier_push();
+
+-- ─── À faire une fois après le déploiement de la fonction send-push ─────────
+-- UPDATE public.push_config
+--    SET function_url = 'https://<projet>.supabase.co/functions/v1/send-push',
+--        secret = '<même valeur que le secret PUSH_SECRET de la fonction>',
+--        actif = TRUE,
+--        updated_at = NOW()
+--  WHERE id = 1;
+
+
+-- ─── 5.V notifier_equipe : prévenir le chef et les techniciens d'une équipe ─
+--  profiles est protégée : web et mobile appellent cette RPC pour les cas urgents.
+CREATE OR REPLACE FUNCTION public.notifier_equipe(
+    p_team UUID,
+    p_titre TEXT,
+    p_message TEXT DEFAULT '',
+    p_type TEXT DEFAULT 'programme_urgent',
+    p_module TEXT DEFAULT 'programme',
+    p_ref UUID DEFAULT NULL
+) RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    n INTEGER;
+BEGIN
+    IF p_team IS NULL OR COALESCE(trim(p_titre), '') = '' THEN
+        RETURN 0;
+    END IF;
+    INSERT INTO app_notifications (destinataire_id, titre, message, type, module, ref_id)
+    SELECT p.id, left(p_titre, 200), left(COALESCE(p_message, ''), 1000),
+           COALESCE(NULLIF(p_type, ''), 'programme_urgent'), COALESCE(NULLIF(p_module, ''), 'programme'), p_ref
+      FROM profiles p
+     WHERE p.team_id = p_team
+       AND p.role::text IN ('chef', 'technicien');
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN n;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.notifier_equipe(UUID, TEXT, TEXT, TEXT, TEXT, UUID) TO anon, authenticated;
+
+
 -- ============================================================================
 -- 6. SÉCURITÉ ROW LEVEL SECURITY (RLS) & DROITS D'ACCÈS
 -- ============================================================================
@@ -1211,29 +1362,11 @@ WHERE NOT EXISTS (
     SELECT 1 FROM public.teams t WHERE lower(t.name) = lower(v.name)
 );
 
-INSERT INTO public.profiles (name, role, password_hash)
-SELECT 'eladel', 'admin'::public.app_role, 'gss2026'
-WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE lower(name) = 'eladel');
-
-INSERT INTO public.profiles (name, role, password_hash)
-SELECT 'habib', 'admin'::public.app_role, 'gss2026'
-WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE lower(name) = 'habib');
-
-INSERT INTO public.profiles (name, role, password_hash)
-SELECT 'Fatimata', 'superviseur'::public.app_role, 'superviseur2026'
-WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE lower(name) = 'fatimata');
-
-INSERT INTO public.profiles (name, role, password_hash)
-SELECT 'Betoul', 'rh'::public.app_role, 'rh2026'
-WHERE NOT EXISTS (SELECT 1 FROM public.profiles WHERE lower(name) = 'betoul');
-
-INSERT INTO public.profiles (name, role, team_id, password_hash)
-SELECT t.name, 'chef'::public.app_role, t.id, 'chef2026'
-FROM public.teams t
-WHERE lower(t.name) IN ('hamadi', 'tiam', 'mohamed dahmed', 'mohamedou', 'diop', 'ndaye')
-  AND NOT EXISTS (
-      SELECT 1 FROM public.profiles p WHERE lower(p.name) = lower(t.name)
-  );
+-- Comptes de connexion : AUCUN compte n'est créé ici (plus de mots de passe connus comme
+-- « gss2026 »). Dans un projet neuf, l'écran d'installation de l'application (Edge Function
+-- « installation ») crée le super-administrateur, l'entreprise et ses administrateurs ; ceux-ci
+-- créent ensuite les autres comptes dans la page Utilisateurs (Edge Function « admin-users »).
+-- Les caisses ci-dessous ne sont créées que si leur titulaire existe déjà.
 
 INSERT INTO public.caisses (nom, titulaire_id, telephone, seuil_alerte, actif)
 SELECT 'El Adel', p.id, '32103354', 5000, true

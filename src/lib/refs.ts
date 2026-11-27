@@ -108,11 +108,23 @@ export interface LigneInfos {
   miseEnService?: string;
 }
 
+/** Ligne que la base a refusé de mettre à jour (règle, contrôle ou déclencheur de la table lignes) */
+export interface LigneRefusee {
+  fgp: string;
+  raison: string;
+}
+
 /** Crée ou met à jour les lignes et renvoie fgp → ligne_id.
  *  Seuls les champs renseignés sont écrits : une information déjà connue n'est
- *  jamais effacée par un fichier qui ne la contient pas. */
-export async function upsertLignes(lignes: LigneInfos[]): Promise<Map<string, string>> {
+ *  jamais effacée par un fichier qui ne la contient pas.
+ *  `tolerant` (distribution) : une ligne existante dont la mise à jour est refusée garde ses anciennes
+ *  infos et l'OT est distribué quand même ; les refus sont rendus par `onRefus` pour être affichés. */
+export async function upsertLignes(
+  lignes: LigneInfos[],
+  opts: { tolerant?: boolean; onRefus?: (refus: LigneRefusee[]) => void } = {},
+): Promise<Map<string, string>> {
   const out = new Map<string, string>();
+  const refus: LigneRefusee[] = [];
   const parFgp = new Map<string, LigneInfos>();
   lignes.forEach((l) => {
     const fgp = (l.fgp ?? '').trim();
@@ -142,17 +154,38 @@ export async function upsertLignes(lignes: LigneInfos[]): Promise<Map<string, st
         cols === 'fgp'
           ? await supabase.from('lignes').upsert(chunk, { onConflict: 'fgp', ignoreDuplicates: true }).select('id, fgp')
           : await supabase.from('lignes').upsert(chunk, { onConflict: 'fgp' }).select('id, fgp');
-      if (error) throw new Error(error.message);
+      if (error) {
+        // lot refusé : on repasse ligne par ligne pour nommer le FGP en cause et la raison exacte
+        console.error('Enregistrement des lignes refusé', error);
+        for (const row of chunk) {
+          const r1 = await supabase.from('lignes').upsert([row], { onConflict: 'fgp' }).select('id, fgp');
+          if (r1.error) {
+            refus.push({ fgp: String(row.fgp), raison: [r1.error.message, r1.error.details, r1.error.hint].filter(Boolean).join(' — ') });
+            console.error('Ligne refusée', row, r1.error);
+          } else (r1.data ?? []).forEach((r) => out.set(r.fgp as string, r.id as string));
+        }
+        continue;
+      }
       (data ?? []).forEach((r) => out.set(r.fgp as string, r.id as string));
     }
   }
-  // lignes déjà existantes ignorées par ignoreDuplicates : on lit leur id
+  const texteRefus = () => refus.slice(0, 3).map((r) => `${r.fgp} : ${r.raison}`).join(' | ');
+  if (refus.length && !opts.tolerant) throw new Error(`Ligne${refus.length > 1 ? 's' : ''} refusée${refus.length > 1 ? 's' : ''} par la base — ${texteRefus()}`);
+  // lignes déjà existantes (ignorées par ignoreDuplicates, ou mise à jour refusée) : on lit leur id
   const manquantes = [...parFgp.keys()].filter((f) => !out.has(f));
   for (let i = 0; i < manquantes.length; i += 200) {
     const { data, error } = await supabase.from('lignes').select('id, fgp').in('fgp', manquantes.slice(i, i + 200));
     if (error) throw new Error(error.message);
     (data ?? []).forEach((r) => out.set(r.fgp as string, r.id as string));
   }
+  // ligne refusée qui n'existe pas encore : on la crée avec son seul FGP
+  for (const r of refus.filter((x) => !out.has(x.fgp))) {
+    const { data } = await supabase.from('lignes').upsert([{ fgp: r.fgp }], { onConflict: 'fgp', ignoreDuplicates: true }).select('id, fgp');
+    (data ?? []).forEach((d) => out.set(d.fgp as string, d.id as string));
+  }
+  const sansLigne = refus.filter((x) => !out.has(x.fgp));
+  if (sansLigne.length) throw new Error(`Ligne${sansLigne.length > 1 ? 's' : ''} impossible${sansLigne.length > 1 ? 's' : ''} à créer — ${sansLigne.map((r) => `${r.fgp} : ${r.raison}`).join(' | ')}`);
+  if (refus.length) opts.onRefus?.(refus);
   return out;
 }
 

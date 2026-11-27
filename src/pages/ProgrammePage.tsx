@@ -41,6 +41,8 @@ function FichesOT() {
   const user = useAppStore((s) => s.user)!;
   const { showToast } = useToast();
   const team = user.teamName ?? '';
+  // technicien : voit le programme de son équipe sans pouvoir le modifier
+  const lectureSeule = user.role === 'technicien';
   const today = new Date().toISOString().slice(0, 10);
   const [ots, setOts] = useState<ProgrammeOT[]>([]);
   const [loaded, setLoaded] = useState(!team);
@@ -384,9 +386,10 @@ function FichesOT() {
                     scan={scans.get(o.id)}
                     note={notes.get(o.id)}
                     busy={busy === o.id}
-                    onFait={() => setSheet({ ot: o, mode: 'fait' })}
-                    onNonFait={() => setSheet({ ot: o, mode: 'non_fait' })}
-                    onReset={() => change(o, { statut: 'a_faire' })}
+                    // technicien : lecture seule (ni clôture, ni réclamation)
+                    onFait={lectureSeule ? undefined : () => setSheet({ ot: o, mode: 'fait' })}
+                    onNonFait={lectureSeule ? undefined : () => setSheet({ ot: o, mode: 'non_fait' })}
+                    onReset={lectureSeule ? undefined : () => change(o, { statut: 'a_faire' })}
                     onAjouterContact={
                       // « + Contact » : superviseur ou administrateur seulement, pas le chef d'équipe
                       o.fgp && o.statut === 'a_faire' && peutAjouterContact(user.role)
@@ -405,7 +408,7 @@ function FichesOT() {
                     reclamation={reclamations.get(o.id)}
                     historique={historique.get(o.id)}
                     ip={o.numeroOt ? ips.get(o.numeroOt) : undefined}
-                    onReclamer={async (message) => {
+                    onReclamer={lectureSeule ? undefined : async (message) => {
                       try {
                         await reclamerFauxOk(o.id, user, message);
                         showToast(`${ligneLabel(o)} : réclamation envoyée au superviseur`, 'success');

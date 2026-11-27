@@ -37,6 +37,7 @@ import {
   Activity,
   Palette,
   Building2,
+  UserCog,
 } from 'lucide-react';
 import { InstallApkButton } from '@/components/InstallApkButton';
 
@@ -68,6 +69,7 @@ const ParametresPage = lazy(() => import('@/pages/ParametresPage'));
 const SurveillancePage = lazy(() => import('@/pages/SurveillancePage'));
 const PersonnalisationPage = lazy(() => import('@/pages/PersonnalisationPage'));
 const EntreprisesPage = lazy(() => import('@/pages/EntreprisesPage'));
+const UtilisateursPage = lazy(() => import('@/pages/UtilisateursPage'));
 import { DECHARGE_URL } from '@/utils/programme';
 import { useParametresStore } from '@/store/useParametresStore';
 import { useMarqueStore } from '@/store/useMarqueStore';
@@ -150,6 +152,12 @@ const NAV: Record<Role, NavItem[]> = {
     { id: 'notifications', label: 'Notifications' },
     { id: 'profil', label: 'Profil' },
   ],
+  // Technicien : programme de son équipe en lecture seule (pas de clôture, pas de réclamation)
+  technicien: [
+    { id: 'programme', label: 'Programme' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'profil', label: 'Profil' },
+  ],
   admin: [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'surveillance', label: 'Surveillance équipes' },
@@ -159,6 +167,7 @@ const NAV: Record<Role, NavItem[]> = {
     RH_GROUP,
     { id: 'caisses', label: 'Caisses' },
     { id: 'notifications', label: 'Notifications' },
+    { id: 'utilisateurs', label: 'Utilisateurs' },
     { id: 'parametres', label: 'Paramètres' },
   ],
   // Comptable / RH (ex: Betoul) — uniquement Employés et Prêts, rien d'opérationnel
@@ -222,6 +231,7 @@ const PAGE_TITLES: Record<Page, string> = {
   parametres: 'Paramètres',
   personnalisation: 'Personnalisation',
   entreprises: 'Entreprises clientes',
+  utilisateurs: 'Utilisateurs et accès',
 };
 
 const PAGE_ICONS: Record<Page, React.ComponentType<{ className?: string }>> = {
@@ -252,6 +262,7 @@ const PAGE_ICONS: Record<Page, React.ComponentType<{ className?: string }>> = {
   parametres: Settings,
   personnalisation: Palette,
   entreprises: Building2,
+  utilisateurs: UserCog,
 };
 
 const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -264,6 +275,7 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
 const SUPERADMIN_ITEMS: NavLeaf[] = [
   { id: 'personnalisation', label: 'Personnalisation' },
   { id: 'entreprises', label: 'Entreprises' },
+  { id: 'utilisateurs', label: 'Utilisateurs' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'profil', label: 'Profil' },
 ];
@@ -410,6 +422,7 @@ export default function AppLayout() {
     parametres: <ParametresPage />,
     personnalisation: <PersonnalisationPage />,
     entreprises: <EntreprisesPage />,
+    utilisateurs: <UtilisateursPage />,
   };
 
   return (

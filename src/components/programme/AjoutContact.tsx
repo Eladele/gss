@@ -1,12 +1,6 @@
 import { useState } from 'react';
 import { Check, Phone, Plus, X } from 'lucide-react';
-
-/** Numéro saisi → 8 chiffres (sans 222 / +222 / espaces) */
-const normaliserTel = (t: string) => {
-  const d = t.replace(/\D/g, '');
-  return /^(?:00)?222\d{8}$/.test(d) ? d.slice(-8) : d;
-};
-const telValide = (t: string) => /^[234]\d{7}$/.test(normaliserTel(t));
+import { normaliserTel, telValide } from '@/utils/programme';
 
 /**
  * « + Contact » : ajoute un numéro à la fiche après la distribution (il passe en premier dans

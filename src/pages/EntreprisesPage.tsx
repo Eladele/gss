@@ -3,7 +3,7 @@
 // chacune (contact, abonnement, connexion à sa base), personnalisation à distance (logo, couleurs,
 // écriture, menus) et suspension / rétablissement de l'accès.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Building2, ExternalLink, Palette, Pencil, Plus, RefreshCw, Trash2, X, PauseCircle, PlayCircle, ChevronDown } from 'lucide-react';
+import { Building2, ExternalLink, Palette, Pencil, Plus, RefreshCw, Trash2, X, PauseCircle, PlayCircle, ChevronDown, UserCog } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, EmptyState, Input, Modal, Select, StatCard, Textarea, useToast } from '@/components/ui';
 import { LogoMarque } from '@/components/LogoMarque';
@@ -23,6 +23,8 @@ import {
   type StatutEntreprise,
 } from '@/lib/entreprisesService';
 import { errMsg } from '@/utils';
+import { InstallationEntreprise } from '@/components/InstallationEntreprise';
+import { etatInstallation, type EtatInstallation } from '@/lib/entreprisesService';
 
 const STATUT: Record<StatutEntreprise, { label: string; cls: string }> = {
   actif: { label: 'Actif', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -44,6 +46,8 @@ export default function EntreprisesPage() {
   const [form, setForm] = useState<(Omit<Entreprise, 'id' | 'createdAt'> & { id?: string }) | null>(null);
   const [perso, setPerso] = useState<Entreprise | null>(null);
   const [guide, setGuide] = useState(false);
+  // comptes administrateurs d'une entreprise (installation de sa base vide)
+  const [admins, setAdmins] = useState<Entreprise | null>(null);
 
   const lireChiffres = useCallback((e: Entreprise) => {
     setChiffres((c) => ({ ...c, [e.id]: 'chargement' }));
@@ -151,7 +155,8 @@ export default function EntreprisesPage() {
           <ol className="px-6 pb-4 text-sm text-slate-600 list-decimal space-y-1.5">
             <li>Créer un projet Supabase pour l'entreprise (ses données restent dans sa propre base).</li>
             <li>Y exécuter les fichiers SQL de l'application (schéma complet, puis les modules), dont <code className="text-xs bg-slate-100 px-1 rounded">supabase_superadmin.sql</code>.</li>
-            <li>Déployer les fonctions « login » et « change-password », puis créer son premier compte administrateur.</li>
+            <li>Déployer les fonctions du dossier supabase/functions (login, change-password, admin-users, installation, create-team-leader).</li>
+            <li>Créer ses comptes : « Administrateurs » sur sa fiche ici, ou l’écran d’installation qui s’affiche à la première ouverture de son site.</li>
             <li>Publier l'application (même code) avec <code className="text-xs bg-slate-100 px-1 rounded">VITE_SUPABASE_URL</code> et <code className="text-xs bg-slate-100 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> de ce projet, sur son adresse (ex. client.gss-app.com).</li>
             <li>L'ajouter ici (« Nouvelle entreprise ») avec l'adresse et la clé anon du projet, puis « Personnaliser » : nom, logo, couleurs, police, menus.</li>
           </ol>
@@ -225,6 +230,9 @@ export default function EntreprisesPage() {
                 <button type="button" disabled={!pret?.joignable} onClick={() => setPerso(e)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-40">
                   <Palette className="w-3.5 h-3.5" /> Personnaliser
                 </button>
+                <button type="button" disabled={!clientDe(e)} onClick={() => setAdmins(e)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-40">
+                  <UserCog className="w-3.5 h-3.5" /> Administrateurs
+                </button>
                 <button type="button" onClick={() => setForm({ ...e })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100">
                   <Pencil className="w-3.5 h-3.5" /> Modifier
                 </button>
@@ -253,7 +261,19 @@ export default function EntreprisesPage() {
           onEnregistre={(e) => {
             setListe((l) => (l.some((x) => x.id === e.id) ? l.map((x) => (x.id === e.id ? e : x)) : [...l, e].sort((a, b) => a.nom.localeCompare(b.nom))));
             lireChiffres(e);
+            // nouvelle entreprise : créer tout de suite ses administrateurs
+            if (!form.id && clientDe(e)) setAdmins(e);
             setForm(null);
+          }}
+        />
+      )}
+
+      {admins && (
+        <AdministrateursEntreprise
+          entreprise={admins}
+          onClose={() => {
+            lireChiffres(admins);
+            setAdmins(null);
           }}
         />
       )}
@@ -395,6 +415,47 @@ function FormulaireEntreprise({
           </Button>
         </div>
       </div>
+    </Modal>
+  );
+}
+
+/** Administrateurs d'une entreprise : créés dans SA base tant qu'elle n'a aucun administrateur */
+function AdministrateursEntreprise({ entreprise, onClose }: { entreprise: Entreprise; onClose: () => void }) {
+  const client = clientDe(entreprise);
+  const [etat, setEtat] = useState<EtatInstallation | null>(null);
+  const [avecSuper, setAvecSuper] = useState(false);
+  useEffect(() => {
+    if (client) etatInstallation(client).then(setEtat);
+  }, [client]);
+
+  return (
+    <Modal open onClose={onClose} title={`Administrateurs — ${entreprise.nom}`} size="lg">
+      {!client ? (
+        <p className="text-sm text-red-600">Adresse ou clé Supabase manquante : complétez la fiche de l’entreprise.</p>
+      ) : !etat ? (
+        <p className="text-sm text-slate-500 py-6 text-center">Vérification de la base…</p>
+      ) : !etat.disponible ? (
+        <div className="space-y-2 text-sm">
+          <p className="text-red-600 font-semibold">{etat.erreur}</p>
+          <p className="text-slate-600">
+            Déployez la fonction dans le projet de l’entreprise : <code className="text-xs bg-slate-100 px-1 rounded">supabase functions deploy installation</code>, après avoir exécuté
+            <code className="text-xs bg-slate-100 px-1 rounded ml-1">supabase_schema.sql</code>.
+          </p>
+        </div>
+      ) : etat.installe ? (
+        <p className="text-sm text-slate-700">
+          La base de <strong>{entreprise.nom}</strong> a déjà un administrateur. Les autres comptes (chefs, techniciens, administrateurs…) se créent dans sa page
+          <strong> Utilisateurs</strong>, en se connectant à son application.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+            <input type="checkbox" className="w-4 h-4 accent-blue-600" checked={avecSuper} onChange={(e) => setAvecSuper(e.target.checked)} />
+            Créer aussi un compte super-administrateur dans cette base
+          </label>
+          <InstallationEntreprise key={String(avecSuper)} client={client} avecSuperadmin={avecSuper} entrepriseInitiale={entreprise.nom} jetonRequis={etat.jetonRequis} />
+        </div>
+      )}
     </Modal>
   );
 }

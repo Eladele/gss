@@ -39,7 +39,8 @@ export type PageId =
   | 'export-salaire'
   | 'parametres'
   | 'personnalisation'
-  | 'entreprises';
+  | 'entreprises'
+  | 'utilisateurs';
 
 /** Pages que l'on peut afficher / masquer / renommer, rangées comme dans le menu */
 export const CATALOGUE_PAGES: { id: PageId; libelle: string; rubrique: string }[] = [
@@ -73,7 +74,7 @@ export const CATALOGUE_RUBRIQUES: { id: string; libelle: string }[] = [
   { id: 'rh-group', libelle: 'RH' },
 ];
 /** Pages toujours visibles (on ne peut pas se priver de son profil ni de la personnalisation) */
-export const PAGES_VERROUILLEES: PageId[] = ['profil', 'personnalisation', 'entreprises'];
+export const PAGES_VERROUILLEES: PageId[] = ['profil', 'personnalisation', 'entreprises', 'utilisateurs'];
 
 export const POLICES = ['Inter', 'Roboto', 'Poppins', 'Montserrat', 'Open Sans', 'Lato', 'Nunito', 'Source Sans 3', 'Cairo', 'Tajawal'] as const;
 

@@ -188,3 +188,73 @@ export async function pousserAbonnement(e: Entreprise, message = ''): Promise<vo
   if (!c) throw new Error('Adresse ou clé Supabase manquante');
   await enregistrerAbonnement({ statut: e.statut, fin: e.fin, message }, c);
 }
+
+// ─── Installation d'une nouvelle base (Edge Function « installation ») ───────
+
+export interface EtatInstallation {
+  /** fonction « installation » déployée et joignable */
+  disponible: boolean;
+  /** au moins un administrateur existe déjà */
+  installe: boolean;
+  /** la fonction demande un code d'installation (secret INSTALL_TOKEN) */
+  jetonRequis: boolean;
+  /** un super-administrateur existe déjà (sinon : inscription possible depuis la connexion) */
+  superadmin: boolean;
+  erreur?: string;
+}
+
+export interface CompteInstallation {
+  name: string;
+  password?: string;
+}
+
+export interface CompteCree {
+  name: string;
+  password: string;
+  superadmin: boolean;
+}
+
+/** message précis d'une Edge Function en erreur (corps JSON de la réponse) */
+async function messageFonction(error: { message: string; context?: unknown }, defaut: string): Promise<string> {
+  try {
+    const ctx = error.context as { json?: () => Promise<{ error?: string }> } | undefined;
+    const corps = ctx?.json ? await ctx.json() : undefined;
+    if (corps?.error) return corps.error;
+  } catch {
+    // corps illisible
+  }
+  if (/Failed to send|not found|404/i.test(error.message)) return 'Fonction « installation » non déployée sur ce projet';
+  return defaut;
+}
+
+/** La base est-elle vide (aucun administrateur) ? — base de l'application, ou celle d'une entreprise */
+export async function etatInstallation(client: SupabaseClient = supabase): Promise<EtatInstallation> {
+  const { data, error } = await client.functions.invoke('installation', { body: { action: 'etat' } });
+  if (error) return { disponible: false, installe: true, jetonRequis: false, superadmin: true, erreur: await messageFonction(error, 'Installation indisponible') };
+  // ancienne version de la fonction (sans « superadmin ») : on ne propose pas l'inscription
+  return { disponible: true, installe: data?.installe !== false, jetonRequis: data?.jetonRequis === true, superadmin: data?.superadmin !== false };
+}
+
+/** Base déjà installée sans super-administrateur : inscription avec les identifiants d'un administrateur */
+export async function inscrireSuperadmin(params: {
+  superadmin: CompteInstallation;
+  admin_name?: string;
+  admin_password?: string;
+  token?: string;
+}): Promise<CompteCree> {
+  const { data, error } = await supabase.functions.invoke('installation', { body: { action: 'inscrire_superadmin', ...params } });
+  if (error) throw new Error(await messageFonction(error, 'Inscription impossible'));
+  const c = (data?.comptes ?? [])[0] as CompteCree | undefined;
+  if (!c) throw new Error('Réponse inattendue de la fonction installation');
+  return c;
+}
+
+/** Crée le super-administrateur (facultatif), le nom de l'entreprise et ses administrateurs */
+export async function installerBase(
+  params: { entreprise: { nom: string; nomComplet?: string }; superadmin?: CompteInstallation | null; admins: CompteInstallation[]; token?: string },
+  client: SupabaseClient = supabase,
+): Promise<{ comptes: CompteCree[]; avertissement?: string }> {
+  const { data, error } = await client.functions.invoke('installation', { body: { action: 'installer', ...params } });
+  if (error) throw new Error(await messageFonction(error, 'Installation impossible'));
+  return { comptes: (data?.comptes ?? []) as CompteCree[], avertissement: data?.avertissement };
+}

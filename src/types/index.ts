@@ -1,4 +1,5 @@
-export type Role = 'admin' | 'superviseur' | 'chef' | 'rh' | 'consultation' | 'directeur';
+// technicien : programme de son équipe en lecture seule (compte créé par l'administrateur, page Utilisateurs)
+export type Role = 'admin' | 'superviseur' | 'chef' | 'technicien' | 'rh' | 'consultation' | 'directeur';
 export type SituationStatus = 'pending' | 'in_progress' | 'ok' | 'non_ok' | 'urgent';
 export type SituationType = 'CPL' | 'DRG' | 'TRL' | 'CST' | 'ANS' | 'CLS' | 'CMI' | 'RLR';
 // Nature d'une situation : installation (mise en service) ou dérangement (SAV / panne)

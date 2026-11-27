@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarClock, CalendarDays, ChevronDown, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, Pin, RotateCcw, Search, Send, Trash2, X } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CalendarDays, ChevronDown, Clock, Copy, FileUp, Flame, MapPin, MessageCircle, MessageSquare, Pin, RotateCcw, Search, Send, Trash2, X } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { Button, Card, Modal, Select, useToast } from '@/components/ui';
 import { ZONE_EQUIPE_MAP } from '@/data';
@@ -196,6 +196,56 @@ async function shareWhatsApp(text: string, showToast: (m: string, t?: 'success' 
 }
 
 /** Une info de la fiche avec son libellé (« Compte client », « Contact », « DIS »…) */
+/**
+ * Commentaire pour le chef appliqué d'un coup à toutes les fiches lues (ou à celles d'un seul PDF).
+ * Les fiches déjà distribuées (ignorées) ne sont pas touchées ; chaque fiche reste modifiable ensuite.
+ */
+function NoteGroupee({ fichiers, nbFiches, onApply }: { fichiers: string[]; nbFiches: (fichier: string) => number; onApply: (fichier: string, note: string) => void }) {
+  const [fichier, setFichier] = useState('');
+  const [texte, setTexte] = useState('');
+  const n = nbFiches(fichier);
+  return (
+    <Card className="p-3 space-y-2 border-indigo-200 bg-indigo-50/40">
+      <div className="flex flex-wrap items-center gap-2">
+        <MessageSquare className="w-4 h-4 text-indigo-600" />
+        <span className="text-sm font-bold text-indigo-900">Commentaire pour le chef — toutes les fiches</span>
+        {fichiers.length > 1 && (
+          <select
+            aria-label="PDF concerné"
+            value={fichier}
+            onChange={(e) => setFichier(e.target.value)}
+            className="ml-auto max-w-full text-xs border border-slate-200 rounded-md px-2 py-1 bg-white"
+          >
+            <option value="">Tous les PDF</option>
+            {fichiers.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <textarea
+        aria-label="Commentaire pour toutes les fiches"
+        rows={2}
+        value={texte}
+        onChange={(e) => setTexte(e.target.value)}
+        placeholder="Ex. : appeler le client avant de passer, matériel à récupérer au magasin…"
+        className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs bg-white resize-y"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" disabled={!texte.trim() || !n} onClick={() => onApply(fichier, texte.trim())}>
+          Appliquer à {n} fiche{n > 1 ? 's' : ''}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={!n} onClick={() => onApply(fichier, '')}>
+          Retirer les commentaires
+        </Button>
+        <span className="text-[11px] text-indigo-800">Remplace le commentaire de chaque fiche ; modifiable ensuite fiche par fiche.</span>
+      </div>
+    </Card>
+  );
+}
+
 function Info({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
@@ -344,6 +394,14 @@ export default function DistributionPage() {
   };
 
   const update = (key: string, patch: Partial<Item>) => setItems((cur) => cur.map((i) => (i.key === key ? { ...i, ...patch } : i)));
+  // commentaire commun : toutes les fiches lues ('' = tous les PDF) ou celles d'un PDF, sauf les déjà distribuées
+  const dansPdf = (i: Item, fichier: string) => !i.deja && (!fichier || i.sourceFichier === fichier);
+  const fichiersLus = useMemo(() => [...new Set(items.map((i) => i.sourceFichier))], [items]);
+  const noteGroupee = (fichier: string, note: string) => {
+    const n = items.filter((i) => dansPdf(i, fichier)).length;
+    setItems((cur) => cur.map((i) => (dansPdf(i, fichier) ? { ...i, note: note || undefined } : i)));
+    showToast(note ? `Commentaire ajouté à ${n} fiche${n > 1 ? 's' : ''}` : `Commentaires retirés (${n} fiche${n > 1 ? 's' : ''})`, 'success');
+  };
   const choisirZone = (zone: string, equipe: string) => {
     if (equipe === '__plusieurs') return;
     setItems((cur) => cur.map((i) => ((i.zone || '') === zone && !i.deja ? { ...i, equipe } : i)));
@@ -371,11 +429,13 @@ export default function DistributionPage() {
     try {
       const nouvelles = toSend.filter((i) => !i.renvoi);
       const aRenvoyer = toSend.filter((i) => i.renvoi);
-      const { crees, completees } = nouvelles.length ? await distribuer(nouvelles, dateProgramme, user) : { crees: 0, completees: 0 };
+      const { crees, completees, lignesRefusees } = nouvelles.length
+        ? await distribuer(nouvelles, dateProgramme, user)
+        : { crees: 0, completees: 0, lignesRefusees: [] };
       // fiches déjà « non faites » : renvoyées équipe par équipe, motif passé gardé
       let renvoyees = 0;
       // la ligne prend le DIS, la zone et les contacts du nouvel OT (ex. nouveau DIS après une CST)
-      await majLignesDepuisOt(aRenvoyer);
+      const refusRenvoi = await majLignesDepuisOt(aRenvoyer);
       // la date « OT reçu le » du nouvel OT remplace l'ancienne (sinon le jour du renvoi)
       const datesOt = Object.fromEntries(aRenvoyer.map((i) => [i.renvoi!.id, i.dateRecu]));
       for (const eq of new Set(aRenvoyer.map((i) => i.equipe)))
@@ -393,6 +453,16 @@ export default function DistributionPage() {
         `${n} fiche${n > 1 ? 's' : ''} distribuée${n > 1 ? 's' : ''}${completees ? ` (dont ${completees} situation${completees > 1 ? 's' : ''} existante${completees > 1 ? 's' : ''} complétée${completees > 1 ? 's' : ''})` : ''}${renvoyees ? ` · ${renvoyees} déjà non faite${renvoyees > 1 ? 's' : ''} renvoyée${renvoyees > 1 ? 's' : ''} (motifs gardés)` : ''} : les chefs d’équipe sont prévenus`,
         'success',
       );
+      // lignes que la base a refusé de mettre à jour : OT distribués quand même, on dit lesquelles et pourquoi
+      const refus = [...lignesRefusees, ...refusRenvoi.filter((r) => !lignesRefusees.some((x) => x.fgp === r.fgp))];
+      if (refus.length)
+        showToast(
+          `OT distribué${refus.length > 1 ? 's' : ''}, mais ${refus.length > 1 ? `${refus.length} lignes gardent` : 'la ligne garde'} ses anciennes infos (client, DIS…) : ${refus
+            .slice(0, 3)
+            .map((r) => `${r.fgp} — ${r.raison}`)
+            .join(' | ')}${refus.length > 3 ? ' …' : ''}`,
+          'warning',
+        );
       // commentaires pour les chefs : la distribution est déjà faite, une erreur ici ne l'annule pas
       try {
         await enregistrerNotesParOt(Object.fromEntries(nouvelles.filter((i) => i.note).map((i) => [i.numeroOt, i.note!])));
@@ -1112,6 +1182,8 @@ export default function DistributionPage() {
               </span>
             )}
           </div>
+
+          <NoteGroupee fichiers={fichiersLus} nbFiches={(f) => items.filter((i) => dansPdf(i, f)).length} onApply={noteGroupee} />
 
           <ParZone items={items} equipeNames={equipeNames} zoneEquipe={zoneEquipe} colorOf={colorOf} onChoose={choisirZone} onRemember={retenirZone} />
 

@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { invalidateTeams, normNom, teamIdFor, teamIdsFor, upsertLignes } from './refs';
-import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, LoanPayment, SalaryMonth, Chantier, NoeudReseau } from '@/types';
+import type { Situation, Equipe, ImportRecord, User, Employee, LeaveRecord, Vehicle, Materiel, ScanRecord, Loan, LoanPayment, SalaryMonth, Chantier, NoeudReseau, Role } from '@/types';
 
 // ─── RÉFÉRENCES ──────────────────────────────────────────────────────────────
 // La base relie chaque enregistrement à son équipe (team_id) et à la personne qui a agi
@@ -1263,6 +1263,40 @@ async function fetchScansPaginated(filterImportId?: string | null): Promise<Scan
 // Charge les scans de "l'état actuel" (dernier import uniquement) — c'est ce
 // qu'utilisent les cartes/filtres de la page Scans et la correspondance
 // FGP ↔ scan sur la page Situations. Ne renvoie rien si aucun import n'existe.
+/** Client de chaque ligne (table lignes), indexé par FGP — relie un scan (onu_name) à son client */
+export interface ClientLigne {
+  clientCode: string;
+  clientNom: string;
+  telephones: string[];
+}
+export async function fetchClientsParFgp(): Promise<Map<string, ClientLigne>> {
+  const map = new Map<string, ClientLigne>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('lignes')
+      .select('fgp, client_code, client_nom, telephones')
+      .order('fgp', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error('fetchClientsParFgp:', error);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    for (const r of data as { fgp: string | null; client_code: string | null; client_nom: string | null; telephones: string[] | null }[]) {
+      const fgp = (r.fgp ?? '').trim();
+      if (!fgp) continue;
+      map.set(fgp, {
+        clientCode: r.client_code ?? '',
+        clientNom: r.client_nom ?? '',
+        telephones: Array.isArray(r.telephones) ? r.telephones.filter(Boolean) : [],
+      });
+    }
+    if (data.length < PAGE) break;
+  }
+  return map;
+}
+
 export async function fetchScans(): Promise<ScanRecord[]> {
   const latestId = await fetchLatestImportId();
   if (!latestId) return [];
@@ -1433,6 +1467,79 @@ export async function deleteScanImportSnapshot(id: string): Promise<void> {
   await deleteScansByImportId(id);
   const { error } = await supabase.from('scan_import_history').delete().eq('id', id);
   if (error) console.error('deleteScanImportSnapshot:', error);
+}
+
+// ─── COMPTES UTILISATEURS (administrateur, Edge Function admin-users) ─────────
+
+export interface CompteUtilisateur {
+  id: string;
+  name: string;
+  role: Role;
+  teamId: string | null;
+  villeScope?: string | null;
+  superadmin?: boolean;
+  createdAt?: string;
+}
+/** identifiant + mot de passe de l'administrateur, vérifiés par la fonction à chaque appel */
+export interface IdentifiantsAdmin {
+  adminId: string;
+  adminPassword: string;
+}
+
+async function appelAdminUsers<T>(action: string, creds: IdentifiantsAdmin, params: Record<string, unknown> = {}): Promise<T> {
+  const { data, error } = await supabase.functions.invoke('admin-users', {
+    body: { action, admin_id: creds.adminId, admin_password: creds.adminPassword, ...params },
+  });
+  if (error) {
+    // réponse non-2xx : le message précis est dans le corps JSON (error.context)
+    let message = "Échec de l'opération sur le compte";
+    try {
+      const ctx = (error as { context?: { json?: () => Promise<{ error?: string }> } }).context;
+      const corps = ctx?.json ? await ctx.json() : undefined;
+      if (corps?.error) message = corps.error;
+      else if (/Failed to send|not found|404/i.test(error.message)) message = 'Fonction admin-users non déployée (supabase functions deploy admin-users)';
+    } catch {
+      // message par défaut
+    }
+    throw new Error(message);
+  }
+  return data as T;
+}
+
+export async function listerComptes(creds: IdentifiantsAdmin): Promise<CompteUtilisateur[]> {
+  const { users } = await appelAdminUsers<{ users: Record<string, unknown>[] }>('list', creds);
+  return users.map((u) => ({
+    id: String(u.id),
+    name: String(u.name ?? ''),
+    role: u.role as Role,
+    teamId: (u.team_id as string | null) ?? null,
+    villeScope: (u.ville_scope as string | null) ?? null,
+    superadmin: u.est_superadmin === true,
+    createdAt: (u.created_at as string | undefined) ?? undefined,
+  }));
+}
+
+/** nouveau compte ; renvoie le mot de passe (temporaire si non choisi) à communiquer une seule fois */
+export async function creerCompte(
+  creds: IdentifiantsAdmin,
+  compte: { name: string; role: Role; teamId: string | null; password?: string },
+): Promise<string> {
+  const r = await appelAdminUsers<{ tempPassword: string }>('create', creds, {
+    name: compte.name,
+    role: compte.role,
+    team_id: compte.teamId,
+    password: compte.password || undefined,
+  });
+  return r.tempPassword;
+}
+
+export async function modifierCompte(creds: IdentifiantsAdmin, userId: string, patch: { role: Role; teamId: string | null }): Promise<void> {
+  await appelAdminUsers('update', creds, { user_id: userId, role: patch.role, team_id: patch.teamId });
+}
+
+export async function reinitialiserMotDePasse(creds: IdentifiantsAdmin, userId: string, password?: string): Promise<string> {
+  const r = await appelAdminUsers<{ tempPassword: string }>('reset_password', creds, { user_id: userId, password: password || undefined });
+  return r.tempPassword;
 }
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────

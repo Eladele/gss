@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import type { ClotureAVerifier, OtStatut, Penalite, ProgrammeOT } from '@/types';
 import type { ParsedOT } from '@/utils/otPdf';
 import { disDuMotifCst, poteauxBesoin, zoneDuDis, type MotifFauxOk } from '@/utils/programme';
-import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts } from './refs';
+import { normOnt, teamIdFor, teamIdsFor, upsertLignes, upsertOnts, type LigneRefusee } from './refs';
 
 // Les fiches OT du programme sont des situations dont `numero_ot` est renseigné.
 // Une information n'est stockée qu'une fois (voir supabase_normalisation.sql) :
@@ -227,11 +227,12 @@ const infosLigne = (o: ParsedOT) => ({
  * nouvel OT — nouveau DIS (ex. après une CST), zone, client, contacts — et le nouvel ONT. Avant, le
  * renvoi ne touchait pas la ligne : le DIS restait l'ancien.
  */
-export async function majLignesDepuisOt(ots: ParsedOT[]): Promise<void> {
-  if (!ots.length) return;
+export async function majLignesDepuisOt(ots: ParsedOT[]): Promise<LigneRefusee[]> {
+  let refus: LigneRefusee[] = [];
+  if (!ots.length) return refus;
   // DIS d'avant, pour le garder comme « ancien DIS » sur les fiches de la ligne s'il change
   const avant = await disDesLignes(ots.map((o) => o.fgp));
-  const lignes = await upsertLignes(ots.map(infosLigne));
+  const lignes = await upsertLignes(ots.map(infosLigne), { tolerant: true, onRefus: (r) => (refus = r) });
   await upsertOnts(ots.filter((o) => o.ontSerials[0]).map((o) => ({ sn: o.ontSerials[0], ligneId: lignes.get(o.fgp.trim()) })));
   await noterAncienDis(
     ots.flatMap((o) => {
@@ -240,6 +241,7 @@ export async function majLignesDepuisOt(ots: ParsedOT[]): Promise<void> {
       return a && a.dis && n && n !== a.dis ? [{ ligneId: a.id, ancien: a.dis }] : [];
     }),
   );
+  return refus;
 }
 
 const normDis = (d?: string | null) => (d ?? '').replace(/\s+/g, '').toUpperCase();
@@ -274,10 +276,12 @@ export async function distribuer(
   ots: (ParsedOT & { equipe: string; sourceFichier: string })[],
   dateProgramme: string,
   par: Par,
-): Promise<{ crees: number; completees: number }> {
+): Promise<{ crees: number; completees: number; lignesRefusees: LigneRefusee[] }> {
+  // ligne dont la mise à jour est refusée par la base : l'OT est distribué quand même, la ligne garde ses infos
+  let lignesRefusees: LigneRefusee[] = [];
   const [existantes, lignes, equipes] = await Promise.all([
     situationsOuvertes(ots.map((o) => o.fgp)),
-    upsertLignes(ots.map(infosLigne)),
+    upsertLignes(ots.map(infosLigne), { tolerant: true, onRefus: (r) => (lignesRefusees = r) }),
     teamIdsFor(ots.map((o) => o.equipe)),
   ]);
   const onts = await upsertOnts(ots.filter((o) => o.ontSerials[0]).map((o) => ({ sn: o.ontSerials[0], ligneId: lignes.get(o.fgp.trim()) })));
@@ -337,7 +341,7 @@ export async function distribuer(
     crees = data?.length ?? 0;
   }
   await enregistrerIps(ots);
-  return { crees, completees };
+  return { crees, completees, lignesRefusees };
 }
 
 // ─── Adresses IP des OT Réseau (IPS / IPM de la constitution, supabase_ot_ip.sql) ─
@@ -486,34 +490,26 @@ export async function fetchEnRetard(avant: string): Promise<ProgrammeOT[]> {
 
 // ─── Cas urgents (dérangements & installations) ──────────────────────────────
 
-/** Envoie une notification persistante aux chefs d'une équipe pour une urgence */
+/**
+ * Notification persistante au chef et aux techniciens d'une équipe pour une urgence.
+ * Les destinataires sont choisis côté base (RPC notifier_equipe : profiles est protégée) ;
+ * chaque notification insérée part aussi en push FCM sur leurs téléphones (déclencheur app_notifications_push).
+ */
 async function notifierChefsEquipe(
   teamId: string,
   titre: string,
   message: string,
   refId?: string,
 ): Promise<void> {
-  try {
-    const { data: chefs } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('team_id', teamId)
-      .eq('role', 'chef');
-
-    if (chefs && chefs.length > 0) {
-      const notifs = chefs.map((c) => ({
-        destinataire_id: c.id,
-        titre,
-        message,
-        type: 'programme_urgent',
-        module: 'programme',
-        ref_id: refId ?? null,
-      }));
-      await supabase.from('app_notifications').insert(notifs);
-    }
-  } catch (err) {
-    console.warn('Impossible d’envoyer la notification chef:', err);
-  }
+  const { error } = await supabase.rpc('notifier_equipe', {
+    p_team: teamId,
+    p_titre: titre,
+    p_message: message,
+    p_type: 'programme_urgent',
+    p_module: 'programme',
+    p_ref: refId ?? null,
+  });
+  if (error) console.warn('Impossible d’envoyer la notification à l’équipe :', error.message);
 }
 
 /** Active ou désactive le marquage urgent d'une fiche */

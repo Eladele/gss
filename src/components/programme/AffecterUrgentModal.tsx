@@ -2,7 +2,17 @@ import { useState } from 'react';
 import { AlertTriangle, Cable, Check, Flame, Search, Wrench } from 'lucide-react';
 import { Button, Modal, Select } from '@/components/ui';
 import type { ProgrammeOT } from '@/types';
-import { NATURE_CLASS, NATURE_LABEL, STATUT_OT, disDuMotifCst, fmtTel, ligneLabel, zoneDuDis } from '@/utils/programme';
+import {
+  NATURE_CLASS,
+  NATURE_LABEL,
+  STATUT_OT,
+  disDuMotifCst,
+  fmtTel,
+  ligneLabel,
+  normaliserTel,
+  telValide,
+  zoneDuDis,
+} from '@/utils/programme';
 import {
   affecterUrgent,
   creerEtAffecterOtUrgent,
@@ -12,6 +22,22 @@ import {
   type OtUrgentInput,
 } from '@/lib/programmeService';
 import { errMsg } from '@/utils';
+
+/** Préremplissage du « Nouveau cas urgent » (ex. depuis une ligne de scan réseau) */
+export interface PrefillUrgent {
+  nature?: 'derangement' | 'installation';
+  fgp?: string;
+  zone?: string;
+  equipe?: string;
+  ontSerial?: string;
+  dis?: string;
+  clientNom?: string;
+  clientCode?: string;
+  telephones?: string[];
+  motif?: string;
+  /** texte d'origine affiché en tête (ex. « Scan réseau : Rx -27,4 dBm … ») */
+  origine?: string;
+}
 
 interface Props {
   open: boolean;
@@ -23,6 +49,10 @@ interface Props {
   onSuccess: (msg: string) => void;
   /** superviseur / administrateur : peut changer la zone et le DIS de la fiche affectée */
   peutModifierZoneDis?: boolean;
+  /** ouvre directement « Nouveau cas urgent » prérempli */
+  prefill?: PrefillUrgent;
+  /** au moins un contact client valide (8 chiffres) obligatoire pour créer le cas urgent */
+  contactObligatoire?: boolean;
 }
 
 export function AffecterUrgentModal({
@@ -34,9 +64,11 @@ export function AffecterUrgentModal({
   fichesActuelles = [],
   onSuccess,
   peutModifierZoneDis = false,
+  prefill,
+  contactObligatoire = false,
 }: Props) {
   const today = new Date().toISOString().slice(0, 10);
-  const [tab, setTab] = useState<'existant' | 'nouveau'>('existant');
+  const [tab, setTab] = useState<'existant' | 'nouveau'>(prefill ? 'nouveau' : 'existant');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -179,18 +211,28 @@ export function AffecterUrgentModal({
   };
 
   // ─── Onglet 2 : Nouveau cas urgent ─────────────────────────────────────────
-  const [nature, setNature] = useState<'derangement' | 'installation'>('derangement');
-  const [fgp, setFgp] = useState('');
+  const [nature, setNature] = useState<'derangement' | 'installation'>(prefill?.nature ?? 'derangement');
+  const [fgp, setFgp] = useState(prefill?.fgp ?? '');
   const [numeroOt, setNumeroOt] = useState('');
-  const [clientNom, setClientNom] = useState('');
-  const [telephones, setTelephones] = useState('');
-  const [zone, setZone] = useState('');
-  const [equipe, setEquipe] = useState('');
-  const [dis, setDis] = useState('');
-  const [ontSerial, setOntSerial] = useState('');
+  const [clientNom, setClientNom] = useState(prefill?.clientNom ?? '');
+  const [telephones, setTelephones] = useState((prefill?.telephones ?? []).join(' / '));
+  const [zone, setZone] = useState(prefill?.zone ?? '');
+  const [equipe, setEquipe] = useState(
+    prefill?.equipe && equipeNames.includes(prefill.equipe) ? prefill.equipe : '',
+  );
+  const [dis, setDis] = useState(prefill?.dis ?? '');
+  const [ontSerial, setOntSerial] = useState(prefill?.ontSerial ?? '');
   const [cableFibreM, setCableFibreM] = useState<number | ''>('');
-  const [motif, setMotif] = useState('');
+  const [motif, setMotif] = useState(prefill?.motif ?? '');
   const [dateProgramme, setDateProgramme] = useState(today);
+
+  // contacts saisis : « 46123456 / 22334455 » → numéros sur 8 chiffres
+  const telsSaisis = telephones
+    .split(/[/,;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const telsInvalides = telsSaisis.filter((t) => !telValide(t));
+  const contactOk = telsSaisis.length > 0 && telsInvalides.length === 0;
 
   // Auto-détection de l'équipe par zone
   const handleZoneChange = (z: string) => {
@@ -204,6 +246,12 @@ export function AffecterUrgentModal({
   const handleConfirmNouveau = async () => {
     if (!fgp.trim()) return setError('Le numéro FGP / Ligne est obligatoire');
     if (!equipe) return setError('Veuillez sélectionner une équipe');
+    if (contactObligatoire && !contactOk)
+      return setError(
+        telsInvalides.length
+          ? `Contact client invalide : ${telsInvalides.join(', ')} (8 chiffres, commence par 2, 3 ou 4)`
+          : 'Ajoutez au moins un contact client (téléphone sur 8 chiffres)',
+      );
     setLoading(true);
     setError('');
     try {
@@ -212,10 +260,9 @@ export function AffecterUrgentModal({
         fgp: fgp.trim(),
         numeroOt: numeroOt.trim() || undefined,
         clientNom: clientNom.trim() || undefined,
-        telephones: telephones
-          .split(/[/,;]+/)
-          .map((t) => t.trim())
-          .filter(Boolean),
+        clientCode: prefill?.clientCode?.trim() || undefined,
+        // numéros valides normalisés (8 chiffres) ; les autres tels quels
+        telephones: telsSaisis.map((t) => (telValide(t) ? normaliserTel(t) : t)),
         zone: zone.trim(),
         equipe,
         dis: dis.trim() || undefined,
@@ -517,6 +564,12 @@ export function AffecterUrgentModal({
         {/* ─── TAB 2 : NOUVEAU CAS URGENT ─── */}
         {tab === 'nouveau' && (
           <div className="space-y-3">
+            {prefill?.origine && (
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700">
+                <span className="font-semibold">Données reprises : </span>
+                {prefill.origine}
+              </div>
+            )}
             {/* Choix nature : Dérangement ou Installation */}
             <div>
               <span className="block text-xs font-semibold text-slate-600 mb-1.5">Nature de l'intervention *</span>
@@ -593,16 +646,26 @@ export function AffecterUrgentModal({
 
               <div>
                 <label htmlFor="new-tel" className="block font-semibold text-slate-700 mb-1">
-                  Téléphone(s)
+                  {contactObligatoire ? 'Contact client *' : 'Téléphone(s)'}
                 </label>
                 <input
                   id="new-tel"
                   type="text"
+                  inputMode="tel"
                   value={telephones}
                   onChange={(e) => setTelephones(e.target.value)}
                   placeholder="Ex: 46123456 / 22334455"
-                  className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:border-orange-500"
+                  className={`w-full border rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:border-orange-500 ${
+                    telsInvalides.length || (contactObligatoire && !telsSaisis.length) ? 'border-red-300' : 'border-slate-200'
+                  }`}
                 />
+                {contactObligatoire && !contactOk && (
+                  <p className="text-[11px] text-red-600 mt-1">
+                    {telsInvalides.length
+                      ? `Numéro invalide : ${telsInvalides.join(', ')}`
+                      : 'Obligatoire : au moins un numéro du client (8 chiffres)'}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -718,7 +781,7 @@ export function AffecterUrgentModal({
               <Button
                 variant="danger"
                 size="sm"
-                disabled={loading || !fgp.trim() || !equipe}
+                disabled={loading || !fgp.trim() || !equipe || (contactObligatoire && !contactOk)}
                 onClick={handleConfirmNouveau}
                 icon={<Flame className="w-3.5 h-3.5" />}
               >

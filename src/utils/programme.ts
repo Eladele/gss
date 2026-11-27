@@ -13,6 +13,14 @@ export const STATUT_OT = {
 /** 49617103 → « 49 61 71 03 » (plus lisible au téléphone) */
 export const fmtTel = (t: string) => t.replace(/(\d{2})(?=\d)/g, '$1 ');
 
+/** Numéro saisi → 8 chiffres (sans 222 / +222 / espaces) */
+export const normaliserTel = (t: string) => {
+  const d = t.replace(/\D/g, '');
+  return /^(?:00)?222\d{8}$/.test(d) ? d.slice(-8) : d;
+};
+/** Numéro mauritanien valide : 8 chiffres commençant par 2, 3 ou 4 */
+export const telValide = (t: string) => /^[234]\d{7}$/.test(normaliserTel(t));
+
 // ─── Types d'OT (mêmes codes que les situations) ─────────────────────────────
 export const TYPE_OT_LABEL: Record<string, string> = {
   CPL: 'Création première ligne',

@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/useAppStore';
 import { loginWithCredentials } from '@/lib/supabaseService';
 import { InstallApkButton } from '@/components/InstallApkButton';
 import { LogoMarque } from '@/components/LogoMarque';
 import { useMarqueStore } from '@/store/useMarqueStore';
+import { etatInstallation, type EtatInstallation } from '@/lib/entreprisesService';
+import { InstallationEntreprise } from '@/components/InstallationEntreprise';
+import { InscriptionSuperadmin } from '@/components/InscriptionSuperadmin';
 
 export default function AuthPage() {
   const login = useAppStore((s) => s.login);
@@ -13,6 +16,15 @@ export default function AuthPage() {
   const [pass, setPass] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // base neuve (aucun administrateur) : écran d'installation à la place de la connexion
+  const [installation, setInstallation] = useState<EtatInstallation | null>(null);
+  const [installee, setInstallee] = useState(false);
+  // base installée sans super-administrateur : inscription possible depuis la connexion
+  const [inscription, setInscription] = useState(false);
+  const inscriptionPossible = !!installation?.disponible && installation.installe && !installation.superadmin;
+  useEffect(() => {
+    etatInstallation().then(setInstallation, () => undefined);
+  }, []);
 
   const handleLogin = async () => {
     if (!name.trim()) {
@@ -34,6 +46,31 @@ export default function AuthPage() {
       setLoading(false);
     }
   };
+
+  if (installation?.disponible && !installation.installe) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-start sm:items-center justify-center py-6 px-4">
+        <div className="w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-sm p-5 sm:p-7 space-y-5">
+          <div>
+            <h1 className="text-xl font-black text-slate-900">Installation de l’application</h1>
+            <p className="text-sm text-slate-500 mt-1">
+              Cette base est neuve : créez le super-administrateur, l’entreprise et ses administrateurs. Cet écran disparaît dès que c’est fait.
+            </p>
+          </div>
+          <InstallationEntreprise avecSuperadmin jetonRequis={installation.jetonRequis} onTermine={() => setInstallee(true)} />
+          {installee && (
+            <button
+              type="button"
+              onClick={() => setInstallation({ ...installation, installe: true })}
+              className="w-full py-3 rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-sm font-semibold"
+            >
+              J’ai noté les identifiants — aller à la connexion
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 relative">
@@ -66,57 +103,79 @@ export default function AuthPage() {
           )}
         </div>
 
-        {/* Form card */}
-        <div className="bg-white rounded-2xl p-7 border border-slate-200">
-          {error && (
-            <div className="mb-5 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">
-              {error}
-            </div>
-          )}
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-slate-500 text-xs font-semibold mb-1.5">Utilisateur</label>
-              <input
-                id="login-username"
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all bg-white"
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  setError('');
-                }}
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                placeholder="Nom d'utilisateur"
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="block text-slate-500 text-xs font-semibold mb-1.5">Mot de passe</label>
-              <input
-                id="login-password"
-                type="password"
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all bg-white"
-                value={pass}
-                onChange={(e) => {
-                  setPass(e.target.value);
-                  setError('');
-                }}
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                placeholder="Mot de passe"
-              />
-            </div>
+        {inscription && installation ? (
+          <div className="bg-white rounded-2xl p-6 border border-slate-200">
+            <InscriptionSuperadmin
+              jetonRequis={installation.jetonRequis}
+              onFermer={(nom) => {
+                setInscription(false);
+                if (nom) {
+                  setName(nom);
+                  setInstallation({ ...installation, superadmin: true });
+                }
+              }}
+            />
           </div>
+        ) : (
+          /* Form card */
+          <div className="bg-white rounded-2xl p-7 border border-slate-200">
+            {error && <div className="mb-5 px-4 py-3 bg-red-50 border border-red-100 rounded-xl text-red-700 text-sm">{error}</div>}
 
-          <button
-            id="login-submit"
-            onClick={handleLogin}
-            disabled={loading}
-            className="mt-6 w-full py-3 rounded-lg font-semibold text-white text-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-            style={{ background: loading ? '#90A4AE' : marque.couleurPrincipale }}
-          >
-            {loading ? 'Connexion...' : 'Se connecter'}
-          </button>
-        </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-slate-500 text-xs font-semibold mb-1.5">Utilisateur</label>
+                <input
+                  id="login-username"
+                  className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all bg-white"
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setError('');
+                  }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  placeholder="Nom d'utilisateur"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-slate-500 text-xs font-semibold mb-1.5">Mot de passe</label>
+                <input
+                  id="login-password"
+                  type="password"
+                  className="w-full px-3.5 py-2.5 rounded-lg text-sm text-slate-900 border border-slate-200 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all bg-white"
+                  value={pass}
+                  onChange={(e) => {
+                    setPass(e.target.value);
+                    setError('');
+                  }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  placeholder="Mot de passe"
+                />
+              </div>
+            </div>
+
+            <button
+              id="login-submit"
+              onClick={handleLogin}
+              disabled={loading}
+              className="mt-6 w-full py-3 rounded-lg font-semibold text-white text-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+              style={{
+                background: loading ? '#90A4AE' : marque.couleurPrincipale,
+              }}
+            >
+              {loading ? 'Connexion...' : 'Se connecter'}
+            </button>
+            {inscriptionPossible && (
+              <button
+                type="button"
+                onClick={() => setInscription(true)}
+                className="mt-3 w-full py-2 text-xs font-semibold text-purple-700 hover:bg-purple-50 rounded-lg"
+              >
+                Inscription du super-administrateur
+              </button>
+            )}
+          </div>
+        )}
 
         <p className="text-center text-slate-300 text-xs mt-6">
           {marque.nom}
